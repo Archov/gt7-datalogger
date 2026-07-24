@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import logbuffer
@@ -81,6 +82,13 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(ws.router)
     if FRONTEND_DIST.exists():
+        # SPA deep link: /overlay?... must serve the app (the static mount
+        # only resolves "/"). A plain path keeps strict URL validators happy
+        # (some streaming apps reject /#overlay fragment URLs).
+        @app.get("/overlay", include_in_schema=False)
+        async def overlay_page() -> FileResponse:
+            return FileResponse(FRONTEND_DIST / "index.html")
+
         app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="spa")
     return app
 

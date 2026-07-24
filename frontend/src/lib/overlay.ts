@@ -59,12 +59,24 @@ export const PHONE_PRESET: OverlayConfig = {
   align: "top",
 };
 
-export function isOverlayHash(hash: string): boolean {
-  return hash === "#overlay" || hash.startsWith("#overlay?");
+// Preferred URL form is the plain path /overlay?w=… — hash-fragment URLs
+// (/#overlay?…) still work but are rejected by some apps' URL validators
+// (e.g. TikTok LIVE Studio web sources).
+export function isOverlayLocation(loc: {
+  pathname: string;
+  hash: string;
+}): boolean {
+  return (
+    loc.pathname === "/overlay" ||
+    loc.hash === "#overlay" ||
+    loc.hash.startsWith("#overlay?")
+  );
 }
 
-export function parseOverlayHash(hash: string): OverlayConfig {
-  const query = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
+export function parseOverlayLocation(loc: { search: string; hash: string }): OverlayConfig {
+  const query = loc.hash.includes("?")
+    ? loc.hash.slice(loc.hash.indexOf("?") + 1)
+    : loc.search.replace(/^\?/, "");
   const params = new URLSearchParams(query);
   const ids = (params.get("w") ?? "")
     .split(",")
@@ -82,12 +94,15 @@ export function parseOverlayHash(hash: string): OverlayConfig {
   };
 }
 
-export function buildOverlayUrl(config: OverlayConfig, origin: string = window.location.origin): string {
+export function buildOverlayUrl(
+  config: OverlayConfig,
+  origin: string = window.location.origin,
+): string {
   const params = new URLSearchParams();
   params.set("w", config.widgets.join(","));
   params.set("layout", config.layout);
   if (config.scale !== 1) params.set("scale", String(config.scale));
   params.set("bg", String(config.bg));
   if (config.align !== "bottom") params.set("align", config.align);
-  return `${origin}/#overlay?${params.toString()}`;
+  return `${origin}/overlay?${params.toString()}`;
 }

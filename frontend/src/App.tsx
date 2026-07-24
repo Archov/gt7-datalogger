@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { StatusBar } from "@/components/StatusBar";
-import { isOverlayHash, parseOverlayHash } from "@/lib/overlay";
+import { isOverlayLocation, parseOverlayLocation } from "@/lib/overlay";
 import { AdminView } from "@/views/AdminView";
 import { AnalysisView } from "@/views/AnalysisView";
 import { LiveView } from "@/views/LiveView";
@@ -12,17 +12,19 @@ export type View = "live" | "analysis" | "sessions" | "admin";
 
 export default function App() {
   const [view, setView] = useState<View>("live");
-  const [hash, setHash] = useState(() => window.location.hash);
+  const [, setHashTick] = useState(0);
   const connect = useTelemetry((s) => s.connect);
 
   useEffect(() => connect(), [connect]);
   useEffect(() => {
-    const onHash = () => setHash(window.location.hash);
+    const onHash = () => setHashTick((n) => n + 1);
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  if (isOverlayHash(hash)) return <OverlayView config={parseOverlayHash(hash)} />;
+  if (isOverlayLocation(window.location)) {
+    return <OverlayView config={parseOverlayLocation(window.location)} />;
+  }
 
   return (
     <div className="flex h-full flex-col">
