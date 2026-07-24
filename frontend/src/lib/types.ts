@@ -147,6 +147,8 @@ export interface AdminStats {
   cars_loaded: number;
   source: ConnectionStatus;
   clients: number;
+  lan_ip: string;
+  http_port: number;
 }
 
 export type WsMessage =

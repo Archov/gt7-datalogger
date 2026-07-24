@@ -2,6 +2,7 @@
 // appearance; the result is encoded into a URL for OBS or a phone browser.
 
 import { useEffect, useMemo, useState } from "react";
+import { api } from "@/lib/api";
 import {
   buildOverlayUrl,
   DEFAULT_CONFIG,
@@ -32,6 +33,20 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
   }, [config]);
 
   const url = useMemo(() => buildOverlayUrl(config), [config]);
+
+  // LAN URL for other devices (OBS on another PC, TikTok LIVE Studio, phone).
+  const [lan, setLan] = useState<{ ip: string; port: number } | null>(null);
+  useEffect(() => {
+    api.admin
+      .stats()
+      .then((s) => s.lan_ip && setLan({ ip: s.lan_ip, port: s.http_port }))
+      .catch(() => {});
+  }, []);
+  const lanUrl = useMemo(() => {
+    if (!lan) return null;
+    const origin = `http://${lan.ip}:${lan.port}`;
+    return origin === window.location.origin ? null : buildOverlayUrl(config, origin);
+  }, [lan, config]);
 
   function toggleWidget(id: WidgetId) {
     setConfig((c) => ({
@@ -216,7 +231,31 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
         </div>
       </div>
 
-      {/* URL */}
+      {/* URLs */}
+      <UrlRow label="This device" url={url} flash={flash} />
+      {lanUrl && (
+        <UrlRow
+          label="Other devices (OBS PC, TikTok LIVE Studio, phone)"
+          url={lanUrl}
+          flash={flash}
+        />
+      )}
+    </div>
+  );
+}
+
+function UrlRow({
+  label,
+  url,
+  flash,
+}: {
+  label: string;
+  url: string;
+  flash: (text: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] uppercase tracking-widest text-ink-dim">{label}</div>
       <div className="flex gap-2">
         <code className="min-w-0 flex-1 truncate rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-xs leading-6">
           {url}

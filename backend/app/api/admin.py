@@ -122,6 +122,19 @@ async def clear_logs() -> dict[str, str]:
 # --- diagnostics ------------------------------------------------------------
 
 
+def _lan_ip() -> str:
+    """This machine's LAN address (for overlay URLs used from other devices)."""
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))  # no packet is sent; just picks a route
+            ip: str = s.getsockname()[0]
+            return ip
+    except OSError:
+        return ""
+
+
 @router.get("/stats")
 async def stats(request: Request) -> dict[str, Any]:
     service = svc(request)
@@ -134,6 +147,8 @@ async def stats(request: Request) -> dict[str, Any]:
         "cars_loaded": service.cars.count,
         "source": await service.status(),
         "clients": service.client_count,
+        "lan_ip": _lan_ip(),
+        "http_port": service.settings.http_port,
     }
 
 
