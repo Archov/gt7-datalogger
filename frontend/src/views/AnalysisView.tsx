@@ -34,7 +34,9 @@ export function AnalysisView() {
     }).catch(() => setError("Could not load sessions"));
   }, [lapEpoch]);
 
-  // Load laps for the chosen session; default selection = best + latest
+  // Load laps for the chosen session. Until the user picks laps manually,
+  // selection follows "latest vs best" as new laps arrive live.
+  const manualSelection = useRef(false);
   useEffect(() => {
     if (sessionId == null) return;
     api.sessionLaps(sessionId).then((ls) => {
@@ -44,11 +46,13 @@ export function AnalysisView() {
       const latest = ls[0]; // list is newest-first
       setSelected((cur) => {
         const stillValid = cur.filter((id) => ls.some((l) => l.id === id));
-        return stillValid.length > 0
+        return manualSelection.current && stillValid.length > 0
           ? stillValid
           : [...new Set([latest.id, best.id])];
       });
-      setRefLap((cur) => (cur && ls.some((l) => l.id === cur) ? cur : best.id));
+      setRefLap((cur) =>
+        manualSelection.current && cur && ls.some((l) => l.id === cur) ? cur : best.id,
+      );
     }).catch(() => setError("Could not load laps"));
   }, [sessionId, lapEpoch]);
 
@@ -131,12 +135,16 @@ export function AnalysisView() {
               return (
                 <button
                   key={lap.id}
-                  onClick={() =>
+                  onClick={() => {
+                    manualSelection.current = true;
                     setSelected((cur) =>
                       active ? cur.filter((id) => id !== lap.id) : [...cur, lap.id],
-                    )
-                  }
-                  onDoubleClick={() => setRefLap(lap.id)}
+                    );
+                  }}
+                  onDoubleClick={() => {
+                    manualSelection.current = true;
+                    setRefLap(lap.id);
+                  }}
                   title="Click to toggle, double-click to set as reference"
                   className={`rounded-md border px-2 py-1 font-tabular text-xs transition-colors ${
                     isRef
@@ -154,7 +162,10 @@ export function AnalysisView() {
           {refLap != null && (
             <select
               value={refLap}
-              onChange={(e) => setRefLap(Number(e.target.value))}
+              onChange={(e) => {
+                manualSelection.current = true;
+                setRefLap(Number(e.target.value));
+              }}
               className="ml-auto rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-xs"
               title="Reference lap"
             >

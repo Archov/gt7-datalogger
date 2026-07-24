@@ -98,7 +98,7 @@ class UdpTelemetrySource:
             self._decode_errors += 1
             return
         self._packet_count += 1
-        asyncio.get_running_loop().create_task(self._on_packet(packet))
+        asyncio.ensure_future(self._on_packet(packet))
 
     async def _heartbeat_loop(self) -> None:
         while self._running:

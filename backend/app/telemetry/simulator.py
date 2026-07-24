@@ -25,13 +25,17 @@ FUEL_PER_LAP = 1.8
 
 
 def _speed_profile(s: float, jitter: float) -> float:
-    """Target speed (m/s) at track position s in [0, 1)."""
+    """Target speed (m/s) at track position s in [0, 1).
+
+    Corner speeds are flat steps so the driver must actually brake into them
+    (a gradual profile would let partial throttle track it with zero braking).
+    """
     base = 62.0  # ~223 km/h baseline
     # Two corners: heavy at 20%, medium at 65%
-    for center, width, depth in ((0.20, 0.06, 38.0), (0.65, 0.05, 26.0)):
+    for center, width, depth in ((0.20, 0.05, 38.0), (0.65, 0.045, 26.0)):
         d = min(abs(s - center), 1 - abs(s - center))
         if d < width:
-            base -= depth * (1 - (d / width) ** 2)
+            base -= depth
     return max(14.0, base + jitter)
 
 
@@ -77,16 +81,22 @@ class SimTelemetrySource:
         while True:
             s = (distance % TRACK_LENGTH) / TRACK_LENGTH
             target = _speed_profile(s, lap_jitter)
-            accel = 9.0 if target > speed else -22.0
-            # noisy driver inputs
-            if target > speed + 0.5:
-                throttle, brake = 255, 0
-            elif target < speed - 2.0:
+            ahead = _speed_profile((s + 0.006) % 1.0, lap_jitter)
+            # Driver model: brake into corners, lift-and-coast just before the
+            # brake point, full throttle on straights, hold speed otherwise.
+            if target < speed - 2.0:
                 throttle, brake = 0, int(min(255, (speed - target) * 22))
+                speed = max(target, speed - 22.0 * TICK)
+            elif ahead < speed - 5.0:
+                throttle, brake = 0, 0
+                speed = max(14.0, speed - 2.5 * TICK)
+            elif target > speed + 0.5:
+                throttle, brake = 255, 0
+                speed = min(target, speed + 9.0 * TICK)
             else:
-                throttle, brake = int(140 + rng.uniform(-30, 30)), 0
-            stepped = speed + accel * TICK
-            speed = max(10.0, min(target, stepped) if accel > 0 else max(target, stepped))
+                throttle = 255 if target > 55 else int(140 + rng.uniform(-30, 30))
+                brake = 0
+                speed = target
             distance += speed * TICK
             fuel -= FUEL_PER_LAP * (speed * TICK) / TRACK_LENGTH
             if fuel <= 0:

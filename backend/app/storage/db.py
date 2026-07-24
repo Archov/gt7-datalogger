@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from sqlalchemy import ForeignKey, Index, Text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -61,7 +66,7 @@ def make_engine(db_path: Path | str) -> AsyncEngine:
     return create_async_engine(url)
 
 
-def make_session_factory(engine: AsyncEngine) -> async_sessionmaker:
+def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 

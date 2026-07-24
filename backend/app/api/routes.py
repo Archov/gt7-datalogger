@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.processing import analysis
 
+if TYPE_CHECKING:
+    from app.service import TelemetryService
+
 router = APIRouter(prefix="/api")
 
 
-def svc(request: Request):  # -> TelemetryService
-    return request.app.state.service
+def svc(request: Request) -> TelemetryService:
+    service: TelemetryService = request.app.state.service
+    return service
 
 
 @router.get("/health")

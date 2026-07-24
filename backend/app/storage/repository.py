@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
 from app.storage.db import LapRow, SessionRow
@@ -36,7 +36,7 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
 
 
 class Repository:
-    def __init__(self, session_factory: async_sessionmaker) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
 
     async def create_session(self, info: SessionInfo, car_name: str) -> int:
