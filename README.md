@@ -209,6 +209,20 @@ is not firewalled.
 
 ## Local development
 
+One command from the repo root starts everything (backend with auto-reload on :8000,
+frontend with hot reload on :5173) and bootstraps the venv / node_modules on first run;
+Ctrl-C stops both:
+
+```bash
+./dev.sh
+```
+
+Settings come from a `.env` in the repo root — set `GT7_SOURCE=sim` there to develop
+against the simulated telemetry source without a PlayStation.
+
+<details>
+<summary>Running the pieces individually</summary>
+
 Backend (Python 3.12+):
 
 ```bash
@@ -225,6 +239,8 @@ cd frontend
 npm install
 npm run dev   # http://localhost:5173, proxies /api and /ws to :8000
 ```
+
+</details>
 
 Tests and linting:
 
