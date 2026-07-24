@@ -30,6 +30,11 @@ body.overlay {
   background: transparent;
 }
 
+/* Overlay grid/dashboard mode: solid dark page (phone, tablet) */
+body.overlay-page {
+  @apply bg-surface;
+}
+
 .font-tabular {
   font-variant-numeric: tabular-nums;
 }

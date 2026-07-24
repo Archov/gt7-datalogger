@@ -31,8 +31,12 @@ rebuilt with a cleaner architecture and a modern UI.
   runtime with no restart (persisted in the database), live log viewer with level filtering,
   connection diagnostics (packets, decode errors, uptime, connected clients), database
   stats with compact/clear actions, and one-click car-database updates.
-- **OBS stream overlay** — a transparent browser-source view (`/#overlay`) with gear, speed,
-  RPM, inputs, lap times/delta, tires, and fuel; copy the URL from the Admin view.
+- **Customizable overlay / dashboard** — a visual builder (Admin view) with a live preview:
+  pick and reorder widgets (gear, speed, RPM, inputs, lap times, big delta, race position,
+  tires, fuel, fuel strategy, in-game clock), choose a layout (transparent OBS strip,
+  vertical stack, or phone dashboard grid), and tune scale, background opacity, and
+  alignment. The whole config is encoded in the URL, so OBS, a phone, and a pit-wall
+  tablet can each load their own setup.
 - **Webhook / Discord notifications** — new personal bests and end-of-session summaries
   posted to any webhook URL (Discord URLs get a rich embed, others plain JSON).
 - **CSV / MoTeC-compatible lap export** — open laps in MoTeC i2, Excel, or other analysis

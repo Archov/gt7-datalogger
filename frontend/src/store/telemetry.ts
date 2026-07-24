@@ -3,6 +3,7 @@
 // React state only changes on lap/status events to avoid 30 Hz re-renders.
 
 import { create } from "zustand";
+import { api } from "@/lib/api";
 import type { ConnectionStatus, LapSummary, LiveFrame, WsMessage } from "@/lib/types";
 
 interface TelemetryState {
@@ -24,7 +25,23 @@ export const useTelemetry = create<TelemetryState>((set) => {
   function open() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     socket = new WebSocket(`${proto}://${location.host}/ws/live`);
-    socket.onopen = () => set({ wsConnected: true });
+    socket.onopen = () => {
+      set({ wsConnected: true });
+      // Seed the lap feed with the current session's laps so widgets that
+      // need lap history (fuel strategy) work right after a page load.
+      void (async () => {
+        try {
+          const status = await api.status();
+          if (status.session_id == null) return;
+          const laps = await api.sessionLaps(status.session_id);
+          set((st) =>
+            st.recentLaps.length > 0 ? {} : { recentLaps: laps.slice(0, 50) },
+          );
+        } catch {
+          // non-fatal: widgets fall back to waiting for the next lap event
+        }
+      })();
+    };
     socket.onclose = () => {
       set({ wsConnected: false });
       retryTimer = window.setTimeout(open, 2000);

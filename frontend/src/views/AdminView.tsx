@@ -2,6 +2,7 @@
 // viewer, and data management.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { OverlayBuilder } from "@/components/OverlayBuilder";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import type { AdminSettings, AdminStats, LogRecord } from "@/lib/types";
@@ -142,11 +143,12 @@ export function AdminView() {
           )}
         </Panel>
 
-        {/* Stream overlay */}
-        <Panel title="Stream overlay (OBS)">
-          <OverlayPanel flash={flash} />
-        </Panel>
       </div>
+
+      {/* Overlay builder */}
+      <Panel title="Overlay & dashboard builder">
+        <OverlayBuilder flash={flash} />
+      </Panel>
 
       {/* Logs */}
       <Panel title="Logs">
@@ -321,38 +323,6 @@ function WebhookForm({
         Discord webhook URLs get a rich embed; any other URL receives plain JSON. Leave empty
         to disable.
       </p>
-    </div>
-  );
-}
-
-function OverlayPanel({ flash }: { flash: (text: string) => void }) {
-  const overlayUrl = `${window.location.origin}/#overlay`;
-  return (
-    <div className="space-y-2 p-4">
-      <p className="text-xs text-ink-dim">
-        Transparent browser-source view with speed, gear, RPM, inputs, lap times, tires, and
-        fuel. Add it to OBS as a <span className="text-ink">Browser</span> source
-        (suggested size 1920×220, bottom of the canvas):
-      </p>
-      <div className="flex gap-2">
-        <code className="flex-1 truncate rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm">
-          {overlayUrl}
-        </code>
-        <button
-          className="btn shrink-0"
-          onClick={() =>
-            navigator.clipboard
-              .writeText(overlayUrl)
-              .then(() => flash("Overlay URL copied"))
-              .catch(() => flash("Copy failed — select the URL manually"))
-          }
-        >
-          Copy
-        </button>
-        <a className="btn shrink-0" href={overlayUrl} target="_blank" rel="noreferrer">
-          Preview
-        </a>
-      </div>
     </div>
   );
 }

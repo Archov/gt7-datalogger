@@ -10,6 +10,7 @@ import {
   speedUnit,
   speedValue,
 } from "@/lib/format";
+import { projectStrategy } from "@/lib/strategy";
 import type { LapSummary, LiveFrame } from "@/lib/types";
 import { useSettings } from "@/store/settings";
 import { liveFrameRef, useTelemetry } from "@/store/telemetry";
@@ -195,33 +196,25 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
 
 // Rolling fuel strategy from the last few laps: laps/time to empty, pit lap.
 function StrategyPanel({ frame, laps }: { frame: LiveFrame; laps: LapSummary[] }) {
-  const recent = laps.slice(0, 3).filter((lap) => lap.fuel_consumed > 0.01);
-  const avgFuel = recent.length
-    ? recent.reduce((a, lap) => a + lap.fuel_consumed, 0) / recent.length
-    : 0;
-  const avgLapMs = recent.length
-    ? recent.reduce((a, lap) => a + lap.time_ms, 0) / recent.length
-    : 0;
-  const lapsToEmpty = avgFuel > 0 ? frame.fuel_level / avgFuel : null;
-  const pitLap = lapsToEmpty != null ? frame.current_lap + Math.floor(lapsToEmpty) : null;
+  const proj = projectStrategy(frame, laps);
 
   return (
     <Panel className="p-4">
       <Label>Race strategy</Label>
-      {lapsToEmpty == null ? (
+      {proj == null ? (
         <div className="mt-2 text-xs text-ink-dim">
           Complete a lap with fuel consumption to project fuel strategy.
         </div>
       ) : (
         <div className="mt-2 space-y-1 font-tabular text-sm">
-          <Row k="Fuel to empty" v={`${lapsToEmpty.toFixed(1)} laps`}
-            className={lapsToEmpty < 2 ? "text-brake" : lapsToEmpty < 4 ? "text-warn" : ""} />
-          <Row k="Time to empty" v={formatDuration(lapsToEmpty * avgLapMs)} />
-          <Row k="Pit before lap" v={pitLap != null ? String(pitLap) : "–"} />
-          <Row k="Avg fuel / lap" v={`${avgFuel.toFixed(2)} L`} />
+          <Row k="Fuel to empty" v={`${proj.lapsToEmpty.toFixed(1)} laps`}
+            className={proj.lapsToEmpty < 2 ? "text-brake" : proj.lapsToEmpty < 4 ? "text-warn" : ""} />
+          <Row k="Time to empty" v={formatDuration(proj.lapsToEmpty * proj.avgLapMs)} />
+          <Row k="Pit before lap" v={String(proj.pitBeforeLap)} />
+          <Row k="Avg fuel / lap" v={`${proj.avgFuelPerLap.toFixed(2)} L`} />
           {frame.total_laps > 0 &&
             (() => {
-              const needed = (frame.total_laps - frame.current_lap + 1) * avgFuel;
+              const needed = (frame.total_laps - frame.current_lap + 1) * proj.avgFuelPerLap;
               const enough = needed <= frame.fuel_level;
               return (
                 <Row
