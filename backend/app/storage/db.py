@@ -32,6 +32,15 @@ class SessionRow(Base):
     )
 
 
+class SettingRow(Base):
+    """Runtime-configurable settings (override env defaults at startup)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(primary_key=True)
+    value: Mapped[str]
+
+
 class LapRow(Base):
     __tablename__ = "laps"
     __table_args__ = (Index("ix_laps_session", "session_id"),)

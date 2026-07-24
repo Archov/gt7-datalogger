@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
-from app.storage.db import LapRow, SessionRow
+from app.storage.db import LapRow, SessionRow, SettingRow
 
 EXPORT_VERSION = 1
 
@@ -130,6 +130,41 @@ class Repository:
         if lap is None:
             return None
         return {"format": "gt7-datalogger-lap", "version": EXPORT_VERSION, "lap": lap}
+
+    # --- runtime settings ---------------------------------------------------
+
+    async def get_settings(self) -> dict[str, str]:
+        async with self._sf() as db:
+            rows = (await db.execute(select(SettingRow))).scalars()
+            return {r.key: r.value for r in rows}
+
+    async def set_setting(self, key: str, value: str) -> None:
+        async with self._sf() as db:
+            row = await db.get(SettingRow, key)
+            if row is None:
+                db.add(SettingRow(key=key, value=value))
+            else:
+                row.value = value
+            await db.commit()
+
+    # --- admin --------------------------------------------------------------
+
+    async def stats(self) -> dict[str, int]:
+        async with self._sf() as db:
+            sessions = (await db.execute(select(func.count(SessionRow.id)))).scalar_one()
+            laps = (await db.execute(select(func.count(LapRow.id)))).scalar_one()
+            return {"sessions": sessions, "laps": laps}
+
+    async def clear_all(self) -> None:
+        """Delete all recorded sessions and laps (settings are kept)."""
+        async with self._sf() as db:
+            await db.execute(delete(LapRow))
+            await db.execute(delete(SessionRow))
+            await db.commit()
+
+    async def vacuum(self) -> None:
+        async with self._sf() as db:
+            await db.execute(text("VACUUM"))
 
     async def import_lap(self, payload: dict[str, Any], session_id: int) -> int:
         if payload.get("format") != "gt7-datalogger-lap":

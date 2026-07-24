@@ -30,5 +30,9 @@ class CarDatabase:
                     continue
         log.info("loaded %d car names", len(self._names))
 
+    @property
+    def count(self) -> int:
+        return len(self._names)
+
     def name(self, car_id: int) -> str:
         return self._names.get(car_id, f"Car #{car_id}")

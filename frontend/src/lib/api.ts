@@ -1,9 +1,12 @@
 import type {
+  AdminSettings,
+  AdminStats,
   CompareResult,
   ConnectionStatus,
   DeviationResult,
   FuelMapResult,
   LapSummary,
+  LogRecord,
   SessionSummary,
 } from "./types";
 
@@ -40,4 +43,18 @@ export const api = {
   setRecording: (recording: boolean) =>
     send<ConnectionStatus>("/api/control/recording", "POST", { recording }),
   logLapNow: () => send<{ id: number }>("/api/control/log-lap-now", "POST"),
+
+  admin: {
+    settings: () => get<AdminSettings>("/api/admin/settings"),
+    updateSettings: (patch: Partial<Pick<AdminSettings, "ps_ip" | "source" | "log_level">>) =>
+      send<AdminSettings>("/api/admin/settings", "PUT", patch),
+    logs: (limit = 300, level?: string) =>
+      get<LogRecord[]>(`/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
+    clearLogs: () => send<{ status: string }>("/api/admin/logs", "DELETE"),
+    stats: () => get<AdminStats>("/api/admin/stats"),
+    restartSource: () => send<ConnectionStatus>("/api/admin/restart-source", "POST"),
+    clearData: () => send<{ status: string }>("/api/admin/clear-data", "POST"),
+    vacuum: () => send<{ status: string }>("/api/admin/vacuum", "POST"),
+    updateCars: () => send<{ cars: number }>("/api/admin/update-cars", "POST"),
+  },
 };

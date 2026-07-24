@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { StatusBar } from "@/components/StatusBar";
+import { AdminView } from "@/views/AdminView";
 import { AnalysisView } from "@/views/AnalysisView";
 import { LiveView } from "@/views/LiveView";
 import { SessionsView } from "@/views/SessionsView";
 import { useTelemetry } from "@/store/telemetry";
 
-export type View = "live" | "analysis" | "sessions";
+export type View = "live" | "analysis" | "sessions" | "admin";
 
 export default function App() {
   const [view, setView] = useState<View>("live");
@@ -20,6 +21,7 @@ export default function App() {
         {view === "live" && <LiveView />}
         {view === "analysis" && <AnalysisView />}
         {view === "sessions" && <SessionsView />}
+        {view === "admin" && <AdminView />}
       </main>
     </div>
   );

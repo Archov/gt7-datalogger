@@ -111,6 +111,30 @@ export interface FuelMapResult {
   rows: FuelMapRow[];
 }
 
+export interface AdminSettings {
+  ps_ip: string;
+  source: "udp" | "sim";
+  log_level: "DEBUG" | "INFO" | "WARNING" | "ERROR";
+  ws_rate: number;
+  heartbeat_port: number;
+  telemetry_port: number;
+}
+
+export interface LogRecord {
+  ts: string;
+  level: string;
+  logger: string;
+  message: string;
+}
+
+export interface AdminStats {
+  uptime_s: number;
+  db: { sessions: number; laps: number; size_bytes: number; path: string };
+  cars_loaded: number;
+  source: ConnectionStatus;
+  clients: number;
+}
+
 export type WsMessage =
   | { type: "telemetry"; data: LiveFrame }
   | { type: "lap"; data: LapSummary }

@@ -27,6 +27,10 @@ rebuilt with a cleaner architecture and a modern UI.
 - **Simulated source** (`GT7_SOURCE=sim`) drives laps around a synthetic circuit at 60 Hz —
   develop and demo everything without a PlayStation.
 - Configurable units (km/h / mph), persisted in the browser.
+- **Admin view** — set the PlayStation IP and telemetry source (PlayStation / simulated) at
+  runtime with no restart (persisted in the database), live log viewer with level filtering,
+  connection diagnostics (packets, decode errors, uptime, connected clients), database
+  stats with compact/clear actions, and one-click car-database updates.
 
 ## Architecture
 
@@ -103,7 +107,10 @@ pytest
 
 ## Configuration
 
-All settings are environment variables (or a `.env` file in the working directory):
+The console IP, telemetry source, and log level can be changed at runtime from the
+**Admin** view; those values persist in the database and override the environment on
+the next start. Everything else is environment variables (or a `.env` file in the
+working directory):
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -115,7 +122,7 @@ All settings are environment variables (or a `.env` file in the working director
 | `GT7_HTTP_PORT` | `8000` | HTTP port |
 
 The bundled `cars.csv` only contains a sample entry. Fetch the full community-maintained
-list with:
+list with **Admin → Update car database**, or from the command line:
 
 ```bash
 python backend/scripts/update_cars.py

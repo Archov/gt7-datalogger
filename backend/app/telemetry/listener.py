@@ -53,6 +53,11 @@ class UdpTelemetrySource:
             "decode_errors": self._decode_errors,
         }
 
+    def reset_discovery(self) -> None:
+        """Forget the discovered console (after the configured IP changes)."""
+        self._console_addr = None
+        self._last_packet_at = 0.0
+
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
         source = self

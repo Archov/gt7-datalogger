@@ -25,6 +25,7 @@ class TelemetryService:
         self.settings = settings
         self.repo = repo
         self.cars = cars
+        self.started_at = time.time()
         self.processor = LapProcessor(on_lap=self._on_lap, on_session=self._on_session)
         self.source: UdpTelemetrySource | SimTelemetrySource
         if settings.source == "sim":
@@ -44,6 +45,28 @@ class TelemetryService:
 
     async def stop(self) -> None:
         await self.source.stop()
+
+    async def switch_source(self, kind: str) -> None:
+        """Swap between the UDP and simulated source at runtime."""
+        await self.source.stop()
+        self.settings.source = kind
+        if kind == "sim":
+            self.source = SimTelemetrySource(self._on_packet)
+        else:
+            self.source = UdpTelemetrySource(self.settings, self._on_packet)
+        await self.source.start()
+        log.info("telemetry source switched to %s", kind)
+        await self._broadcast({"type": "status", "data": await self.status()})
+
+    async def set_ps_ip(self, ip: str) -> None:
+        self.settings.ps_ip = ip
+        if isinstance(self.source, UdpTelemetrySource):
+            self.source.reset_discovery()
+        log.info("console IP set to %s", ip or "<auto-discover>")
+        await self._broadcast({"type": "status", "data": await self.status()})
+
+    async def restart_source(self) -> None:
+        await self.switch_source(self.settings.source)
 
     # --- pipeline callbacks -------------------------------------------------
 
@@ -127,6 +150,10 @@ class TelemetryService:
             "session_id": self.session_id,
             **self.source.stats,
         }
+
+    @property
+    def client_count(self) -> int:
+        return len(self._clients)
 
     async def register(self, ws: WebSocket) -> None:
         self._clients.add(ws)

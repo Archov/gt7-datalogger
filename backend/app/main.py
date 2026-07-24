@@ -11,7 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import routes, ws
+from app import logbuffer
+from app.api import admin, routes, ws
 from app.config import get_settings
 from app.processing.cars import CarDatabase
 from app.service import TelemetryService
@@ -26,6 +27,7 @@ def configure_logging(level: str) -> None:
         level=level,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    logbuffer.install()
 
 
 @asynccontextmanager
@@ -37,6 +39,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
+
+    # Settings changed via the admin page override env defaults.
+    stored = await repo.get_settings()
+    if "ps_ip" in stored:
+        settings.ps_ip = stored["ps_ip"]
+    if stored.get("source") in ("udp", "sim"):
+        settings.source = stored["source"]
+    if "log_level" in stored:
+        logging.getLogger().setLevel(stored["log_level"])
 
     cars = CarDatabase()
     cars.load(settings.cars_csv)
@@ -65,6 +76,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(routes.router)
+    app.include_router(admin.router)
     app.include_router(ws.router)
     if FRONTEND_DIST.exists():
         app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="spa")

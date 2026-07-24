@@ -8,6 +8,7 @@ const TABS: { id: View; label: string }[] = [
   { id: "live", label: "Live" },
   { id: "analysis", label: "Analysis" },
   { id: "sessions", label: "Sessions" },
+  { id: "admin", label: "Admin" },
 ];
 
 export function StatusBar({
