@@ -112,7 +112,7 @@ class LapProcessor:
             self._session = None
 
         lap_reset = (
-            self._current_lap > 0 and 0 < p.current_lap < self._current_lap
+            self._current_lap > 0 and 0 <= p.current_lap < self._current_lap
         )
         if self._session is None or lap_reset:
             self._session = SessionInfo(
@@ -125,21 +125,36 @@ class LapProcessor:
         if p.current_lap != self._current_lap:
             await self._handle_lap_boundary(p)
 
-        if p.is_on_track and not p.is_paused and p.current_lap > 0:
+        # After the checkered flag GT7 reports current_lap = total_laps + 1;
+        # the cool-down lap is not real driving, so don't record it.
+        past_finish = 0 < p.total_laps < p.current_lap
+        if p.is_on_track and not p.is_paused and p.current_lap > 0 and not past_finish:
             self._append_sample(p)
         self._last_packet = p
 
     async def _handle_lap_boundary(self, p: TelemetryPacket) -> None:
         prev = self._current_lap
-        # Completing a real lap: counter advanced past a lap we were sampling.
-        if prev > 0 and p.current_lap == prev + 1 and p.last_lap_time_ms > 0:
+        completing = prev > 0 and p.current_lap == prev + 1 and p.last_lap_time_ms > 0
+        finished_samples = self._samples
+        fuel_start = self._fuel_start
+
+        # Commit all state BEFORE any await: packets keep arriving while the
+        # lap is persisted, and a stale _current_lap would re-trigger this
+        # boundary once per packet (duplicate laps at ~60 Hz).
+        self._current_lap = p.current_lap
+        self._samples = new_sample_store()
+        self._distance = 0.0
+        self._ticks = 0
+        self._fuel_start = p.fuel_level
+
+        if completing:
             lap = CompletedLap(
                 number=prev,
                 time_ms=p.last_lap_time_ms,
                 finished_at=datetime.now(UTC).isoformat(),
                 car_id=p.car_id,
-                samples=self._samples,
-                fuel_start=self._fuel_start,
+                samples=finished_samples,
+                fuel_start=fuel_start,
                 fuel_end=p.fuel_level,
                 tod_ms=p.day_progression_ms,
             )
@@ -149,11 +164,6 @@ class LapProcessor:
             if self._session.best_lap_time_ms < 0 or lap.time_ms < self._session.best_lap_time_ms:
                 self._session.best_lap_time_ms = lap.time_ms
             await self.on_lap(lap)
-        self._current_lap = p.current_lap
-        self._samples = new_sample_store()
-        self._distance = 0.0
-        self._ticks = 0
-        self._fuel_start = p.fuel_level
 
     def _append_sample(self, p: TelemetryPacket) -> None:
         self._distance += p.speed_mps * TICK_SECONDS

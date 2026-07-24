@@ -199,17 +199,24 @@ function InputsWidget({ frame }: { frame: LiveFrame }) {
   );
 }
 
+function lastVsPrevBest(frame: LiveFrame): number | null {
+  return frame.last_lap_ms > 0 && frame.prev_best_ms > 0
+    ? frame.last_lap_ms - frame.prev_best_ms
+    : null;
+}
+
+function lapLabel(frame: LiveFrame): string {
+  if (frame.total_laps > 0 && frame.current_lap > frame.total_laps) return "FIN";
+  return `${frame.current_lap}${frame.total_laps > 0 ? `/${frame.total_laps}` : ""}`;
+}
+
 function TimesWidget({ frame }: { frame: LiveFrame }) {
-  const delta =
-    frame.last_lap_ms > 0 && frame.session_best_ms > 0
-      ? frame.last_lap_ms - frame.session_best_ms
-      : null;
+  const delta = lastVsPrevBest(frame);
   return (
     <div className="flex flex-col justify-center text-xs leading-5">
       <div>
         <span className="text-ink-dim">LAP </span>
-        {frame.current_lap}
-        {frame.total_laps > 0 ? `/${frame.total_laps}` : ""}
+        {lapLabel(frame)}
       </div>
       <div>
         <span className="text-ink-dim">BEST </span>
@@ -227,10 +234,7 @@ function TimesWidget({ frame }: { frame: LiveFrame }) {
 }
 
 function DeltaWidget({ frame }: { frame: LiveFrame }) {
-  const delta =
-    frame.last_lap_ms > 0 && frame.session_best_ms > 0
-      ? frame.last_lap_ms - frame.session_best_ms
-      : null;
+  const delta = lastVsPrevBest(frame);
   return (
     <div className="flex flex-col items-center justify-center">
       <div

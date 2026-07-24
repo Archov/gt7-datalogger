@@ -17,7 +17,10 @@ from tests.test_api import drive_laps
 
 @pytest.fixture
 async def client(tmp_path):
-    settings = Settings(source="udp", db_path=tmp_path / "test.db", ws_rate=1000)
+    # High port so tests never collide with a live server on 33740.
+    settings = Settings(
+        source="udp", db_path=tmp_path / "test.db", ws_rate=1000, telemetry_port=43740
+    )
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
@@ -38,7 +41,7 @@ async def test_get_settings(client) -> None:
     c, _ = client
     data = (await c.get("/api/admin/settings")).json()
     assert data["source"] == "udp"
-    assert data["telemetry_port"] == 33740
+    assert data["telemetry_port"] == 43740  # fixture overrides the default
 
 
 async def test_set_ps_ip_applies_and_persists(client) -> None:

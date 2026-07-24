@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-import urllib.request
 from typing import TYPE_CHECKING, Any, Literal
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
@@ -168,14 +167,12 @@ async def update_cars(request: Request) -> dict[str, Any]:
     service = svc(request)
     path = service.settings.cars_csv
 
-    def _download() -> str:
-        with urllib.request.urlopen(CARS_URL, timeout=30) as resp:  # noqa: S310
-            data: bytes = resp.read()
-        return data.decode("utf-8")
-
     try:
-        raw = await asyncio.get_running_loop().run_in_executor(None, _download)
-    except OSError as exc:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(CARS_URL)
+            resp.raise_for_status()
+            raw = resp.text
+    except httpx.HTTPError as exc:
         raise HTTPException(502, f"download failed: {exc}") from exc
 
     import csv

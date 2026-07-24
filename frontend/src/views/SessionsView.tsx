@@ -66,7 +66,7 @@ export function SessionsView() {
         flash("Session has no laps to identify the track from");
         return;
       }
-      await api.createTrack(name, ls[ls.length - 1].id);
+      await api.createTrack(name, ls[0].id);
       flash(`Track saved as "${name}"`);
       refresh();
     } catch {

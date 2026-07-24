@@ -78,9 +78,11 @@ export function RaceLineMap({
   useEffect(() => {
     const s = lap.series;
     let data: number[][] = [];
-    if (cursorDist != null && s.dist.length > 0) {
+    if (cursorDist != null && s.dist.length > 0 && step > 0) {
       const i = Math.min(s.dist.length - 1, Math.max(0, Math.round(cursorDist / step)));
-      data = [[s.pos_x[i], s.pos_z[i]]];
+      if (Number.isFinite(i) && s.pos_x[i] != null && s.pos_z[i] != null) {
+        data = [[s.pos_x[i], s.pos_z[i]]];
+      }
     }
     chartRef.current?.setOption(
       { series: [{ id: "cursor", data }] },

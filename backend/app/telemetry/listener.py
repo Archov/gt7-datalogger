@@ -37,8 +37,13 @@ class UdpTelemetrySource:
         self._last_packet_at: float = 0.0
         self._packet_count = 0
         self._decode_errors = 0
+        self._dropped = 0
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
+        # Packets are consumed by ONE task so processing stays strictly
+        # ordered and never overlaps — overlapping feeds corrupt lap
+        # detection (duplicate lap saves while a DB write is in flight).
+        self._queue: asyncio.Queue[TelemetryPacket] = asyncio.Queue(maxsize=600)
 
     @property
     def connected(self) -> bool:
@@ -51,6 +56,7 @@ class UdpTelemetrySource:
             "console_ip": self._console_addr[0] if self._console_addr else self._settings.ps_ip,
             "packets_received": self._packet_count,
             "decode_errors": self._decode_errors,
+            "packets_dropped": self._dropped,
         }
 
     def reset_discovery(self) -> None:
@@ -73,6 +79,7 @@ class UdpTelemetrySource:
         )
         self._running = True
         self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
+        self._tasks.append(asyncio.create_task(self._consume_loop()))
         target = self._settings.ps_ip or "<broadcast>"
         log.info(
             "UDP telemetry listening on :%d, heartbeat to %s:%d",
@@ -103,7 +110,29 @@ class UdpTelemetrySource:
             self._decode_errors += 1
             return
         self._packet_count += 1
-        asyncio.ensure_future(self._on_packet(packet))
+        try:
+            self._queue.put_nowait(packet)
+        except asyncio.QueueFull:
+            # Consumer is behind (e.g. slow disk); drop the oldest to keep live.
+            self._dropped += 1
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            self._queue.put_nowait(packet)
+
+    async def _consume_loop(self) -> None:
+        while True:
+            packet = await self._queue.get()
+            try:
+                await self._on_packet(packet)
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "error processing telemetry packet %d: %s",
+                    packet.packet_id,
+                    exc,
+                    exc_info=True,
+                )
 
     async def _heartbeat_loop(self) -> None:
         while self._running:

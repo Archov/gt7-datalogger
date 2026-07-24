@@ -132,7 +132,12 @@ async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
     ]
     n = len(samples["t"])
     for i in range(n):
-        lines.append(",".join(str(samples[key][i]) for key, _, _ in cols))
+        lines.append(
+            ",".join(
+                str(samples[key][i]) if i < len(samples[key]) else ""
+                for key, _, _ in cols
+            )
+        )
 
     return PlainTextResponse(
         "\n".join(lines) + "\n",

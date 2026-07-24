@@ -85,6 +85,14 @@ async def test_new_session_on_lap_reset(setup) -> None:
     assert len(c.sessions) == 2
 
 
+async def test_new_session_on_lap_reset_to_zero(setup) -> None:
+    """Race restart: lap counter drops back to 0 (out-lap)."""
+    proc, c = setup
+    await feed_lap(proc, 3, 10)
+    await feed_lap(proc, 0, 10)
+    assert len(c.sessions) == 2
+
+
 async def test_paused_samples_not_recorded(setup) -> None:
     proc, _ = setup
     await feed_lap(proc, 1, 10)
@@ -110,3 +118,43 @@ async def test_distance_integration(setup) -> None:
     # 60 ticks at 60 m/s = 1 second = 60 m
     await feed_lap(proc, 1, 60, speed_mps=60.0)
     assert proc.live_lap_samples["dist"][-1] == pytest.approx(60.0, abs=0.1)
+
+
+async def test_no_duplicate_laps_while_save_is_slow() -> None:
+    """Regression: with a real console, packets keep arriving while a
+    completed lap is being persisted. A stale lap counter during that await
+    used to re-trigger the boundary once per packet (dozens of identical
+    lap rows saved within milliseconds)."""
+    import asyncio
+
+    collector = Collector()
+
+    async def slow_on_lap(lap: CompletedLap) -> None:
+        await asyncio.sleep(0.05)  # simulate the DB write
+        collector.laps.append(lap)
+
+    proc = LapProcessor(on_lap=slow_on_lap, on_session=collector.on_session)
+    await feed_lap(proc, 1, 30, speed_mps=50.0)
+
+    # The boundary packet plus a burst of following packets, processed
+    # concurrently the way the UDP path used to dispatch them.
+    tasks = [
+        asyncio.create_task(
+            proc.feed(make_packet(current_lap=2, last_lap_time_ms=61_000, speed_mps=50.0))
+        )
+        for _ in range(10)
+    ]
+    await asyncio.gather(*tasks)
+    assert len(collector.laps) == 1
+    assert collector.laps[0].number == 1
+
+
+async def test_no_samples_recorded_after_race_finish(setup) -> None:
+    """After the checkered flag GT7 reports current_lap = total_laps + 1;
+    the cool-down driving must not be recorded as a lap in progress."""
+    proc, c = setup
+    await feed_lap(proc, 5, 10, total_laps=5)
+    await proc.feed(make_packet(current_lap=6, total_laps=5, last_lap_time_ms=59_000))
+    assert len(c.laps) == 1  # final lap still completes
+    await feed_lap(proc, 6, 20, total_laps=5, speed_mps=30.0)
+    assert len(proc.live_lap_samples["t"]) == 0

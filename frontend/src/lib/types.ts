@@ -26,6 +26,7 @@ export interface LiveFrame {
   car_id: number;
   car_name: string;
   session_best_ms: number;
+  prev_best_ms: number; // session best BEFORE the latest lap (-1 if none)
   pos_x: number;
   pos_z: number;
   tod_ms: number;

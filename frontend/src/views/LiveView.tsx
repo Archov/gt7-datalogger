@@ -50,10 +50,13 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
   const rpmPct = Math.min(100, (frame.rpm / Math.max(1, frame.rpm_alert)) * 100);
   const nearLimit = frame.rpm >= frame.rpm_alert * 0.95;
   const fuelPct = (frame.fuel_level / Math.max(1, frame.fuel_capacity)) * 100;
+  // Compare the latest lap against the best BEFORE it, so a new personal
+  // best shows its improvement instead of +0.000.
   const lastVsBest =
-    frame.last_lap_ms > 0 && frame.session_best_ms > 0
-      ? frame.last_lap_ms - frame.session_best_ms
+    frame.last_lap_ms > 0 && frame.prev_best_ms > 0
+      ? frame.last_lap_ms - frame.prev_best_ms
       : null;
+  const finished = frame.total_laps > 0 && frame.current_lap > frame.total_laps;
 
   return (
     <div className="grid h-full grid-cols-1 gap-3 p-3 lg:grid-cols-[1fr_320px]">
@@ -107,9 +110,15 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
           <Panel className="p-4">
             <Label>Lap</Label>
             <div className="font-tabular text-3xl font-semibold">
-              {frame.current_lap}
-              {frame.total_laps > 0 && (
-                <span className="text-lg text-ink-dim">/{frame.total_laps}</span>
+              {finished ? (
+                <span className="text-throttle">FIN</span>
+              ) : (
+                <>
+                  {frame.current_lap}
+                  {frame.total_laps > 0 && (
+                    <span className="text-lg text-ink-dim">/{frame.total_laps}</span>
+                  )}
+                </>
               )}
             </div>
             <div className="mt-2 space-y-1 font-tabular text-sm">

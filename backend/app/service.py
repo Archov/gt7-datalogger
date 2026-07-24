@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import WebSocket
@@ -42,6 +43,7 @@ class TelemetryService:
         self.notifier = Notifier()
         self.notifier.url = settings.webhook_url
         self._session_best_ms: int | None = None
+        self._prev_best_ms: int | None = None
         self._clients: set[WebSocket] = set()
         self._last_ws_send = 0.0
         self._ws_interval = 1.0 / settings.ws_rate
@@ -90,6 +92,7 @@ class TelemetryService:
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
         self.track_name = ""
         self._session_best_ms = None
+        self._prev_best_ms = None
         log.info("new session %s (car %s)", self.session_id, self.cars.name(info.car_id))
         await self._broadcast({"type": "session", "data": await self.status()})
 
@@ -112,6 +115,11 @@ class TelemetryService:
             return
         lap_id = await self.repo.save_lap(self.session_id, lap)
         log.info("lap %d saved (%d ms, id=%d)", lap.number, lap.time_ms, lap_id)
+
+        # Remember the best BEFORE this lap: the live "Δ best" compares the
+        # latest lap against it (comparing against a best that already
+        # includes the latest lap can never show an improvement).
+        self._prev_best_ms = self._session_best_ms
 
         # Personal best (only when beating an existing best, not on the first lap)
         if self._session_best_ms is not None and lap.time_ms < self._session_best_ms:
@@ -201,6 +209,7 @@ class TelemetryService:
             "car_id": p.car_id,
             "car_name": self.cars.name(p.car_id),
             "session_best_ms": session.best_lap_time_ms if session else -1,
+            "prev_best_ms": self._prev_best_ms if self._prev_best_ms is not None else -1,
             "pos_x": round(p.position_x, 2),
             "pos_z": round(p.position_z, 2),
             "tod_ms": p.day_progression_ms,
@@ -250,7 +259,7 @@ class TelemetryService:
         lap = CompletedLap(
             number=self.processor._current_lap,
             time_ms=int(samples["t"][-1] * 1000),
-            finished_at="",
+            finished_at=datetime.now(UTC).isoformat(),
             car_id=self.latest_packet.car_id if self.latest_packet else 0,
             samples={k: list(v) for k, v in samples.items()},
             fuel_start=samples["fuel"][0],

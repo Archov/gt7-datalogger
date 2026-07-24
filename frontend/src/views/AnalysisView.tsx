@@ -119,7 +119,10 @@ export function AnalysisView() {
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel p-3">
           <select
             value={sessionId ?? ""}
-            onChange={(e) => setSessionId(Number(e.target.value))}
+            onChange={(e) => {
+              manualSelection.current = false;
+              setSessionId(Number(e.target.value));
+            }}
             className="rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-sm"
           >
             {sessions.map((s) => (
