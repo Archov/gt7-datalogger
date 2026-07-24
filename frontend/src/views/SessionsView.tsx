@@ -55,6 +55,25 @@ export function SessionsView() {
     }
   }
 
+  async function nameTrack(sessionId: number) {
+    const name = prompt(
+      "Name this track (future sessions on it will be identified automatically):",
+    )?.trim();
+    if (!name) return;
+    try {
+      const ls = laps[sessionId] ?? (await api.sessionLaps(sessionId));
+      if (ls.length === 0) {
+        flash("Session has no laps to identify the track from");
+        return;
+      }
+      await api.createTrack(name, ls[ls.length - 1].id);
+      flash(`Track saved as "${name}"`);
+      refresh();
+    } catch {
+      flash("Could not save track");
+    }
+  }
+
   async function logLapNow() {
     try {
       const res = await api.logLapNow();
@@ -105,6 +124,31 @@ export function SessionsView() {
             >
               <span className="font-tabular text-sm text-ink-dim">#{s.id}</span>
               <span className="font-medium">{s.car_name}</span>
+              {s.track_name ? (
+                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent">
+                  {s.track_name}
+                </span>
+              ) : (
+                s.lap_count > 0 && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="rounded-full border border-dashed border-edge px-2 py-0.5 text-xs text-ink-dim hover:text-ink"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      nameTrack(s.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.stopPropagation();
+                        nameTrack(s.id);
+                      }
+                    }}
+                  >
+                    name track…
+                  </span>
+                )
+              )}
               <span className="text-xs text-ink-dim">{formatTime(s.started_at)}</span>
               <span className="ml-auto font-tabular text-sm">
                 {s.lap_count} laps
@@ -200,8 +244,16 @@ function LapTable({
                 <td className="px-2 py-1.5">{formatSpeed(lap.max_speed, units)}</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
                   <button className="mr-2 text-ink-dim hover:text-ink" onClick={() => onExport(lap.id)}>
-                    export
+                    json
                   </button>
+                  <a
+                    className="mr-2 text-ink-dim hover:text-ink"
+                    href={api.lapCsvUrl(lap.id)}
+                    download
+                    title="MoTeC-compatible CSV"
+                  >
+                    csv
+                  </a>
                   <button className="text-ink-dim hover:text-brake" onClick={() => onDelete(lap.id)}>
                     delete
                   </button>

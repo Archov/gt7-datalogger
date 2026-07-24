@@ -48,6 +48,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.source = stored["source"]
     if "log_level" in stored:
         logging.getLogger().setLevel(stored["log_level"])
+    if "webhook_url" in stored:
+        settings.webhook_url = stored["webhook_url"]
 
     cars = CarDatabase()
     cars.load(settings.cars_csv)

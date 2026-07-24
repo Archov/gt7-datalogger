@@ -6,9 +6,11 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
 
 from app.processing import analysis
+from app.processing.tracks import signature_from_samples
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -84,6 +86,96 @@ async def export_lap(request: Request, lap_id: int) -> dict[str, Any]:
     if data is None:
         raise HTTPException(404, "lap not found")
     return data
+
+
+# Channel map for CSV export: sample column -> (display name, unit).
+CSV_CHANNELS = (
+    ("t", "Time", "s"),
+    ("dist", "Distance", "m"),
+    ("speed", "Ground Speed", "km/h"),
+    ("throttle", "Throttle Pos", "%"),
+    ("brake", "Brake Pos", "%"),
+    ("gear", "Gear", ""),
+    ("rpm", "Engine RPM", "rpm"),
+    ("boost", "Boost Pressure", "bar"),
+    ("tire_slip", "Tyre Slip Ratio", ""),
+    ("yaw_rate", "Yaw Rate", "rad/s"),
+    ("pos_x", "Pos X", "m"),
+    ("pos_z", "Pos Z", "m"),
+    ("body_height", "Ride Height", "mm"),
+    ("fuel", "Fuel Level", "L"),
+)
+
+
+@router.get("/laps/{lap_id}/export.csv")
+async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
+    """MoTeC-compatible CSV export (i2 'CSV file' import, Excel, etc.)."""
+    lap = await svc(request).repo.get_lap(lap_id, with_samples=True)
+    if lap is None:
+        raise HTTPException(404, "lap not found")
+    samples = lap["samples"]
+    cols = [c for c in CSV_CHANNELS if c[0] in samples]
+    time_ms = lap["time_ms"]
+    duration = f"{time_ms // 60000}:{(time_ms % 60000) / 1000:06.3f}"
+    car = svc(request).cars.name(lap["car_id"])
+
+    lines = [
+        '"Format","MoTeC CSV File"',
+        '"Device","GT7 Datalogger"',
+        f'"Vehicle","{car}"',
+        f'"Comment","Lap {lap["number"]} - {duration}"',
+        f'"Log Date","{lap.get("finished_at", "")}"',
+        '"Sample Rate","60.000"',
+        "",
+        ",".join(f'"{name}"' for _, name, _ in cols),
+        ",".join(f'"{unit}"' for _, _, unit in cols),
+    ]
+    n = len(samples["t"])
+    for i in range(n):
+        lines.append(",".join(str(samples[key][i]) for key, _, _ in cols))
+
+    return PlainTextResponse(
+        "\n".join(lines) + "\n",
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="gt7-lap-{lap_id}.csv"'},
+    )
+
+
+# --- tracks -----------------------------------------------------------------
+
+
+@router.get("/tracks")
+async def tracks(request: Request) -> list[dict[str, Any]]:
+    return await svc(request).repo.list_tracks()
+
+
+class TrackPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    lap_id: int
+
+
+@router.post("/tracks")
+async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any]:
+    """Name the circuit a lap was driven on; future sessions auto-match it."""
+    service = svc(request)
+    lap = await service.repo.get_lap(payload.lap_id, with_samples=True)
+    if lap is None:
+        raise HTTPException(404, "lap not found")
+    sig = signature_from_samples(lap["samples"])
+    if sig is None:
+        raise HTTPException(400, "lap has no position data")
+    name = payload.name.strip()
+    track_id = await service.repo.create_track(name, sig)
+    await service.repo.set_session_track(lap["session_id"], name)
+    if service.session_id == lap["session_id"]:
+        service.track_name = name
+    return {"id": track_id, "name": name}
+
+
+@router.delete("/tracks/{track_id}")
+async def delete_track(request: Request, track_id: int) -> dict[str, str]:
+    await svc(request).repo.delete_track(track_id)
+    return {"status": "deleted"}
 
 
 class ImportPayload(BaseModel):

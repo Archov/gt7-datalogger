@@ -33,6 +33,14 @@ export function formatSpeed(kmh: number, units: Units): string {
   return `${Math.round(speedValue(kmh, units))} ${speedUnit(units)}`;
 }
 
+export function formatTimeOfDay(todMs: number | null | undefined): string {
+  if (todMs == null || todMs < 0) return "–";
+  const dayMs = ((todMs % 86_400_000) + 86_400_000) % 86_400_000;
+  const h = Math.floor(dayMs / 3_600_000);
+  const m = Math.floor((dayMs % 3_600_000) / 60_000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 export function formatTime(iso: string): string {
   if (!iso) return "–";
   const d = new Date(iso);

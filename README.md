@@ -31,6 +31,17 @@ rebuilt with a cleaner architecture and a modern UI.
   runtime with no restart (persisted in the database), live log viewer with level filtering,
   connection diagnostics (packets, decode errors, uptime, connected clients), database
   stats with compact/clear actions, and one-click car-database updates.
+- **OBS stream overlay** — a transparent browser-source view (`/#overlay`) with gear, speed,
+  RPM, inputs, lap times/delta, tires, and fuel; copy the URL from the Admin view.
+- **Webhook / Discord notifications** — new personal bests and end-of-session summaries
+  posted to any webhook URL (Discord URLs get a rich embed, others plain JSON).
+- **CSV / MoTeC-compatible lap export** — open laps in MoTeC i2, Excel, or other analysis
+  tools, alongside the existing JSON export.
+- **Live race strategy** — fuel-to-empty countdown, pit-window lap, and race-distance fuel
+  check computed from your rolling consumption, plus the in-game clock for endurance stints
+  (time-of-day is also recorded per lap).
+- **Track auto-identification** — name a circuit once (Sessions view) and every future
+  session on it is tagged automatically from the lap geometry.
 
 ## Architecture
 
@@ -78,6 +89,120 @@ GT7_SOURCE=sim docker compose up --build
 > broadcast domain. With the default bridge network, set `GT7_PS_IP` explicitly (recommended),
 > or run with `network_mode: host` on Linux.
 
+## Running on a Raspberry Pi (native, no Docker)
+
+Docker is impractical on the smallest Pis — the official `python` and `node` images have
+no ARMv6 build — so on a Raspberry Pi Zero W / Zero 2 W you run the backend natively and
+serve a **pre-built** frontend. The capture workload itself is light (decrypt + decode a
+~300-byte UDP packet at 60 Hz), so even a Zero W handles it comfortably.
+
+> **Which Pi?** A **Pi Zero 2 W** (quad-core, runs 64-bit) is strongly recommended: on
+> arm64 every dependency has a prebuilt wheel and the steps below "just work". A **Pi Zero W**
+> (single-core, ARMv6) also works but depends on piwheels shipping ARMv6 wheels for the
+> Rust-based packages (`pydantic-core`, `watchfiles`) — see the ARMv6 note at the end.
+
+### 1. Build the frontend on your dev machine
+
+Never run `npm run build` on the Pi (slow, and likely to run out of memory). Build it on
+your laptop and copy the output across:
+
+```bash
+# on your dev machine, from the repo root
+cd frontend
+npm ci
+npm run build          # produces frontend/dist
+
+# copy the whole repo (or at least backend/ + frontend/dist) to the Pi
+rsync -av --exclude node_modules --exclude .venv ../  pi@raspberrypi.local:~/gt7-datalogger/
+```
+
+The backend serves `frontend/dist` automatically when that folder is present, so no web
+server or reverse proxy is needed.
+
+### 2. Prepare the Pi
+
+Use a current **Raspberry Pi OS (Trixie-based)** image, which ships Python 3.12+ (the
+project requires ≥ 3.12). On an older Bookworm image you'd have to build Python 3.12
+yourself. Install the build basics:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-dev build-essential
+python3 --version      # must be 3.12 or newer
+```
+
+### 3. Install the backend
+
+Raspberry Pi OS points pip at **piwheels**, which provides prebuilt ARM wheels for
+`pydantic-core`, `pycryptodome`, and friends — this is what makes the install fast instead
+of an hours-long compile.
+
+```bash
+cd ~/gt7-datalogger/backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+### 4. Configure
+
+Set the console IP (or leave it unset for broadcast auto-discovery) in an `.env` file in
+the directory you launch from, or as environment variables:
+
+```bash
+# ~/gt7-datalogger/backend/.env
+GT7_SOURCE=udp
+GT7_PS_IP=192.168.1.50        # your PlayStation's IP
+GT7_DB_PATH=/home/pi/gt7-data/gt7.db
+GT7_CARS_CSV=data/cars.csv
+```
+
+### 5. Run it
+
+```bash
+cd ~/gt7-datalogger/backend
+source .venv/bin/activate
+python -m app.main            # listens on 0.0.0.0:8000
+```
+
+Open `http://<pi-ip>:8000` from any device on the LAN. Fetch the full car list once with
+`python scripts/update_cars.py` (or from **Admin → Update car database**).
+
+### 6. Start automatically with systemd
+
+```ini
+# /etc/systemd/system/gt7-datalogger.service
+[Unit]
+Description=GT7 Datalogger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/gt7-datalogger/backend
+EnvironmentFile=/home/pi/gt7-datalogger/backend/.env
+ExecStart=/home/pi/gt7-datalogger/backend/.venv/bin/python -m app.main
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now gt7-datalogger
+journalctl -u gt7-datalogger -f      # follow the logs
+```
+
+Make sure the Pi and PlayStation share the same 2.4 GHz network and that UDP port 33740
+is not firewalled.
+
+> **ARMv6 (Pi Zero W) note:** if `pip install` tries to compile `pydantic-core` or
+> `watchfiles` from source (i.e. piwheels has no wheel for the exact version), the build
+> can take a very long time or exhaust the 512 MB of RAM. Options: pin to a package version
+> piwheels does provide a wheel for, add temporary swap for the one-time build, or — the
+> easy path — use a **Pi Zero 2 W** on 64-bit Raspberry Pi OS, where prebuilt wheels are
+> always available.
+
 ## Local development
 
 Backend (Python 3.12+):
@@ -119,6 +244,7 @@ working directory):
 | `GT7_DB_PATH` | `data/gt7.db` | SQLite database path |
 | `GT7_CARS_CSV` | `data/cars.csv` | Car ID → name lookup table |
 | `GT7_WS_RATE` | `30` | Live stream rate to the browser (Hz) |
+| `GT7_WEBHOOK_URL` | *(empty)* | Webhook for PB / session notifications (also settable in Admin) |
 | `GT7_HTTP_PORT` | `8000` | HTTP port |
 
 The bundled `cars.csv` only contains a sample entry. Fetch the full community-maintained

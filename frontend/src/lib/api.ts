@@ -8,6 +8,7 @@ import type {
   LapSummary,
   LogRecord,
   SessionSummary,
+  Track,
 } from "./types";
 
 async function get<T>(url: string): Promise<T> {
@@ -44,10 +45,18 @@ export const api = {
     send<ConnectionStatus>("/api/control/recording", "POST", { recording }),
   logLapNow: () => send<{ id: number }>("/api/control/log-lap-now", "POST"),
 
+  tracks: () => get<Track[]>("/api/tracks"),
+  createTrack: (name: string, lapId: number) =>
+    send<{ id: number; name: string }>("/api/tracks", "POST", { name, lap_id: lapId }),
+  deleteTrack: (id: number) => send<{ status: string }>(`/api/tracks/${id}`, "DELETE"),
+  lapCsvUrl: (lapId: number) => `/api/laps/${lapId}/export.csv`,
+
   admin: {
     settings: () => get<AdminSettings>("/api/admin/settings"),
-    updateSettings: (patch: Partial<Pick<AdminSettings, "ps_ip" | "source" | "log_level">>) =>
-      send<AdminSettings>("/api/admin/settings", "PUT", patch),
+    updateSettings: (
+      patch: Partial<Pick<AdminSettings, "ps_ip" | "source" | "log_level" | "webhook_url">>,
+    ) => send<AdminSettings>("/api/admin/settings", "PUT", patch),
+    testWebhook: () => send<{ status: string }>("/api/admin/test-webhook", "POST"),
     logs: (limit = 300, level?: string) =>
       get<LogRecord[]>(`/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
     clearLogs: () => send<{ status: string }>("/api/admin/logs", "DELETE"),

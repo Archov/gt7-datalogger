@@ -11,8 +11,10 @@ from fastapi import WebSocket
 
 from app.config import Settings
 from app.models import TelemetryPacket
+from app.notify import Notifier
 from app.processing.cars import CarDatabase
 from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
+from app.processing.tracks import signature_from_samples
 from app.storage.repository import Repository, lap_summary  # noqa: F401  (re-export)
 from app.telemetry.listener import UdpTelemetrySource
 from app.telemetry.simulator import SimTelemetrySource
@@ -35,7 +37,11 @@ class TelemetryService:
 
         self.recording = True
         self.session_id: int | None = None
+        self.track_name: str = ""
         self.latest_packet: TelemetryPacket | None = None
+        self.notifier = Notifier()
+        self.notifier.url = settings.webhook_url
+        self._session_best_ms: int | None = None
         self._clients: set[WebSocket] = set()
         self._last_ws_send = 0.0
         self._ws_interval = 1.0 / settings.ws_rate
@@ -80,15 +86,48 @@ class TelemetryService:
             await self._broadcast({"type": "telemetry", "data": self._live_frame(p)})
 
     async def _on_session(self, info: SessionInfo) -> None:
+        await self._summarize_previous_session()
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
+        self.track_name = ""
+        self._session_best_ms = None
         log.info("new session %s (car %s)", self.session_id, self.cars.name(info.car_id))
         await self._broadcast({"type": "session", "data": await self.status()})
+
+    async def _summarize_previous_session(self) -> None:
+        if self.session_id is None:
+            return
+        laps = await self.repo.list_laps(self.session_id)
+        if not laps:
+            return
+        self.notifier.session_summary(
+            car=self.cars.name(laps[0]["car_id"]),
+            track=self.track_name,
+            lap_count=len(laps),
+            best_ms=min(lap["time_ms"] for lap in laps),
+            fuel_used=sum(lap["fuel_consumed"] for lap in laps),
+        )
 
     async def _on_lap(self, lap: CompletedLap) -> None:
         if self.session_id is None:
             return
         lap_id = await self.repo.save_lap(self.session_id, lap)
         log.info("lap %d saved (%d ms, id=%d)", lap.number, lap.time_ms, lap_id)
+
+        # Personal best (only when beating an existing best, not on the first lap)
+        if self._session_best_ms is not None and lap.time_ms < self._session_best_ms:
+            self.notifier.personal_best(
+                lap.time_ms,
+                self._session_best_ms,
+                lap.number,
+                self.cars.name(lap.car_id),
+                self.track_name,
+            )
+        if self._session_best_ms is None or lap.time_ms < self._session_best_ms:
+            self._session_best_ms = lap.time_ms
+
+        # Track auto-identification from the first completed lap's geometry
+        if not self.track_name:
+            await self._identify_track(lap)
         summary = {
             "id": lap_id,
             "session_id": self.session_id,
@@ -104,6 +143,29 @@ class TelemetryService:
             "min_body_height": round(lap.min_body_height, 1),
         }
         await self._broadcast({"type": "lap", "data": summary})
+
+    async def _identify_track(self, lap: CompletedLap) -> None:
+        sig = signature_from_samples(lap.samples)
+        if sig is None or self.session_id is None:
+            return
+        name = await self.repo.find_track(sig)
+        if name:
+            self.track_name = name
+            await self.repo.set_session_track(self.session_id, name)
+            log.info("track identified: %s", name)
+            await self._broadcast({"type": "session", "data": await self.status()})
+
+    async def name_current_track(self, name: str, lap_samples: dict[str, list[float]]) -> None:
+        """Save the current circuit under a name and tag the session with it."""
+        sig = signature_from_samples(lap_samples)
+        if sig is None:
+            raise ValueError("lap has no position data")
+        await self.repo.create_track(name, sig)
+        self.track_name = name
+        if self.session_id is not None:
+            await self.repo.set_session_track(self.session_id, name)
+        log.info("track saved: %s (%.0f m)", name, sig.length_m)
+        await self._broadcast({"type": "session", "data": await self.status()})
 
     # --- live stream --------------------------------------------------------
 
@@ -141,6 +203,8 @@ class TelemetryService:
             "session_best_ms": session.best_lap_time_ms if session else -1,
             "pos_x": round(p.position_x, 2),
             "pos_z": round(p.position_z, 2),
+            "tod_ms": p.day_progression_ms,
+            "track_name": self.track_name,
         }
 
     async def status(self) -> dict[str, Any]:
@@ -148,6 +212,7 @@ class TelemetryService:
             "source": self.settings.source,
             "recording": self.recording,
             "session_id": self.session_id,
+            "track_name": self.track_name,
             **self.source.stats,
         }
 

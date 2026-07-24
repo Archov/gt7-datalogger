@@ -28,12 +28,15 @@ export interface LiveFrame {
   session_best_ms: number;
   pos_x: number;
   pos_z: number;
+  tod_ms: number;
+  track_name: string;
 }
 
 export interface ConnectionStatus {
   source: string;
   recording: boolean;
   session_id: number | null;
+  track_name: string;
   connected: boolean;
   console_ip: string;
   packets_received: number;
@@ -56,6 +59,7 @@ export interface LapSummary {
   max_speed: number;
   min_body_height: number;
   total_ticks?: number;
+  tod_ms?: number;
 }
 
 export interface SessionSummary {
@@ -64,8 +68,16 @@ export interface SessionSummary {
   car_id: number;
   car_name: string;
   note: string;
+  track_name: string;
   lap_count: number;
   best_lap_time_ms: number | null;
+}
+
+export interface Track {
+  id: number;
+  name: string;
+  length_m: number;
+  created_at: string;
 }
 
 export type Samples = Record<string, number[]>;
@@ -118,6 +130,7 @@ export interface AdminSettings {
   ws_rate: number;
   heartbeat_port: number;
   telemetry_port: number;
+  webhook_url: string;
 }
 
 export interface LogRecord {

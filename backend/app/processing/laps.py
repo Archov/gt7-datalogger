@@ -36,6 +36,7 @@ class CompletedLap:
     samples: dict[str, list[float]]
     fuel_start: float
     fuel_end: float
+    tod_ms: int = -1  # in-game time of day when the lap completed
     # metrics
     fuel_consumed: float = 0.0
     full_throttle_pct: float = 0.0
@@ -140,6 +141,7 @@ class LapProcessor:
                 samples=self._samples,
                 fuel_start=self._fuel_start,
                 fuel_end=p.fuel_level,
+                tod_ms=p.day_progression_ms,
             )
             lap.compute_metrics()
             assert self._session is not None

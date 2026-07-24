@@ -27,6 +27,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Webhook for personal-best / session-summary notifications
+    # (Discord webhook URLs get a rich embed; other URLs get plain JSON).
+    webhook_url: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

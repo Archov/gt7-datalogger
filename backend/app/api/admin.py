@@ -41,6 +41,7 @@ async def get_settings(request: Request) -> dict[str, Any]:
         "ws_rate": s.ws_rate,
         "heartbeat_port": s.heartbeat_port,
         "telemetry_port": s.telemetry_port,
+        "webhook_url": s.webhook_url,
     }
 
 
@@ -48,6 +49,7 @@ class SettingsPayload(BaseModel):
     ps_ip: str | None = Field(default=None, max_length=64)
     source: Literal["udp", "sim"] | None = None
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None
+    webhook_url: str | None = Field(default=None, max_length=500)
 
 
 @router.put("/settings")
@@ -66,7 +68,29 @@ async def put_settings(request: Request, payload: SettingsPayload) -> dict[str, 
         logging.getLogger().setLevel(payload.log_level)
         await service.repo.set_setting("log_level", payload.log_level)
         log.info("log level set to %s", payload.log_level)
+    if payload.webhook_url is not None:
+        url = payload.webhook_url.strip()
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "webhook URL must start with http:// or https://")
+        service.settings.webhook_url = url
+        service.notifier.url = url
+        await service.repo.set_setting("webhook_url", url)
+        log.info("webhook %s", "configured" if url else "disabled")
     return await get_settings(request)
+
+
+@router.post("/test-webhook")
+async def test_webhook(request: Request) -> dict[str, str]:
+    service = svc(request)
+    if not service.notifier.url:
+        raise HTTPException(400, "no webhook URL configured")
+    try:
+        await service.notifier.send(
+            "test", "🔧 GT7 Datalogger test", [("Status", "webhook configured correctly")]
+        )
+    except Exception as exc:  # noqa: BLE001 - report any delivery failure
+        raise HTTPException(502, f"webhook delivery failed: {exc}") from exc
+    return {"status": "sent"}
 
 
 def _looks_like_host(value: str) -> bool:

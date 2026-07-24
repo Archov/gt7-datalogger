@@ -2,8 +2,15 @@
 // so 30 Hz telemetry never causes React re-renders.
 
 import { useEffect, useRef, useState } from "react";
-import { formatDelta, formatLapTime, speedUnit, speedValue } from "@/lib/format";
-import type { LiveFrame } from "@/lib/types";
+import {
+  formatDelta,
+  formatDuration,
+  formatLapTime,
+  formatTimeOfDay,
+  speedUnit,
+  speedValue,
+} from "@/lib/format";
+import type { LapSummary, LiveFrame } from "@/lib/types";
 import { useSettings } from "@/store/settings";
 import { liveFrameRef, useTelemetry } from "@/store/telemetry";
 
@@ -160,9 +167,11 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
         </div>
       </div>
 
-      {/* Recent laps */}
-      <Panel className="hidden max-h-full flex-col overflow-hidden p-4 lg:flex">
-        <Label>Recent laps</Label>
+      {/* Strategy + recent laps */}
+      <div className="hidden max-h-full flex-col gap-3 overflow-hidden lg:flex">
+        <StrategyPanel frame={frame} laps={recentLaps} />
+        <Panel className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+          <Label>Recent laps</Label>
         <div className="mt-2 flex-1 space-y-1 overflow-y-auto font-tabular text-sm">
           {recentLaps.length === 0 && (
             <div className="text-ink-dim">Completed laps appear here.</div>
@@ -177,9 +186,62 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
               <span className="text-xs text-ink-dim">{lap.fuel_consumed.toFixed(1)}L</span>
             </div>
           ))}
-        </div>
-      </Panel>
+          </div>
+        </Panel>
+      </div>
     </div>
+  );
+}
+
+// Rolling fuel strategy from the last few laps: laps/time to empty, pit lap.
+function StrategyPanel({ frame, laps }: { frame: LiveFrame; laps: LapSummary[] }) {
+  const recent = laps.slice(0, 3).filter((lap) => lap.fuel_consumed > 0.01);
+  const avgFuel = recent.length
+    ? recent.reduce((a, lap) => a + lap.fuel_consumed, 0) / recent.length
+    : 0;
+  const avgLapMs = recent.length
+    ? recent.reduce((a, lap) => a + lap.time_ms, 0) / recent.length
+    : 0;
+  const lapsToEmpty = avgFuel > 0 ? frame.fuel_level / avgFuel : null;
+  const pitLap = lapsToEmpty != null ? frame.current_lap + Math.floor(lapsToEmpty) : null;
+
+  return (
+    <Panel className="p-4">
+      <Label>Race strategy</Label>
+      {lapsToEmpty == null ? (
+        <div className="mt-2 text-xs text-ink-dim">
+          Complete a lap with fuel consumption to project fuel strategy.
+        </div>
+      ) : (
+        <div className="mt-2 space-y-1 font-tabular text-sm">
+          <Row k="Fuel to empty" v={`${lapsToEmpty.toFixed(1)} laps`}
+            className={lapsToEmpty < 2 ? "text-brake" : lapsToEmpty < 4 ? "text-warn" : ""} />
+          <Row k="Time to empty" v={formatDuration(lapsToEmpty * avgLapMs)} />
+          <Row k="Pit before lap" v={pitLap != null ? String(pitLap) : "–"} />
+          <Row k="Avg fuel / lap" v={`${avgFuel.toFixed(2)} L`} />
+          {frame.total_laps > 0 &&
+            (() => {
+              const needed = (frame.total_laps - frame.current_lap + 1) * avgFuel;
+              const enough = needed <= frame.fuel_level;
+              return (
+                <Row
+                  k="To finish"
+                  v={enough ? "fuel OK" : `${(needed - frame.fuel_level).toFixed(1)} L short`}
+                  className={enough ? "text-throttle" : "text-brake"}
+                />
+              );
+            })()}
+        </div>
+      )}
+      <div className="mt-2 border-t border-edge pt-2 text-xs text-ink-dim">
+        In-game time <span className="text-ink">{formatTimeOfDay(frame.tod_ms)}</span>
+        {frame.track_name && (
+          <span className="ml-2">
+            · <span className="text-ink">{frame.track_name}</span>
+          </span>
+        )}
+      </div>
+    </Panel>
   );
 }
 

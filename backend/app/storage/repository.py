@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
-from app.storage.db import LapRow, SessionRow, SettingRow
+from app.processing.tracks import TrackSignature, matches
+from app.storage.db import LapRow, SessionRow, SettingRow, TrackRow
 
 EXPORT_VERSION = 1
 
@@ -32,6 +34,7 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "max_speed": row.max_speed,
         "min_body_height": row.min_body_height,
         "total_ticks": row.total_ticks,
+        "tod_ms": row.tod_ms,
     }
 
 
@@ -64,6 +67,7 @@ class Repository:
                 max_speed=lap.max_speed,
                 min_body_height=lap.min_body_height,
                 total_ticks=lap.total_ticks,
+                tod_ms=lap.tod_ms,
                 samples_json=json.dumps(lap.samples, separators=(",", ":")),
             )
             db.add(row)
@@ -85,6 +89,7 @@ class Repository:
                         "car_id": s.car_id,
                         "car_name": s.car_name,
                         "note": s.note,
+                        "track_name": s.track_name,
                         "lap_count": len(laps),
                         "best_lap_time_ms": min(laps) if laps else None,
                     }
@@ -130,6 +135,57 @@ class Repository:
         if lap is None:
             return None
         return {"format": "gt7-datalogger-lap", "version": EXPORT_VERSION, "lap": lap}
+
+    # --- tracks -------------------------------------------------------------
+
+    async def list_tracks(self) -> list[dict[str, Any]]:
+        async with self._sf() as db:
+            rows = (await db.execute(select(TrackRow).order_by(TrackRow.name))).scalars()
+            return [
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "length_m": t.length_m,
+                    "created_at": t.created_at,
+                }
+                for t in rows
+            ]
+
+    async def find_track(self, sig: TrackSignature) -> str | None:
+        """Name of the stored track matching this signature, if any."""
+        async with self._sf() as db:
+            rows = (await db.execute(select(TrackRow))).scalars()
+            for track in rows:
+                if matches(sig, track):
+                    return track.name
+        return None
+
+    async def create_track(self, name: str, sig: TrackSignature) -> int:
+        async with self._sf() as db:
+            row = TrackRow(
+                name=name,
+                length_m=sig.length_m,
+                min_x=sig.min_x,
+                max_x=sig.max_x,
+                min_z=sig.min_z,
+                max_z=sig.max_z,
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            db.add(row)
+            await db.commit()
+            return row.id
+
+    async def delete_track(self, track_id: int) -> None:
+        async with self._sf() as db:
+            await db.execute(delete(TrackRow).where(TrackRow.id == track_id))
+            await db.commit()
+
+    async def set_session_track(self, session_id: int, track_name: str) -> None:
+        async with self._sf() as db:
+            row = await db.get(SessionRow, session_id)
+            if row is not None:
+                row.track_name = track_name
+                await db.commit()
 
     # --- runtime settings ---------------------------------------------------
 

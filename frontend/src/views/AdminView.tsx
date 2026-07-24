@@ -132,6 +132,22 @@ export function AdminView() {
         </Panel>
       </div>
 
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {/* Webhook notifications */}
+        <Panel title="Notifications">
+          {settings ? (
+            <WebhookForm settings={settings} busy={busy} onApply={apply} flash={flash} setBusy={setBusy} />
+          ) : (
+            <div className="p-4 text-sm text-ink-dim">Loading…</div>
+          )}
+        </Panel>
+
+        {/* Stream overlay */}
+        <Panel title="Stream overlay (OBS)">
+          <OverlayPanel flash={flash} />
+        </Panel>
+      </div>
+
       {/* Logs */}
       <Panel title="Logs">
         <LogViewer />
@@ -242,6 +258,100 @@ function ConnectionForm({
             ))}
           </select>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function WebhookForm({
+  settings,
+  busy,
+  onApply,
+  flash,
+  setBusy,
+}: {
+  settings: AdminSettings;
+  busy: string | null;
+  onApply: (patch: Parameters<typeof api.admin.updateSettings>[0], label: string) => void;
+  flash: (text: string, error?: boolean) => void;
+  setBusy: (b: string | null) => void;
+}) {
+  const [url, setUrl] = useState(settings.webhook_url);
+  useEffect(() => setUrl(settings.webhook_url), [settings.webhook_url]);
+
+  return (
+    <div className="space-y-2 p-4">
+      <label className="block text-xs text-ink-dim" htmlFor="webhook-url">
+        Webhook URL — notified on new personal bests and session summaries
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="webhook-url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://discord.com/api/webhooks/… (or any HTTP endpoint)"
+          className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm placeholder:text-ink-dim/60 focus:border-accent focus:outline-none"
+        />
+        <button
+          className="btn shrink-0"
+          disabled={busy !== null || url === settings.webhook_url}
+          onClick={() => onApply({ webhook_url: url }, "Webhook")}
+        >
+          Apply
+        </button>
+        <button
+          className="btn shrink-0"
+          disabled={busy !== null || !settings.webhook_url}
+          onClick={async () => {
+            setBusy("test-webhook");
+            try {
+              await api.admin.testWebhook();
+              flash("Test notification sent");
+            } catch (e) {
+              flash(e instanceof Error ? e.message : "Webhook test failed", true);
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          Test
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-dim">
+        Discord webhook URLs get a rich embed; any other URL receives plain JSON. Leave empty
+        to disable.
+      </p>
+    </div>
+  );
+}
+
+function OverlayPanel({ flash }: { flash: (text: string) => void }) {
+  const overlayUrl = `${window.location.origin}/#overlay`;
+  return (
+    <div className="space-y-2 p-4">
+      <p className="text-xs text-ink-dim">
+        Transparent browser-source view with speed, gear, RPM, inputs, lap times, tires, and
+        fuel. Add it to OBS as a <span className="text-ink">Browser</span> source
+        (suggested size 1920×220, bottom of the canvas):
+      </p>
+      <div className="flex gap-2">
+        <code className="flex-1 truncate rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm">
+          {overlayUrl}
+        </code>
+        <button
+          className="btn shrink-0"
+          onClick={() =>
+            navigator.clipboard
+              .writeText(overlayUrl)
+              .then(() => flash("Overlay URL copied"))
+              .catch(() => flash("Copy failed — select the URL manually"))
+          }
+        >
+          Copy
+        </button>
+        <a className="btn shrink-0" href={overlayUrl} target="_blank" rel="noreferrer">
+          Preview
+        </a>
       </div>
     </div>
   );

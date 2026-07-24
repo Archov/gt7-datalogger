@@ -26,10 +26,26 @@ class SessionRow(Base):
     car_id: Mapped[int]
     car_name: Mapped[str]
     note: Mapped[str] = mapped_column(default="")
+    track_name: Mapped[str] = mapped_column(default="")
 
     laps: Mapped[list[LapRow]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+
+
+class TrackRow(Base):
+    """Named tracks identified by their geometric signature."""
+
+    __tablename__ = "tracks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    length_m: Mapped[float]
+    min_x: Mapped[float]
+    max_x: Mapped[float]
+    min_z: Mapped[float]
+    max_z: Mapped[float]
+    created_at: Mapped[str]
 
 
 class SettingRow(Base):
@@ -61,6 +77,7 @@ class LapRow(Base):
     max_speed: Mapped[float]
     min_body_height: Mapped[float]
     total_ticks: Mapped[int]
+    tod_ms: Mapped[int] = mapped_column(default=-1)  # in-game time of day at lap end
     samples_json: Mapped[str] = mapped_column(Text)
 
     session: Mapped[SessionRow] = relationship(back_populates="laps")
@@ -79,6 +96,22 @@ def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
+# Columns added after the initial release; applied to existing SQLite files.
+_SQLITE_MIGRATIONS = (
+    (
+        "sessions",
+        "track_name",
+        "ALTER TABLE sessions ADD COLUMN track_name VARCHAR NOT NULL DEFAULT ''",
+    ),
+    ("laps", "tod_ms", "ALTER TABLE laps ADD COLUMN tod_ms INTEGER NOT NULL DEFAULT -1"),
+)
+
+
 async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if engine.dialect.name == "sqlite":
+            for table, column, ddl in _SQLITE_MIGRATIONS:
+                info = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+                if column not in {row[1] for row in info}:
+                    await conn.exec_driver_sql(ddl)
