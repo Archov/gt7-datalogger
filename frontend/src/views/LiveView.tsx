@@ -1,0 +1,241 @@
+// Live/Race view: large readouts driven by a rAF loop reading liveFrameRef,
+// so 30 Hz telemetry never causes React re-renders.
+
+import { useEffect, useRef, useState } from "react";
+import { formatDelta, formatLapTime, speedUnit, speedValue } from "@/lib/format";
+import type { LiveFrame } from "@/lib/types";
+import { useSettings } from "@/store/settings";
+import { liveFrameRef, useTelemetry } from "@/store/telemetry";
+
+export function LiveView() {
+  const [frame, setFrame] = useState<LiveFrame | null>(null);
+  const raf = useRef(0);
+
+  useEffect(() => {
+    const tick = () => {
+      setFrame(liveFrameRef.current);
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf.current);
+  }, []);
+
+  if (!frame) {
+    return (
+      <div className="flex h-full items-center justify-center text-ink-dim">
+        <div className="text-center">
+          <div className="mb-2 text-2xl">Waiting for telemetry…</div>
+          <div className="text-sm">
+            Start driving in GT7, or run the server with <code>GT7_SOURCE=sim</code> to demo.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return <Dashboard frame={frame} />;
+}
+
+function Dashboard({ frame }: { frame: LiveFrame }) {
+  const units = useSettings((s) => s.units);
+  const recentLaps = useTelemetry((s) => s.recentLaps);
+  const speed = Math.round(speedValue(frame.speed_kmh, units));
+  const rpmPct = Math.min(100, (frame.rpm / Math.max(1, frame.rpm_alert)) * 100);
+  const nearLimit = frame.rpm >= frame.rpm_alert * 0.95;
+  const fuelPct = (frame.fuel_level / Math.max(1, frame.fuel_capacity)) * 100;
+  const lastVsBest =
+    frame.last_lap_ms > 0 && frame.session_best_ms > 0
+      ? frame.last_lap_ms - frame.session_best_ms
+      : null;
+
+  return (
+    <div className="grid h-full grid-cols-1 gap-3 p-3 lg:grid-cols-[1fr_320px]">
+      <div className="flex flex-col gap-3">
+        {/* RPM bar */}
+        <div className="rounded-xl bg-panel p-3">
+          <div className="h-4 overflow-hidden rounded-full bg-panel-2">
+            <div
+              className={`h-full rounded-full transition-[width] duration-75 ${
+                nearLimit ? "bg-brake" : "bg-accent"
+              }`}
+              style={{ width: `${rpmPct}%` }}
+            />
+          </div>
+          <div className="mt-1 flex justify-between font-tabular text-xs text-ink-dim">
+            <span>{frame.rpm.toLocaleString()} rpm</span>
+            <span>limit {frame.rpm_alert.toLocaleString()}</span>
+          </div>
+        </div>
+
+        {/* Speed + gear */}
+        <div className="grid flex-1 grid-cols-2 gap-3 md:grid-cols-4">
+          <Panel className="col-span-2 flex flex-col items-center justify-center">
+            <div className="font-tabular text-8xl font-bold leading-none">{speed}</div>
+            <div className="mt-1 text-sm uppercase tracking-widest text-ink-dim">
+              {speedUnit(units)}
+            </div>
+          </Panel>
+          <Panel className="flex flex-col items-center justify-center">
+            <div className="font-tabular text-8xl font-bold leading-none text-accent">
+              {frame.gear === 0 ? "R" : frame.gear === 15 ? "N" : frame.gear}
+            </div>
+            <div className="mt-1 text-sm uppercase tracking-widest text-ink-dim">
+              gear{frame.suggested_gear !== 15 ? ` → ${frame.suggested_gear}` : ""}
+            </div>
+          </Panel>
+          <Panel className="flex flex-col justify-center gap-3 p-4">
+            <InputBar label="Throttle" value={frame.throttle} color="bg-throttle" />
+            <InputBar label="Brake" value={frame.brake} color="bg-brake" />
+            {frame.boost > -0.9 && (
+              <div className="flex justify-between font-tabular text-xs text-ink-dim">
+                <span>Boost</span>
+                <span>{frame.boost.toFixed(2)} bar</span>
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        {/* Lap + fuel + tires */}
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Panel className="p-4">
+            <Label>Lap</Label>
+            <div className="font-tabular text-3xl font-semibold">
+              {frame.current_lap}
+              {frame.total_laps > 0 && (
+                <span className="text-lg text-ink-dim">/{frame.total_laps}</span>
+              )}
+            </div>
+            <div className="mt-2 space-y-1 font-tabular text-sm">
+              <Row k="Last" v={formatLapTime(frame.last_lap_ms)} />
+              <Row k="Best" v={formatLapTime(frame.best_lap_ms)} accent />
+              {lastVsBest !== null && (
+                <Row
+                  k="Δ best"
+                  v={formatDelta(lastVsBest)}
+                  className={lastVsBest <= 0 ? "text-throttle" : "text-brake"}
+                />
+              )}
+            </div>
+          </Panel>
+          <Panel className="p-4">
+            <Label>Fuel</Label>
+            <div className="font-tabular text-3xl font-semibold">{fuelPct.toFixed(1)}%</div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-panel-2">
+              <div
+                className={`h-full rounded-full ${fuelPct < 15 ? "bg-brake" : "bg-warn"}`}
+                style={{ width: `${Math.min(100, fuelPct)}%` }}
+              />
+            </div>
+            <div className="mt-2 font-tabular text-xs text-ink-dim">
+              {frame.fuel_level.toFixed(1)} / {frame.fuel_capacity.toFixed(0)} L
+            </div>
+          </Panel>
+          <Panel className="p-4">
+            <Label>Tires °C</Label>
+            <div className="mt-1 grid grid-cols-2 gap-1.5">
+              {(["FL", "FR", "RL", "RR"] as const).map((pos, i) => (
+                <TireTemp key={pos} label={pos} temp={frame.tire_temps[i]} />
+              ))}
+            </div>
+            {frame.tire_slip > 1.1 && (
+              <div className="mt-2 text-xs font-semibold text-warn">TIRE SPIN</div>
+            )}
+          </Panel>
+          <Panel className="p-4">
+            <Label>Race</Label>
+            <div className="font-tabular text-3xl font-semibold">
+              P{frame.position}
+              <span className="text-lg text-ink-dim">/{frame.total_positions}</span>
+            </div>
+            <div className="mt-2 space-y-1 font-tabular text-xs text-ink-dim">
+              <Row k="Water" v={`${frame.water_temp.toFixed(0)}°C`} />
+              <Row k="Oil" v={`${frame.oil_temp.toFixed(0)}°C`} />
+            </div>
+          </Panel>
+        </div>
+
+        <div className="text-center text-xs text-ink-dim">
+          {frame.car_name}
+          {frame.paused && <span className="ml-2 text-warn">· PAUSED</span>}
+          {!frame.on_track && <span className="ml-2">· not on track</span>}
+        </div>
+      </div>
+
+      {/* Recent laps */}
+      <Panel className="hidden max-h-full flex-col overflow-hidden p-4 lg:flex">
+        <Label>Recent laps</Label>
+        <div className="mt-2 flex-1 space-y-1 overflow-y-auto font-tabular text-sm">
+          {recentLaps.length === 0 && (
+            <div className="text-ink-dim">Completed laps appear here.</div>
+          )}
+          {recentLaps.map((lap) => (
+            <div
+              key={lap.id}
+              className="flex items-center justify-between rounded-md bg-panel-2/60 px-2 py-1.5"
+            >
+              <span className="text-ink-dim">L{lap.number}</span>
+              <span>{formatLapTime(lap.time_ms)}</span>
+              <span className="text-xs text-ink-dim">{lap.fuel_consumed.toFixed(1)}L</span>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function Panel({ className = "", children }: { className?: string; children: React.ReactNode }) {
+  return <div className={`rounded-xl bg-panel ${className}`}>{children}</div>;
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[10px] font-semibold uppercase tracking-widest text-ink-dim">
+      {children}
+    </div>
+  );
+}
+
+function Row({
+  k,
+  v,
+  accent,
+  className = "",
+}: {
+  k: string;
+  v: string;
+  accent?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-ink-dim">{k}</span>
+      <span className={accent ? "text-accent" : className}>{v}</span>
+    </div>
+  );
+}
+
+function InputBar({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex justify-between text-xs text-ink-dim">
+        <span>{label}</span>
+        <span className="font-tabular">{Math.round(value)}%</span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-panel-2">
+        <div className={`h-full ${color}`} style={{ width: `${value}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function TireTemp({ label, temp }: { label: string; temp: number }) {
+  // Blue (cold) -> green (optimal ~70-90) -> red (hot)
+  const color =
+    temp < 55 ? "bg-coast/30" : temp < 95 ? "bg-throttle/30" : "bg-brake/40";
+  return (
+    <div className={`rounded-md px-2 py-1.5 text-center font-tabular text-sm ${color}`}>
+      <span className="mr-1 text-[10px] text-ink-dim">{label}</span>
+      {temp.toFixed(0)}
+    </div>
+  );
+}

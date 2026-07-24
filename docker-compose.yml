@@ -1,0 +1,19 @@
+services:
+  gt7-datalogger:
+    build: .
+    container_name: gt7-datalogger
+    restart: unless-stopped
+    ports:
+      - "8000:8000"        # web dashboard + API
+      - "33740:33740/udp"  # GT7 telemetry stream
+    environment:
+      # IP of the PlayStation running GT7. Leave unset for broadcast
+      # auto-discovery (requires host networking on Linux; see README).
+      - GT7_PS_IP=${GT7_PS_IP:-}
+      # Set to "sim" to demo without a PlayStation.
+      - GT7_SOURCE=${GT7_SOURCE:-udp}
+    volumes:
+      - gt7-data:/data
+
+volumes:
+  gt7-data:

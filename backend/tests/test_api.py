@@ -98,7 +98,8 @@ async def test_compare_endpoint(client) -> None:
     data = resp.json()
     assert str(ids[0]) in data["laps"]
     assert "delta" in data["laps"][str(ids[0])]
-    assert "race_line" in data["laps"][str(ids[1])]
+    assert "pos_x" in data["laps"][str(ids[1])]["series"]
+    assert "peaks_valleys" in data["laps"][str(ids[1])]
 
 
 async def test_export_import_roundtrip(client) -> None:

@@ -109,6 +109,7 @@ async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]
 
 COMPARE_COLUMNS = (
     "t", "speed", "throttle", "brake", "coast", "gear", "rpm", "boost", "tire_slip", "yaw_rate",
+    "pos_x", "pos_z",
 )
 
 
@@ -134,7 +135,6 @@ async def compare(
     for lap_id, samples in samples_by_id.items():
         entry: dict[str, Any] = {
             "series": analysis.resample_by_distance(samples, step, COMPARE_COLUMNS),
-            "race_line": analysis.race_line(samples),
             "peaks_valleys": analysis.speed_peaks_valleys(samples),
         }
         if lap_id != ref:
