@@ -1,9 +1,11 @@
-// Track map built from lap positions, colored by input zone
-// (throttle green / brake red / coast blue), with speed peaks & valleys and
-// a cursor dot synced to the distance charts.
+// Track map built from lap positions. The reference lap is colored by input
+// zone (throttle green / brake red / coast blue) with speed peaks & valleys;
+// every other selected lap is overlaid as a solid line in its chart color —
+// like GT7's own Data Logger, but with a synced cursor dot per lap showing
+// the spatial gap at the hovered distance.
 
 import type * as echarts from "echarts";
-import type { EChartsOption } from "echarts";
+import type { EChartsOption, SeriesOption } from "echarts";
 import { useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
 import type { CompareLapEntry } from "@/lib/types";
@@ -16,32 +18,53 @@ function zoneOf(throttle: number, brake: number): number {
   return 1;
 }
 
+export interface MapLap {
+  id: string;
+  entry: CompareLapEntry;
+  color: string; // chart series color for this lap
+  label: string;
+  isRef: boolean;
+}
+
 export function RaceLineMap({
-  lap,
+  laps,
   cursorDist,
   step,
 }: {
-  lap: CompareLapEntry;
+  laps: MapLap[];
   cursorDist: number | null;
   step: number;
 }) {
   const chartRef = useRef<echarts.ECharts | null>(null);
+  const ref = laps.find((lap) => lap.isRef);
 
   const option = useMemo<EChartsOption>(() => {
-    const s = lap.series;
-    const points = s.dist.map((_, i) => ({
-      value: [s.pos_x[i], s.pos_z[i]],
-      itemStyle: { color: ZONE_COLORS[zoneOf(s.throttle[i], s.brake[i])] },
-    }));
-    const pv = lap.peaks_valleys;
-    return {
-      animation: false,
-      grid: { left: 8, right: 8, top: 8, bottom: 8 },
-      xAxis: { type: "value", show: false, scale: true },
-      yAxis: { type: "value", show: false, scale: true, inverse: true },
-      tooltip: { show: false },
-      series: [
-        { type: "scatter", data: points, symbolSize: 3.5, silent: true },
+    const series: SeriesOption[] = [];
+
+    // Comparison laps first (under the reference), as solid colored lines.
+    for (const lap of laps) {
+      if (lap.isRef) continue;
+      const s = lap.entry.series;
+      series.push({
+        id: `line-${lap.id}`,
+        type: "line",
+        data: s.dist.map((_, i) => [s.pos_x[i], s.pos_z[i]]),
+        showSymbol: false,
+        lineStyle: { color: lap.color, width: 1.6, opacity: 0.9 },
+        silent: true,
+        z: 2,
+      });
+    }
+
+    if (ref) {
+      const s = ref.entry.series;
+      const points = s.dist.map((_, i) => ({
+        value: [s.pos_x[i], s.pos_z[i]],
+        itemStyle: { color: ZONE_COLORS[zoneOf(s.throttle[i], s.brake[i])] },
+      }));
+      const pv = ref.entry.peaks_valleys;
+      series.push(
+        { type: "scatter", data: points, symbolSize: 3.5, silent: true, z: 3 },
         {
           type: "scatter",
           data: pv.peaks.map((p) => [p.x, p.z]),
@@ -61,34 +84,52 @@ export function RaceLineMap({
           silent: true,
           z: 5,
         },
-        {
-          id: "cursor",
-          type: "scatter",
-          data: [] as number[][],
-          symbolSize: 12,
-          itemStyle: { color: "#fff", borderColor: CHART_COLORS.series[0], borderWidth: 3 },
-          z: 10,
-          silent: true,
-        },
-      ],
+      );
+    }
+
+    // One synced cursor dot per lap, in the lap's color (reference white).
+    for (const lap of laps) {
+      series.push({
+        id: `cursor-${lap.id}`,
+        type: "scatter",
+        data: [] as number[][],
+        symbolSize: lap.isRef ? 12 : 9,
+        itemStyle: lap.isRef
+          ? { color: "#fff", borderColor: CHART_COLORS.series[0], borderWidth: 3 }
+          : { color: lap.color, borderColor: "#fff", borderWidth: 1.5 },
+        z: 10,
+        silent: true,
+      });
+    }
+
+    return {
+      animation: false,
+      grid: { left: 8, right: 8, top: 8, bottom: 8 },
+      xAxis: { type: "value", show: false, scale: true },
+      yAxis: { type: "value", show: false, scale: true, inverse: true },
+      tooltip: { show: false },
+      series,
     };
-  }, [lap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [laps]);
 
   // Cursor updates merge into the existing chart by series id — no rebuild.
   useEffect(() => {
-    const s = lap.series;
-    let data: number[][] = [];
-    if (cursorDist != null && s.dist.length > 0 && step > 0) {
-      const i = Math.min(s.dist.length - 1, Math.max(0, Math.round(cursorDist / step)));
-      if (Number.isFinite(i) && s.pos_x[i] != null && s.pos_z[i] != null) {
-        data = [[s.pos_x[i], s.pos_z[i]]];
+    const updates: SeriesOption[] = laps.map((lap) => {
+      const s = lap.entry.series;
+      let data: number[][] = [];
+      if (cursorDist != null && s.dist.length > 0 && step > 0) {
+        const i = Math.min(s.dist.length - 1, Math.max(0, Math.round(cursorDist / step)));
+        if (Number.isFinite(i) && s.pos_x[i] != null && s.pos_z[i] != null) {
+          data = [[s.pos_x[i], s.pos_z[i]]];
+        }
       }
-    }
-    chartRef.current?.setOption(
-      { series: [{ id: "cursor", data }] },
-      { notMerge: false, lazyUpdate: true },
-    );
-  }, [lap, cursorDist, step]);
+      return { id: `cursor-${lap.id}`, data } as SeriesOption;
+    });
+    chartRef.current?.setOption({ series: updates }, { notMerge: false, lazyUpdate: true });
+  }, [laps, cursorDist, step]);
+
+  const others = laps.filter((lap) => !lap.isRef);
 
   return (
     <div className="relative">
@@ -99,6 +140,16 @@ export function RaceLineMap({
           chartRef.current = chart;
         }}
       />
+      {others.length > 0 && (
+        <div className="absolute right-2 top-2 space-y-0.5 text-[10px]">
+          {others.map((lap) => (
+            <div key={lap.id} className="flex items-center justify-end gap-1.5 text-ink-dim">
+              {lap.label}
+              <i className="inline-block h-0.5 w-4" style={{ backgroundColor: lap.color }} />
+            </div>
+          ))}
+        </div>
+      )}
       <div className="absolute bottom-2 left-2 flex gap-3 text-[10px] text-ink-dim">
         <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-throttle" />throttle</span>
         <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-brake" />brake</span>

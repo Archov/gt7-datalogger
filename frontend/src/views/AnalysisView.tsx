@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeviationChart } from "@/components/analysis/DeviationChart";
 import { FuelMapPanel } from "@/components/analysis/FuelMapPanel";
-import { RaceLineMap } from "@/components/analysis/RaceLineMap";
+import { RaceLineMap, type MapLap } from "@/components/analysis/RaceLineMap";
+import { CHART_COLORS } from "@/components/EChart";
 import { StackedCharts } from "@/components/analysis/StackedCharts";
 import { api } from "@/lib/api";
 import { formatLapTime, formatSpeed } from "@/lib/format";
@@ -104,6 +105,19 @@ export function AnalysisView() {
   const refEntry = compare?.laps[String(refLap)];
   const refSummary = laps.find((l) => l.id === refLap);
 
+  // Laps for the track map, colored exactly like the chart series (both use
+  // the same key order over compare.laps).
+  const mapLaps = useMemo<MapLap[]>(() => {
+    if (!compare) return [];
+    return Object.keys(compare.laps).map((id, i) => ({
+      id,
+      entry: compare.laps[id],
+      color: CHART_COLORS.series[i % CHART_COLORS.series.length],
+      label: lapLabels[id] ?? `Lap ${id}`,
+      isRef: id === String(refLap),
+    }));
+  }, [compare, lapLabels, refLap]);
+
   if (sessions.length === 0) {
     return (
       <div className="flex h-64 items-center justify-center text-ink-dim">
@@ -198,8 +212,10 @@ export function AnalysisView() {
       {/* Right: race line, deviation, fuel, tuning */}
       <div className="flex min-w-0 flex-col gap-3">
         {refEntry && (
-          <SidePanel title="Race line (reference lap)">
-            <RaceLineMap lap={refEntry} cursorDist={cursorDist} step={compare!.step} />
+          <SidePanel
+            title={mapLaps.length > 1 ? "Race lines — selected laps" : "Race line (reference lap)"}
+          >
+            <RaceLineMap laps={mapLaps} cursorDist={cursorDist} step={compare!.step} />
           </SidePanel>
         )}
         {deviation && deviation.dist.length > 0 && (
