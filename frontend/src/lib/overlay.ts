@@ -41,6 +41,7 @@ export interface OverlayConfig {
   scale: number; // 0.5 .. 2
   bg: number; // 0 .. 100, card background opacity
   align: OverlayAlign;
+  demo: boolean; // animated placeholder data while no telemetry is flowing
 }
 
 export const DEFAULT_CONFIG: OverlayConfig = {
@@ -49,6 +50,7 @@ export const DEFAULT_CONFIG: OverlayConfig = {
   scale: 1,
   bg: 70,
   align: "bottom",
+  demo: false,
 };
 
 export const PHONE_PRESET: OverlayConfig = {
@@ -57,6 +59,7 @@ export const PHONE_PRESET: OverlayConfig = {
   scale: 1,
   bg: 100,
   align: "top",
+  demo: false,
 };
 
 // Preferred URL form is the plain path /overlay?w=… — hash-fragment URLs
@@ -85,12 +88,14 @@ export function parseOverlayLocation(loc: { search: string; hash: string }): Ove
   const align = params.get("align");
   const scale = Number(params.get("scale"));
   const bg = Number(params.get("bg"));
+  const demo = params.get("demo");
   return {
     widgets: ids.length > 0 ? ids : DEFAULT_CONFIG.widgets,
     layout: layout === "stack" || layout === "grid" ? layout : "strip",
     scale: isFinite(scale) && scale >= 0.5 && scale <= 2 ? scale : 1,
     bg: isFinite(bg) && bg >= 0 && bg <= 100 && params.has("bg") ? bg : DEFAULT_CONFIG.bg,
     align: align === "center" || align === "top" ? align : "bottom",
+    demo: demo === "1" || demo === "true",
   };
 }
 
@@ -104,5 +109,6 @@ export function buildOverlayUrl(
   if (config.scale !== 1) params.set("scale", String(config.scale));
   params.set("bg", String(config.bg));
   if (config.align !== "bottom") params.set("align", config.align);
+  if (config.demo) params.set("demo", "1");
   return `${origin}/overlay?${params.toString()}`;
 }

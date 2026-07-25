@@ -3,6 +3,7 @@
 // stack on a transparent page) or as a phone dashboard (grid on a dark page).
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { DEMO_LAPS, demoFrame } from "@/lib/demoFrame";
 import {
   formatDelta,
   formatLapTime,
@@ -16,8 +17,11 @@ import type { LapSummary, LiveFrame } from "@/lib/types";
 import { useSettings } from "@/store/settings";
 import { liveFrameRef, useTelemetry } from "@/store/telemetry";
 
+const STALE_AFTER_MS = 3000;
+
 export function OverlayView({ config }: { config: OverlayConfig }) {
   const [frame, setFrame] = useState<LiveFrame | null>(null);
+  const [placeholder, setPlaceholder] = useState(false);
   const recentLaps = useTelemetry((s) => s.recentLaps);
   const raf = useRef(0);
   const gridPage = config.layout === "grid";
@@ -25,7 +29,21 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
   useEffect(() => {
     document.body.classList.add(gridPage ? "overlay-page" : "overlay");
     const tick = () => {
-      setFrame(liveFrameRef.current);
+      const now = performance.now();
+      const live =
+        liveFrameRef.current && now - liveFrameRef.at < STALE_AFTER_MS
+          ? liveFrameRef.current
+          : null;
+      if (live) {
+        setFrame(live);
+        setPlaceholder(false);
+      } else if (config.demo) {
+        setFrame(demoFrame(now));
+        setPlaceholder(true);
+      } else {
+        setFrame(liveFrameRef.current);
+        setPlaceholder(false);
+      }
       raf.current = requestAnimationFrame(tick);
     };
     raf.current = requestAnimationFrame(tick);
@@ -33,7 +51,7 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
       document.body.classList.remove("overlay", "overlay-page");
       cancelAnimationFrame(raf.current);
     };
-  }, [gridPage]);
+  }, [gridPage, config.demo]);
 
   if (!frame) {
     return gridPage ? (
@@ -44,14 +62,22 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
   }
 
   const card: CSSProperties = { backgroundColor: `rgba(8, 10, 14, ${config.bg / 100})` };
+  const laps = placeholder ? DEMO_LAPS : recentLaps;
   const widgets = config.widgets.map((id) => (
-    <Widget key={id} id={id} frame={frame} laps={recentLaps} card={card} layout={config.layout} />
+    <Widget key={id} id={id} frame={frame} laps={laps} card={card} layout={config.layout} />
   ));
+
+  const badge = placeholder ? (
+    <div className="pointer-events-none fixed right-2 top-2 rounded border border-warn/40 bg-black/60 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-warn">
+      placeholder
+    </div>
+  ) : null;
 
   if (config.layout === "grid") {
     return (
       <div className="min-h-full p-3" style={{ zoom: config.scale }}>
         <div className="mx-auto grid max-w-md grid-cols-2 gap-2 font-tabular">{widgets}</div>
+        {badge}
       </div>
     );
   }
@@ -62,6 +88,7 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
     return (
       <div className={`flex h-full justify-start p-4 ${justify}`} style={{ zoom: config.scale }}>
         <div className="flex w-56 flex-col gap-2 font-tabular">{widgets}</div>
+        {badge}
       </div>
     );
   }
@@ -72,9 +99,10 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
         style={card}
       >
         {config.widgets.map((id) => (
-          <Widget key={id} id={id} frame={frame} laps={recentLaps} card={{}} layout="strip" />
+          <Widget key={id} id={id} frame={frame} laps={laps} card={{}} layout="strip" />
         ))}
       </div>
+      {badge}
     </div>
   );
 }

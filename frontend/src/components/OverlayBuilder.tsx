@@ -157,6 +157,18 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
             </label>
           </div>
 
+          <label className="flex items-center gap-2 text-xs text-ink-dim">
+            <input
+              type="checkbox"
+              checked={config.demo}
+              onChange={(e) => setConfig((c) => ({ ...c, demo: e.target.checked }))}
+              className="accent-[#38bdf8]"
+            />
+            Placeholder data when no telemetry — animated fake lap for designing the
+            layout; switches to real data automatically and shows a small
+            “placeholder” tag while active
+          </label>
+
           {/* Widget picker */}
           <div>
             <span className="mb-1 block text-xs text-ink-dim">

@@ -16,7 +16,12 @@ interface TelemetryState {
 }
 
 // Latest frame outside React state; LiveView polls it via requestAnimationFrame.
-export const liveFrameRef: { current: LiveFrame | null } = { current: null };
+// `at` is performance.now() of the last frame, so consumers can detect a
+// stalled stream (paused game / no console) rather than showing frozen data.
+export const liveFrameRef: { current: LiveFrame | null; at: number } = {
+  current: null,
+  at: 0,
+};
 
 let socket: WebSocket | null = null;
 let retryTimer: number | undefined;
@@ -51,6 +56,7 @@ export const useTelemetry = create<TelemetryState>((set) => {
       switch (msg.type) {
         case "telemetry":
           liveFrameRef.current = msg.data;
+          liveFrameRef.at = performance.now();
           break;
         case "lap":
           set((st) => ({
