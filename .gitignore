@@ -26,3 +26,9 @@ data/*.sqlite*
 
 # Env
 .env
+
+.claude
+reference-docs
+CLAUDE.md
+
+*.db
