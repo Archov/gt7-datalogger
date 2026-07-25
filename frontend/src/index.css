@@ -35,6 +35,12 @@ body.overlay-page {
   @apply bg-surface;
 }
 
+/* Overlay chroma-key mode: for webviews without alpha support — key this
+   green out in the streaming app */
+body.overlay-green {
+  background: #00ff00;
+}
+
 .font-tabular {
   font-variant-numeric: tabular-nums;
 }

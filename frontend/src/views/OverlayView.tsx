@@ -24,10 +24,16 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
   const [placeholder, setPlaceholder] = useState(false);
   const recentLaps = useTelemetry((s) => s.recentLaps);
   const raf = useRef(0);
+  const pageClass =
+    config.page === "green"
+      ? "overlay-green"
+      : config.page === "dark"
+        ? "overlay-page"
+        : "overlay";
   const gridPage = config.layout === "grid";
 
   useEffect(() => {
-    document.body.classList.add(gridPage ? "overlay-page" : "overlay");
+    document.body.classList.add(pageClass);
     const tick = () => {
       const now = performance.now();
       const live =
@@ -48,10 +54,10 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
     };
     raf.current = requestAnimationFrame(tick);
     return () => {
-      document.body.classList.remove("overlay", "overlay-page");
+      document.body.classList.remove("overlay", "overlay-page", "overlay-green");
       cancelAnimationFrame(raf.current);
     };
-  }, [gridPage, config.demo]);
+  }, [pageClass, config.demo]);
 
   if (!frame) {
     return gridPage ? (
@@ -61,10 +67,24 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
     ) : null;
   }
 
-  const card: CSSProperties = { backgroundColor: `rgba(8, 10, 14, ${config.bg / 100})` };
+  const bare = config.bg === 0; // no box at all: floating widgets
+  // On a chroma-key page translucent cards let green bleed through and key
+  // out badly — force them opaque.
+  const cardAlpha = config.page === "green" ? 1 : config.bg / 100;
+  const card: CSSProperties = bare
+    ? {}
+    : { backgroundColor: `rgba(8, 10, 14, ${cardAlpha})` };
   const laps = placeholder ? DEMO_LAPS : recentLaps;
   const widgets = config.widgets.map((id) => (
-    <Widget key={id} id={id} frame={frame} laps={laps} card={card} layout={config.layout} />
+    <Widget
+      key={id}
+      id={id}
+      frame={frame}
+      laps={laps}
+      card={card}
+      layout={config.layout}
+      bare={bare}
+    />
   ));
 
   const badge = placeholder ? (
@@ -95,11 +115,13 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
   return (
     <div className={`flex h-full justify-center p-4 ${justify}`} style={{ zoom: config.scale }}>
       <div
-        className="flex items-stretch gap-3 rounded-2xl border border-white/10 px-4 py-3 font-tabular backdrop-blur-sm"
+        className={`flex items-stretch gap-3 rounded-2xl px-4 py-3 font-tabular ${
+          bare ? "" : "border border-white/10 backdrop-blur-sm"
+        }`}
         style={card}
       >
         {config.widgets.map((id) => (
-          <Widget key={id} id={id} frame={frame} laps={laps} card={{}} layout="strip" />
+          <Widget key={id} id={id} frame={frame} laps={laps} card={{}} layout="strip" bare={bare} />
         ))}
       </div>
       {badge}
@@ -115,16 +137,17 @@ interface WidgetProps {
   laps: LapSummary[];
   card: CSSProperties;
   layout: OverlayConfig["layout"];
+  bare: boolean;
 }
 
-function Widget({ id, frame, laps, card, layout }: WidgetProps) {
+function Widget({ id, frame, laps, card, layout, bare }: WidgetProps) {
   const inStrip = layout === "strip";
   const body = pickWidget(id, frame, laps, inStrip);
   if (body === null) return null;
   if (inStrip) return body;
   return (
     <div
-      className={`rounded-xl border border-white/10 p-3 ${id === "speed" || id === "gear" ? "" : ""}`}
+      className={`rounded-xl p-3 ${bare ? "" : "border border-white/10"}`}
       style={card}
     >
       {body}

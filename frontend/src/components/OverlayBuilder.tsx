@@ -157,6 +157,37 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
             </label>
           </div>
 
+          <div>
+            <span className="mb-1 block text-xs text-ink-dim">Page behind the widgets</span>
+            <div className="flex overflow-hidden rounded-md border border-edge">
+              {(
+                [
+                  ["transparent", "Transparent"],
+                  ["green", "Green screen"],
+                  ["dark", "Solid dark"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => setConfig((c) => ({ ...c, page: value }))}
+                  className={`px-3 py-1.5 text-xs ${
+                    config.page === value
+                      ? "bg-accent/15 text-accent"
+                      : "text-ink-dim hover:text-ink"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-ink-dim">
+              Transparent needs an alpha-capable source (OBS “Browser”). If your app shows the
+              page as black (e.g. TikTok LIVE Studio links), pick{" "}
+              <span className="text-ink">Green screen</span> and add a chroma-key filter for
+              #00FF00 in the app.
+            </p>
+          </div>
+
           <label className="flex items-center gap-2 text-xs text-ink-dim">
             <input
               type="checkbox"
