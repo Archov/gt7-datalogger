@@ -7,7 +7,15 @@ import { CHART_COLORS, EChart } from "@/components/EChart";
 import { speedValue, type Units } from "@/lib/format";
 import type { DeviationResult } from "@/lib/types";
 
-export function DeviationChart({ data, units }: { data: DeviationResult; units: Units }) {
+export function DeviationChart({
+  data,
+  units,
+  zoomRange,
+}: {
+  data: DeviationResult;
+  units: Units;
+  zoomRange?: [number, number] | null;
+}) {
   const option = useMemo<EChartsOption>(() => {
     const median = data.median.map((v) => speedValue(v, units));
     const dev = data.deviation.map((v) => speedValue(v, units));
@@ -16,9 +24,9 @@ export function DeviationChart({ data, units }: { data: DeviationResult; units: 
       grid: { left: 48, right: 12, top: 24, bottom: 22 },
       xAxis: {
         type: "value",
-        min: 0,
-        max: "dataMax",
-        axisLabel: { color: CHART_COLORS.label, fontSize: 10, formatter: (v: number) => `${v} m` },
+        min: zoomRange ? zoomRange[0] : 0,
+        max: zoomRange ? zoomRange[1] : "dataMax",
+        axisLabel: { color: CHART_COLORS.label, fontSize: 10, formatter: (v: number) => `${Math.round(v)} m` },
         axisLine: { lineStyle: { color: CHART_COLORS.axis } },
         splitLine: { show: false },
       },
@@ -67,7 +75,7 @@ export function DeviationChart({ data, units }: { data: DeviationResult; units: 
         },
       ],
     };
-  }, [data, units]);
+  }, [data, units, zoomRange]);
 
-  return <EChart option={option} className="h-44 w-full" />;
+  return <EChart option={option} className="h-44 w-full" notMerge={false} />;
 }

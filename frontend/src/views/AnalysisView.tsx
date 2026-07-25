@@ -78,6 +78,14 @@ export function AnalysisView() {
     api.deviation(sessionId).then(setDeviation).catch(() => setDeviation(null));
   }, [sessionId, lapEpoch]);
 
+  // Synchronized zoom state across all charts (minDist, maxDist in meters)
+  const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
+
+  // Reset zoom window when session or lap selection changes
+  useEffect(() => {
+    setZoomRange(null);
+  }, [sessionId, selected, refLap]);
+
   // Cursor sync (rAF-throttled to keep hover smooth)
   const [cursorDist, setCursorDist] = useState<number | null>(null);
   const pendingCursor = useRef<number | null>(null);
@@ -204,6 +212,8 @@ export function AnalysisView() {
               lapLabels={lapLabels}
               units={units}
               onCursorDist={onCursorDist}
+              zoomRange={zoomRange}
+              onZoomChange={setZoomRange}
             />
           </div>
         )}
@@ -215,12 +225,17 @@ export function AnalysisView() {
           <SidePanel
             title={mapLaps.length > 1 ? "Race lines — selected laps" : "Race line (reference lap)"}
           >
-            <RaceLineMap laps={mapLaps} cursorDist={cursorDist} step={compare!.step} />
+            <RaceLineMap
+              laps={mapLaps}
+              cursorDist={cursorDist}
+              step={compare!.step}
+              zoomRange={zoomRange}
+            />
           </SidePanel>
         )}
         {deviation && deviation.dist.length > 0 && (
           <SidePanel title={`Consistency — best ${deviation.lap_ids.length} laps`}>
-            <DeviationChart data={deviation} units={units} />
+            <DeviationChart data={deviation} units={units} zoomRange={zoomRange} />
           </SidePanel>
         )}
         {refLap != null && (

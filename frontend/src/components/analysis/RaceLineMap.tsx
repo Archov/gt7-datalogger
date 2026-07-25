@@ -30,16 +30,56 @@ export function RaceLineMap({
   laps,
   cursorDist,
   step,
+  zoomRange,
 }: {
   laps: MapLap[];
   cursorDist: number | null;
   step: number;
+  zoomRange?: [number, number] | null;
 }) {
   const chartRef = useRef<echarts.ECharts | null>(null);
   const ref = laps.find((lap) => lap.isRef);
 
   const option = useMemo<EChartsOption>(() => {
     const series: SeriesOption[] = [];
+
+    let xMin: number | undefined;
+    let xMax: number | undefined;
+    let zMin: number | undefined;
+    let zMax: number | undefined;
+
+    if (zoomRange && ref) {
+      const s = ref.entry.series;
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      let count = 0;
+
+      for (let i = 0; i < s.dist.length; i++) {
+        const d = s.dist[i];
+        if (d >= zoomRange[0] && d <= zoomRange[1]) {
+          const x = s.pos_x[i];
+          const z = s.pos_z[i];
+          if (x != null && z != null) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+            count++;
+          }
+        }
+      }
+
+      if (count > 0 && isFinite(minX) && isFinite(maxX) && isFinite(minZ) && isFinite(maxZ)) {
+        const padX = Math.max((maxX - minX) * 0.15, 8);
+        const padZ = Math.max((maxZ - minZ) * 0.15, 8);
+        xMin = minX - padX;
+        xMax = maxX + padX;
+        zMin = minZ - padZ;
+        zMax = maxZ + padZ;
+      }
+    }
 
     // Comparison laps first (under the reference), as solid colored lines.
     for (const lap of laps) {
@@ -48,9 +88,16 @@ export function RaceLineMap({
       series.push({
         id: `line-${lap.id}`,
         type: "line",
-        data: s.dist.map((_, i) => [s.pos_x[i], s.pos_z[i]]),
+        data: s.dist.map((d, i) => {
+          const inZoom = zoomRange ? d >= zoomRange[0] && d <= zoomRange[1] : true;
+          return {
+            value: [s.pos_x[i], s.pos_z[i]],
+            symbolSize: inZoom ? 3 : 1,
+            itemStyle: { opacity: inZoom ? 0.9 : 0.2 },
+          };
+        }),
         showSymbol: false,
-        lineStyle: { color: lap.color, width: 1.6, opacity: 0.9 },
+        lineStyle: { color: lap.color, width: zoomRange ? 2 : 1.6, opacity: zoomRange ? 0.85 : 0.9 },
         silent: true,
         z: 2,
       });
@@ -58,16 +105,30 @@ export function RaceLineMap({
 
     if (ref) {
       const s = ref.entry.series;
-      const points = s.dist.map((_, i) => ({
-        value: [s.pos_x[i], s.pos_z[i]],
-        itemStyle: { color: ZONE_COLORS[zoneOf(s.throttle[i], s.brake[i])] },
-      }));
+      const points = s.dist.map((d, i) => {
+        const inZoom = zoomRange ? d >= zoomRange[0] && d <= zoomRange[1] : true;
+        return {
+          value: [s.pos_x[i], s.pos_z[i]],
+          symbolSize: inZoom ? 4 : 2,
+          itemStyle: {
+            color: ZONE_COLORS[zoneOf(s.throttle[i], s.brake[i])],
+            opacity: inZoom ? 1 : 0.15,
+          },
+        };
+      });
       const pv = ref.entry.peaks_valleys;
+      const peaks = pv.peaks.filter(
+        (p) => !zoomRange || (p.dist >= zoomRange[0] && p.dist <= zoomRange[1]),
+      );
+      const valleys = pv.valleys.filter(
+        (p) => !zoomRange || (p.dist >= zoomRange[0] && p.dist <= zoomRange[1]),
+      );
+
       series.push(
         { type: "scatter", data: points, symbolSize: 3.5, silent: true, z: 3 },
         {
           type: "scatter",
-          data: pv.peaks.map((p) => [p.x, p.z]),
+          data: peaks.map((p) => [p.x, p.z]),
           symbol: "triangle",
           symbolSize: 9,
           itemStyle: { color: "#facc15" },
@@ -76,7 +137,7 @@ export function RaceLineMap({
         },
         {
           type: "scatter",
-          data: pv.valleys.map((p) => [p.x, p.z]),
+          data: valleys.map((p) => [p.x, p.z]),
           symbol: "triangle",
           symbolRotate: 180,
           symbolSize: 9,
@@ -105,13 +166,24 @@ export function RaceLineMap({
     return {
       animation: false,
       grid: { left: 8, right: 8, top: 8, bottom: 8 },
-      xAxis: { type: "value", show: false, scale: true },
-      yAxis: { type: "value", show: false, scale: true, inverse: true },
+      xAxis: {
+        type: "value",
+        show: false,
+        scale: true,
+        ...(xMin != null ? { min: xMin, max: xMax } : {}),
+      },
+      yAxis: {
+        type: "value",
+        show: false,
+        scale: true,
+        inverse: true,
+        ...(zMin != null ? { min: zMin, max: zMax } : {}),
+      },
       tooltip: { show: false },
       series,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [laps]);
+  }, [laps, zoomRange]);
 
   // Cursor updates merge into the existing chart by series id — no rebuild.
   useEffect(() => {

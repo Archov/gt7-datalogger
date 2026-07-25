@@ -37,17 +37,32 @@ export function StackedCharts({
   lapLabels,
   units,
   onCursorDist,
+  zoomRange,
+  onZoomChange,
 }: {
   data: CompareResult;
   lapLabels: Record<string, string>;
   units: Units;
   onCursorDist?: (dist: number | null) => void;
+  zoomRange?: [number, number] | null;
+  onZoomChange?: (range: [number, number] | null) => void;
 }) {
+  const maxDist = useMemo(() => {
+    let m = 0;
+    for (const lap of Object.values(data.laps)) {
+      const dists = lap.series.dist;
+      if (dists && dists.length > 0) {
+        m = Math.max(m, dists[dists.length - 1]);
+      }
+    }
+    return m;
+  }, [data]);
+
   const option = useMemo<EChartsOption>(() => {
     const lapIds = Object.keys(data.laps);
     const heights = PANELS.map((p) => p.height);
     const totalWeight = heights.reduce((a, b) => a + b, 0);
-    const usable = 100 - 6; // percent, minus bottom margin
+    const usable = 100 - 8; // percent, minus bottom margin for slider
 
     const grids: NonNullable<EChartsOption["grid"]> = [];
     const xAxes: object[] = [];
@@ -127,6 +142,41 @@ export function StackedCharts({
       });
     });
 
+    const allXAxisIndices = PANELS.map((_, i) => i);
+
+    const dataZoom: EChartsOption["dataZoom"] = [
+      {
+        type: "inside",
+        xAxisIndex: allXAxisIndices,
+        filterMode: "none",
+      },
+      {
+        type: "slider",
+        xAxisIndex: allXAxisIndices,
+        filterMode: "none",
+        bottom: 2,
+        height: 18,
+        borderColor: CHART_COLORS.axis,
+        backgroundColor: "#16191e",
+        dataBackground: {
+          lineStyle: { color: CHART_COLORS.axis },
+          areaStyle: { color: CHART_COLORS.split },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: "#38bdf8" },
+          areaStyle: { color: "#38bdf8", opacity: 0.2 },
+        },
+        fillerColor: "rgba(56, 189, 248, 0.15)",
+        handleStyle: { color: "#38bdf8", borderColor: "#38bdf8" },
+        moveHandleStyle: { color: "#38bdf8" },
+        textStyle: { color: CHART_COLORS.label, fontSize: 10 },
+        labelFormatter: (value: number) => `${Math.round(value)}m`,
+        ...(zoomRange
+          ? { startValue: zoomRange[0], endValue: zoomRange[1] }
+          : { start: 0, end: 100 }),
+      },
+    ];
+
     return {
       animation: false,
       backgroundColor: "transparent",
@@ -135,6 +185,7 @@ export function StackedCharts({
       xAxis: xAxes as EChartsOption["xAxis"],
       yAxis: yAxes as EChartsOption["yAxis"],
       series,
+      dataZoom,
       legend: {
         top: 0,
         right: 8,
@@ -156,23 +207,97 @@ export function StackedCharts({
         valueFormatter: (v) => (typeof v === "number" ? v.toFixed(2) : `${v}`),
       },
     };
-  }, [data, lapLabels, units]);
+  }, [data, lapLabels, units, zoomRange]);
 
-  // Height: enough vertical room for all panels
   return (
-    <EChart
-      option={option}
-      className="w-full"
-      onInit={(chart) => {
-        chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
-        chart.resize();
-        chart.on("updateAxisPointer", (e) => {
-          const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo;
-          const x = info?.find((a) => a.axisDim === "x");
-          onCursorDist?.(x ? x.value : null);
-        });
-        chart.getZr().on("globalout", () => onCursorDist?.(null));
-      }}
-    />
+    <div className="flex flex-col">
+      <div className="mb-2 flex items-center justify-between border-b border-edge/60 pb-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-ink-dim">Zoom Level:</span>
+          {zoomRange ? (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-accent/15 px-2 py-0.5 font-tabular text-accent">
+              <span>
+                🔍 {zoomRange[0].toFixed(0)}m – {zoomRange[1].toFixed(0)}m
+              </span>
+              <span className="text-[10px] opacity-75">
+                ({(zoomRange[1] - zoomRange[0]).toFixed(0)}m section)
+              </span>
+            </span>
+          ) : (
+            <span className="text-ink-dim">Full lap (0m – {maxDist.toFixed(0)}m)</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {zoomRange && (
+            <button
+              onClick={() => onZoomChange?.(null)}
+              className="rounded border border-edge bg-panel-2 px-2 py-0.5 text-xs font-medium text-ink transition-colors hover:border-accent hover:text-accent"
+              title="Reset zoom to full lap"
+            >
+              Reset Zoom
+            </button>
+          )}
+          <button
+            onClick={() => onZoomChange?.([0, maxDist * 0.33])}
+            className="rounded border border-edge px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-edge-bright hover:text-ink"
+          >
+            S1 (0-33%)
+          </button>
+          <button
+            onClick={() => onZoomChange?.([maxDist * 0.33, maxDist * 0.66])}
+            className="rounded border border-edge px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-edge-bright hover:text-ink"
+          >
+            S2 (33-66%)
+          </button>
+          <button
+            onClick={() => onZoomChange?.([maxDist * 0.66, maxDist])}
+            className="rounded border border-edge px-2 py-0.5 text-[11px] text-ink-dim transition-colors hover:border-edge-bright hover:text-ink"
+          >
+            S3 (66-100%)
+          </button>
+        </div>
+      </div>
+      <EChart
+        option={option}
+        className="w-full"
+        notMerge={false}
+        onInit={(chart) => {
+          chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
+          chart.resize();
+          chart.on("updateAxisPointer", (e) => {
+            const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo;
+            const x = info?.find((a) => a.axisDim === "x");
+            onCursorDist?.(x ? x.value : null);
+          });
+          chart.on("dataZoom", (e: any) => {
+            let startVal: number | undefined;
+            let endVal: number | undefined;
+
+            if (e.batch && e.batch[0]) {
+              startVal = e.batch[0].startValue;
+              endVal = e.batch[0].endValue;
+            } else if (e.startValue != null && e.endValue != null) {
+              startVal = e.startValue;
+              endVal = e.endValue;
+            }
+
+            if (startVal != null && endVal != null) {
+              onZoomChange?.([startVal, endVal]);
+            } else {
+              const startPct = e.batch?.[0]?.start ?? e.start ?? 0;
+              const endPct = e.batch?.[0]?.end ?? e.end ?? 100;
+              if (startPct <= 1 && endPct >= 99) {
+                onZoomChange?.(null);
+              } else {
+                const minD = (startPct / 100) * maxDist;
+                const maxD = (endPct / 100) * maxDist;
+                onZoomChange?.([minD, maxD]);
+              }
+            }
+          });
+          chart.getZr().on("globalout", () => onCursorDist?.(null));
+        }}
+      />
+    </div>
   );
 }
