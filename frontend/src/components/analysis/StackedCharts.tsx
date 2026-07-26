@@ -5,7 +5,7 @@
 import type { EChartsOption, SeriesOption } from "echarts";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
-import { speedValue, type Units } from "@/lib/format";
+import { speedUnit, speedValue, type Units } from "@/lib/format";
 import type { CompareResult } from "@/lib/types";
 
 interface PanelDef {
@@ -110,6 +110,35 @@ export function StackedCharts({
     const yAxes: object[] = [];
     const series: SeriesOption[] = [];
     const titles: object[] = [];
+    // Parallel to `series`: which panel each series belongs to, so the
+    // tooltip can label values instead of dumping bare numbers.
+    const seriesMeta: { panelKey: string; panelTitle: string }[] = [];
+
+    const formatValue = (key: string, v: number): string => {
+      switch (key) {
+        case "delta":
+          return `${v >= 0 ? "+" : ""}${v.toFixed(3)} s`;
+        case "speed":
+          return `${Math.round(v)} ${speedUnit(units)}`;
+        case "throttle":
+        case "brake":
+          return `${Math.round(v)}%`;
+        case "coast":
+          return v >= 0.5 ? "coasting" : "—";
+        case "gear":
+          return `${Math.round(v)}`;
+        case "rpm":
+          return `${Math.round(v).toLocaleString()} rpm`;
+        case "boost":
+          return `${v.toFixed(2)} bar`;
+        case "tire_slip":
+          return `${v.toFixed(2)}×`;
+        case "yaw_rate":
+          return `${v.toFixed(2)} rad/s`;
+        default:
+          return v.toFixed(2);
+      }
+    };
 
     let cursor = 2;
     PANELS.forEach((panel, gi) => {
@@ -158,6 +187,7 @@ export function StackedCharts({
           ? entry.delta!.delta_ms.map((v) => v / 1000)
           : entry.series[panel.key] ?? [];
         const values = panel.transform ? raw.map((v) => panel.transform!(v, units)) : raw;
+        seriesMeta.push({ panelKey: panel.key, panelTitle: panel.title });
         series.push({
           type: "line",
           name: lapLabels[lapId] ?? `Lap ${lapId}`,
@@ -267,7 +297,47 @@ export function StackedCharts({
         backgroundColor: "#1b1f26",
         borderColor: "#262b33",
         textStyle: { color: "#e6e9ee", fontSize: 11 },
-        valueFormatter: (v) => (typeof v === "number" ? v.toFixed(2) : `${v}`),
+        // One distance header, then one labeled row per metric — the default
+        // repeats the distance for every panel and shows unlabeled numbers.
+        formatter: (params: unknown) => {
+          const list = (Array.isArray(params) ? params : [params]) as {
+            seriesIndex: number;
+            axisValue: number | string;
+            value: [number, number] | number;
+            marker: string;
+          }[];
+          if (list.length === 0) return "";
+          const dist = Number(list[0].axisValue);
+          const multiLap = lapIds.length > 1;
+
+          // Group values by panel, preserving PANELS order.
+          const byPanel = new Map<string, { title: string; cells: string[] }>();
+          for (const p of list) {
+            const meta = seriesMeta[p.seriesIndex];
+            if (!meta) continue;
+            const v = Array.isArray(p.value) ? p.value[1] : p.value;
+            if (v == null || Number.isNaN(v)) continue;
+            const cell = `${multiLap ? p.marker : ""}<span style="font-variant-numeric:tabular-nums">${formatValue(meta.panelKey, v)}</span>`;
+            const group = byPanel.get(meta.panelKey) ?? { title: meta.panelTitle, cells: [] };
+            group.cells.push(cell);
+            byPanel.set(meta.panelKey, group);
+          }
+
+          const rows = PANELS.filter((p) => byPanel.has(p.key))
+            .map((p) => {
+              const g = byPanel.get(p.key)!;
+              const label = g.title.replace(/ \(.*\)| %/, "");
+              return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.7">
+                <span style="color:#8b93a1">${label}</span>
+                <span style="display:flex;gap:10px">${g.cells.join("")}</span>
+              </div>`;
+            })
+            .join("");
+          return `<div style="min-width:150px">
+            <div style="font-weight:600;margin-bottom:4px">${Math.round(dist).toLocaleString()} m</div>
+            ${rows}
+          </div>`;
+        },
       },
     };
   }, [data, lapLabels, units]);
