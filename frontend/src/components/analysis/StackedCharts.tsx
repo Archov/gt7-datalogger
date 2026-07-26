@@ -3,7 +3,7 @@
 // distance in every panel. Far cheaper than N connected chart instances.
 
 import type { EChartsOption, SeriesOption } from "echarts";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
 import { speedValue, type Units } from "@/lib/format";
 import type { CompareResult } from "@/lib/types";
@@ -57,6 +57,20 @@ export function StackedCharts({
     }
     return m;
   }, [data]);
+
+  const [isBoxZoom, setIsBoxZoom] = useState(false);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+
+  const toggleBoxZoom = useCallback(() => {
+    if (!chartRef.current) return;
+    const next = !isBoxZoom;
+    setIsBoxZoom(next);
+    chartRef.current.dispatchAction({
+      type: "takeGlobalCursor",
+      key: "dataZoomSelect",
+      dataZoomSelectActive: next,
+    });
+  }, [isBoxZoom]);
 
   const option = useMemo<EChartsOption>(() => {
     const lapIds = Object.keys(data.laps);
@@ -149,6 +163,9 @@ export function StackedCharts({
         type: "inside",
         xAxisIndex: allXAxisIndices,
         filterMode: "none",
+        zoomOnMouseWheel: "shift", // Prevent accidental page-scroll zooming; require Shift+Scroll
+        moveOnMouseMove: true,
+        moveOnMouseWheel: false,
       },
       {
         type: "slider",
@@ -195,9 +212,11 @@ export function StackedCharts({
         itemHeight: 3,
       },
       axisPointer: {
+        type: "cross",
         link: [{ xAxisIndex: "all" }],
-        lineStyle: { color: CHART_COLORS.label },
-        label: { backgroundColor: "#2a3140", fontSize: 10 },
+        lineStyle: { color: "#38bdf8", width: 1, type: "dashed" },
+        crossStyle: { color: "#38bdf8", width: 1, type: "dashed" },
+        label: { backgroundColor: "#1e232b", color: "#38bdf8", fontSize: 10, padding: [2, 5] },
       },
       tooltip: {
         trigger: "axis",
@@ -211,7 +230,7 @@ export function StackedCharts({
 
   return (
     <div className="flex flex-col">
-      <div className="mb-2 flex items-center justify-between border-b border-edge/60 pb-2 text-xs">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-edge/60 pb-2 text-xs">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-ink-dim">Zoom Level:</span>
           {zoomRange ? (
@@ -226,11 +245,29 @@ export function StackedCharts({
           ) : (
             <span className="text-ink-dim">Full lap (0m – {maxDist.toFixed(0)}m)</span>
           )}
+          <span className="hidden text-[11px] text-ink-dim/70 sm:inline">
+            • Hold <kbd className="rounded border border-edge bg-panel-2 px-1 text-[10px]">Shift</kbd> + Scroll to scale
+          </span>
         </div>
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={toggleBoxZoom}
+            className={`rounded border px-2 py-0.5 text-xs transition-colors ${
+              isBoxZoom
+                ? "border-accent bg-accent/20 font-semibold text-accent"
+                : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
+            }`}
+            title="Click to activate crosshair drag section zoom tool"
+          >
+            🎯 {isBoxZoom ? "Cancel Box Select" : "Drag Section to Zoom"}
+          </button>
+
           {zoomRange && (
             <button
-              onClick={() => onZoomChange?.(null)}
+              onClick={() => {
+                onZoomChange?.(null);
+                if (isBoxZoom) toggleBoxZoom();
+              }}
               className="rounded border border-edge bg-panel-2 px-2 py-0.5 text-xs font-medium text-ink transition-colors hover:border-accent hover:text-accent"
               title="Reset zoom to full lap"
             >
@@ -262,6 +299,7 @@ export function StackedCharts({
         className="w-full"
         notMerge={false}
         onInit={(chart) => {
+          chartRef.current = chart;
           chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
           chart.resize();
           chart.on("updateAxisPointer", (e) => {
