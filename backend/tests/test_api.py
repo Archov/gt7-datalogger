@@ -22,6 +22,7 @@ async def client(tmp_path):
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
     service = TelemetryService(settings, repo, CarDatabase())
+    service.processor.min_lap_ticks = 1
 
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]
@@ -63,6 +64,26 @@ async def drive_laps(service: TelemetryService, laps: int = 2) -> None:
             )
         )
     )
+
+
+async def test_empty_sessions_are_dropped(client) -> None:
+    """Menu bounces open sessions that never see a lap; when a new session
+    starts, the previous empty one is deleted instead of piling up."""
+    c, service = client
+    # Session A: one real lap
+    await drive_laps(service, laps=1)
+    # Session B: car change, no laps driven
+    await service._on_packet(
+        parse_packet(build_packet(current_lap=1, flags=ON_TRACK, car_id=42))
+    )
+    # Session C: another car change — session B was empty and must vanish
+    await service._on_packet(
+        parse_packet(build_packet(current_lap=1, flags=ON_TRACK, car_id=43))
+    )
+    sessions = (await c.get("/api/sessions")).json()
+    lap_counts = [s["lap_count"] for s in sessions]
+    assert len(sessions) == 2  # A (1 lap) + C (current, still empty)
+    assert sorted(lap_counts) == [0, 1]
 
 
 async def test_health(client) -> None:

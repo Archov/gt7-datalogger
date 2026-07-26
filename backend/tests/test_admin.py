@@ -25,6 +25,7 @@ async def client(tmp_path):
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
     service = TelemetryService(settings, repo, CarDatabase())
+    service.processor.min_lap_ticks = 1
 
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]

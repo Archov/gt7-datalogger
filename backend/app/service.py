@@ -89,6 +89,13 @@ class TelemetryService:
 
     async def _on_session(self, info: SessionInfo) -> None:
         await self._summarize_previous_session()
+        # Menu visits and race restarts open sessions that never get a lap;
+        # drop the previous session if it stayed empty so they don't pile up.
+        if self.session_id is not None:
+            prev_laps = await self.repo.list_laps(self.session_id)
+            if not prev_laps:
+                await self.repo.delete_session(self.session_id)
+                log.info("dropped empty session %s", self.session_id)
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
         self.track_name = ""
         self._session_best_ms = None

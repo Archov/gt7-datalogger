@@ -31,7 +31,8 @@ export function AnalysisView() {
   useEffect(() => {
     api.sessions().then((s) => {
       setSessions(s);
-      setSessionId((cur) => cur ?? s[0]?.id ?? null);
+      // Default to the newest session that actually has laps to chart.
+      setSessionId((cur) => cur ?? s.find((x) => x.lap_count > 0)?.id ?? s[0]?.id ?? null);
     }).catch(() => setError("Could not load sessions"));
   }, [lapEpoch]);
 
@@ -40,7 +41,10 @@ export function AnalysisView() {
   const manualSelection = useRef(false);
   useEffect(() => {
     if (sessionId == null) return;
-    api.sessionLaps(sessionId).then((ls) => {
+    api.sessionLaps(sessionId).then((all) => {
+      // Laps without samples (phantoms from menu/replay flicker in old
+      // recordings) have nothing to chart — keep them out of the picker.
+      const ls = all.filter((lap) => (lap.total_ticks ?? 1) > 0);
       setLaps(ls);
       if (ls.length === 0) return;
       const best = [...ls].sort((a, b) => a.time_ms - b.time_ms)[0];

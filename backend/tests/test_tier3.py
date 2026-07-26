@@ -59,6 +59,7 @@ async def test_track_auto_identification(tmp_path) -> None:
 
     # Store a track whose signature matches the laps drive_laps produces
     service = TelemetryService(settings, repo, CarDatabase())
+    service.processor.min_lap_ticks = 1
     await drive_laps(service, laps=1)
     laps = await repo.list_laps()
     samples = (await repo.get_lap(laps[0]["id"]))["samples"]
@@ -68,6 +69,7 @@ async def test_track_auto_identification(tmp_path) -> None:
 
     # A fresh service on the same "track" should auto-identify it
     service2 = TelemetryService(settings, repo, CarDatabase())
+    service2.processor.min_lap_ticks = 1
     await drive_laps(service2, laps=1)
     assert service2.track_name == "Test Ring"
     sessions = await repo.list_sessions()
@@ -85,6 +87,7 @@ async def client(tmp_path):
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
     service = TelemetryService(settings, repo, CarDatabase())
+    service.processor.min_lap_ticks = 1
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]
     app.state.service = service
