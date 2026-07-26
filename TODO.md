@@ -69,6 +69,24 @@ Change who would use the tool.
 - [x] **Track auto-identification + minimap library**.
   Detect the track from position bounds; store named tracks and reuse map orientation.
 - [x] **Weather / time-of-day tracking** via `day_progression_ms` for endurance stints.
+- [ ] **Track borders via edge tracing** *(tabled 2026-07-26 — prototyped, then reverted)*.
+  GT7 doesn't broadcast track geometry, but the gt-telemetry.com approach works with
+  data we already capture: drive one slow lap hugging the outer edge and one hugging
+  the inner edge, mark those laps as edge traces, store the two [x, z] polylines on the
+  named track, and render them under the racing lines. The reverted prototype
+  (schema columns `tracks.outer_json/inner_json`, `POST /api/tracks/{name}/border`,
+  `GET /api/tracks/{name}/geometry`, ⊂out/⊃in buttons in the Sessions lap table)
+  worked end-to-end and can be recovered from this description. Note: the two columns
+  already exist in live DBs (migration ran before the revert) — harmless, reusable.
+- [ ] **Auto-numbered corners on the track map** *(tabled 2026-07-26 — prototyped, then
+  reverted; the naive version was wrong)*. Detect corners from racing-line curvature and
+  number them from the start line, GT7-Data-Logger style. Lesson from the failed attempt:
+  UNSIGNED curvature is not enough — a long hairpin splits into two corners where curvature
+  dips mid-arc, and an S-section merges into one. A correct detector needs **signed**
+  curvature (split regions when turn direction flips, merge only same-direction arcs),
+  hysteresis on the threshold, and probably apex-at-minimum-speed rather than
+  apex-at-max-curvature. Display rule that worked: dots on the full map, numbered circles
+  only when the zoomed section shows ≤ ~30 corners.
 
 ---
 
