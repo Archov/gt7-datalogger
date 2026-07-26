@@ -3,7 +3,7 @@
 // distance in every panel. Far cheaper than N connected chart instances.
 
 import type { EChartsOption, SeriesOption } from "echarts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
 import { speedValue, type Units } from "@/lib/format";
 import type { CompareResult } from "@/lib/types";
@@ -48,14 +48,9 @@ export function StackedCharts({
   onZoomChange?: (range: [number, number] | null) => void;
 }) {
   const chartRef = useRef<echarts.ECharts | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  const [selection, setSelection] = useState<{
-    startX: number;
-    currentX: number;
-    startDist: number;
-    currentDist: number;
-  } | null>(null);
+  // True while WE dispatch a zoom action, so the resulting dataZoom event
+  // isn't echoed back through onZoomChange (which would loop).
+  const applyingZoom = useRef(false);
 
   const maxDist = useMemo(() => {
     let m = 0;
@@ -67,64 +62,42 @@ export function StackedCharts({
     }
     return m;
   }, [data]);
+  // The chart's event handlers are bound once (onInit) — read maxDist through
+  // a ref so they never see a stale value after the lap selection changes.
+  const maxDistRef = useRef(maxDist);
+  maxDistRef.current = maxDist;
 
-  // Handle click & drag crosshair selection box directly on the chart canvas
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!chartRef.current || e.button !== 0) return; // Left mouse button only
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left;
-    const dist = chartRef.current.convertFromPixel({ xAxisIndex: 0 }, x);
-    if (dist == null || isNaN(dist) || dist < 0) return;
-
-    setSelection({
-      startX: x,
-      currentX: x,
-      startDist: dist,
-      currentDist: dist,
+  // Drag-select zoom uses ECharts' native toolbox mechanism ("dataZoomSelect")
+  // instead of hand-rolled pixel math: activating the global cursor makes a
+  // plain left-drag draw the selection box and emit a dataZoom event.
+  const activateDragZoom = useCallback(() => {
+    chartRef.current?.dispatchAction({
+      type: "takeGlobalCursor",
+      key: "dataZoomSelect",
+      dataZoomSelectActive: true,
     });
   }, []);
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!chartRef.current || !selection || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const dist = chartRef.current.convertFromPixel({ xAxisIndex: 0 }, x);
-      if (dist != null && !isNaN(dist)) {
-        setSelection((prev) =>
-          prev
-            ? {
-                ...prev,
-                currentX: Math.max(0, Math.min(rect.width, x)),
-                currentDist: Math.max(0, Math.min(maxDist, dist)),
-              }
-            : null,
-        );
-      }
-    },
-    [selection, maxDist],
-  );
-
-  const handleMouseUp = useCallback(() => {
-    if (selection) {
-      const minDist = Math.min(selection.startDist, selection.currentDist);
-      const maxDistVal = Math.max(selection.startDist, selection.currentDist);
-
-      if (maxDistVal - minDist >= 10) {
-        onZoomChange?.([minDist, maxDistVal]);
-      }
-      setSelection(null);
-    }
-  }, [selection, onZoomChange]);
-
+  // Apply zoomRange (from drag, sector buttons, or reset) to all axes.
   useEffect(() => {
-    if (selection) {
-      const onGlobalMouseUp = () => handleMouseUp();
-      window.addEventListener("mouseup", onGlobalMouseUp);
-      return () => window.removeEventListener("mouseup", onGlobalMouseUp);
+    const chart = chartRef.current;
+    if (!chart) return;
+    applyingZoom.current = true;
+    try {
+      if (zoomRange) {
+        chart.dispatchAction({
+          type: "dataZoom",
+          startValue: zoomRange[0],
+          endValue: zoomRange[1],
+        });
+      } else {
+        chart.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+      }
+    } finally {
+      applyingZoom.current = false;
     }
-  }, [selection, handleMouseUp]);
+    activateDragZoom(); // option/action updates can drop the select cursor
+  }, [zoomRange, activateDragZoom, data]);
 
   const option = useMemo<EChartsOption>(() => {
     const lapIds = Object.keys(data.laps);
@@ -242,9 +215,8 @@ export function StackedCharts({
         moveHandleStyle: { color: "#38bdf8" },
         textStyle: { color: CHART_COLORS.label, fontSize: 10 },
         labelFormatter: (value: number) => `${Math.round(value)}m`,
-        ...(zoomRange
-          ? { startValue: zoomRange[0], endValue: zoomRange[1] }
-          : { start: 0, end: 100 }),
+        // Window state is applied via dispatchAction (single source of truth);
+        // baking start/end into the option here fights the merge updates.
       },
     ];
 
@@ -257,6 +229,24 @@ export function StackedCharts({
       yAxis: yAxes as EChartsOption["yAxis"],
       series,
       dataZoom,
+      // Declares the native drag-select zoom feature; its cursor is activated
+      // by dispatchAction(takeGlobalCursor) so no icon click is needed. The
+      // toolbox itself is parked off-screen.
+      toolbox: {
+        top: -100,
+        feature: {
+          dataZoom: {
+            xAxisIndex: allXAxisIndices,
+            yAxisIndex: false,
+            filterMode: "none",
+            brushStyle: {
+              color: "rgba(56, 189, 248, 0.15)",
+              borderColor: "#38bdf8",
+              borderWidth: 1,
+            },
+          },
+        },
+      },
       legend: {
         top: 0,
         right: 8,
@@ -280,7 +270,7 @@ export function StackedCharts({
         valueFormatter: (v) => (typeof v === "number" ? v.toFixed(2) : `${v}`),
       },
     };
-  }, [data, lapLabels, units, zoomRange]);
+  }, [data, lapLabels, units]);
 
   return (
     <div className="flex flex-col">
@@ -300,7 +290,7 @@ export function StackedCharts({
             <span className="text-ink-dim">Full lap (0m – {maxDist.toFixed(0)}m)</span>
           )}
           <span className="hidden text-[11px] text-ink-dim/70 sm:inline">
-            • Click & drag across chart to zoom into a section
+            • Drag across a chart to zoom · double-click to reset
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -334,27 +324,10 @@ export function StackedCharts({
         </div>
       </div>
       <div
-        ref={containerRef}
-        className="relative w-full cursor-crosshair select-none"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        className="relative w-full select-none"
+        onDoubleClick={() => onZoomChange?.(null)}
+        title="Drag across a chart to zoom into that section; double-click to reset"
       >
-        {selection && Math.abs(selection.currentX - selection.startX) > 4 && (
-          <div
-            className="pointer-events-none absolute top-4 bottom-7 z-30 border-x-2 border-dashed border-[#38bdf8] bg-[#38bdf8]/20"
-            style={{
-              left: `${Math.min(selection.startX, selection.currentX)}px`,
-              width: `${Math.abs(selection.currentX - selection.startX)}px`,
-            }}
-          >
-            <div className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-edge bg-panel-2 px-2 py-0.5 font-tabular text-[11px] font-semibold text-accent shadow-lg">
-              🔍 {Math.min(selection.startDist, selection.currentDist).toFixed(0)}m –{" "}
-              {Math.max(selection.startDist, selection.currentDist).toFixed(0)}m (
-              {Math.abs(selection.currentDist - selection.startDist).toFixed(0)}m section)
-            </div>
-          </div>
-        )}
         <EChart
           option={option}
           className="w-full"
@@ -368,7 +341,9 @@ export function StackedCharts({
               const x = info?.find((a) => a.axisDim === "x");
               onCursorDist?.(x ? x.value : null);
             });
+            // Fired by the native drag-select box and by the bottom slider.
             chart.on("dataZoom", (e: any) => {
+              if (applyingZoom.current) return; // our own dispatch echoing back
               let startVal: number | undefined;
               let endVal: number | undefined;
 
@@ -388,13 +363,14 @@ export function StackedCharts({
                 if (startPct <= 1 && endPct >= 99) {
                   onZoomChange?.(null);
                 } else {
-                  const minD = (startPct / 100) * maxDist;
-                  const maxD = (endPct / 100) * maxDist;
+                  const minD = (startPct / 100) * maxDistRef.current;
+                  const maxD = (endPct / 100) * maxDistRef.current;
                   onZoomChange?.([minD, maxD]);
                 }
               }
             });
             chart.getZr().on("globalout", () => onCursorDist?.(null));
+            activateDragZoom();
           }}
         />
       </div>
