@@ -72,6 +72,24 @@ Change who would use the tool.
 
 ---
 
+## Done beyond this list
+
+Shipped along the way, not part of the original tiers:
+
+- [x] Admin view: runtime PS IP / source / log level (persisted), live log viewer,
+  diagnostics, car-DB updater, data management
+- [x] Overlay builder: pick/order widgets, strip / stack / phone-grid layouts, scale,
+  background opacity, green-screen page mode, placeholder telemetry for designing,
+  per-device URLs (path-based for strict validators, LAN URL shown)
+- [x] Multi-lap racing-line overlay on the track map (GT7 Data Logger-style) with a
+  synced cursor dot per lap
+- [x] Synchronized click-and-drag section zoom across all charts + track map +
+  deviation chart (native ECharts dataZoomSelect), sector presets, double-click reset
+- [x] Live delta vs previous best (was: always +0.000), FIN state after the checkered flag
+- [x] Capture robustness: serialized UDP pipeline (duplicate-lap race fix), phantom-lap
+  guard, empty-session cleanup
+- [x] One-command dev environment (`./dev.sh`)
+
 ## Suggested starting point
 
 Sector timing + theoretical best (Tier 2), plus wiring the already-decoded **tire temps**
