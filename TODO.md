@@ -78,6 +78,15 @@ Change who would use the tool.
   `GET /api/tracks/{name}/geometry`, ⊂out/⊃in buttons in the Sessions lap table)
   worked end-to-end and can be recovered from this description. Note: the two columns
   already exist in live DBs (migration ran before the revert) — harmless, reusable.
+  **Better source for real circuits (investigated 2026-07-26):** gt-telemetry.com's
+  bundle ships Mapbox GL / OSM / CARTO — their outlines for real tracks come from
+  geographic map data, not crowd traces. OpenStreetMap has real circuits mapped in
+  detail (`highway=raceway`, often both edges + named corners) under ODbL (usable with
+  attribution) via the Overpass API. Needs a lat/lon → GT7-world similarity transform
+  (rotate/translate/scale) least-squares-fitted between a driven lap and the OSM
+  centerline. Fictional GT7 tracks still need edge tracing. Their own backend
+  (api.gt-telemetry.com/tracks) is auth-gated and its data unlicensed — don't scrape it;
+  ask via GitHub issue if we ever want their fictional-track layouts.
 - [ ] **Auto-numbered corners on the track map** *(tabled 2026-07-26 — prototyped, then
   reverted; the naive version was wrong)*. Detect corners from racing-line curvature and
   number them from the start line, GT7-Data-Logger style. Lesson from the failed attempt:
