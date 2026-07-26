@@ -3,7 +3,7 @@
 // distance in every panel. Far cheaper than N connected chart instances.
 
 import type { EChartsOption, SeriesOption } from "echarts";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
 import { speedValue, type Units } from "@/lib/format";
 import type { CompareResult } from "@/lib/types";
@@ -47,6 +47,16 @@ export function StackedCharts({
   zoomRange?: [number, number] | null;
   onZoomChange?: (range: [number, number] | null) => void;
 }) {
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const [selection, setSelection] = useState<{
+    startX: number;
+    currentX: number;
+    startDist: number;
+    currentDist: number;
+  } | null>(null);
+
   const maxDist = useMemo(() => {
     let m = 0;
     for (const lap of Object.values(data.laps)) {
@@ -58,19 +68,63 @@ export function StackedCharts({
     return m;
   }, [data]);
 
-  const [isBoxZoom, setIsBoxZoom] = useState(false);
-  const chartRef = useRef<echarts.ECharts | null>(null);
+  // Handle click & drag crosshair selection box directly on the chart canvas
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!chartRef.current || e.button !== 0) return; // Left mouse button only
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const dist = chartRef.current.convertFromPixel({ xAxisIndex: 0 }, x);
+    if (dist == null || isNaN(dist) || dist < 0) return;
 
-  const toggleBoxZoom = useCallback(() => {
-    if (!chartRef.current) return;
-    const next = !isBoxZoom;
-    setIsBoxZoom(next);
-    chartRef.current.dispatchAction({
-      type: "takeGlobalCursor",
-      key: "dataZoomSelect",
-      dataZoomSelectActive: next,
+    setSelection({
+      startX: x,
+      currentX: x,
+      startDist: dist,
+      currentDist: dist,
     });
-  }, [isBoxZoom]);
+  }, []);
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!chartRef.current || !selection || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const dist = chartRef.current.convertFromPixel({ xAxisIndex: 0 }, x);
+      if (dist != null && !isNaN(dist)) {
+        setSelection((prev) =>
+          prev
+            ? {
+                ...prev,
+                currentX: Math.max(0, Math.min(rect.width, x)),
+                currentDist: Math.max(0, Math.min(maxDist, dist)),
+              }
+            : null,
+        );
+      }
+    },
+    [selection, maxDist],
+  );
+
+  const handleMouseUp = useCallback(() => {
+    if (selection) {
+      const minDist = Math.min(selection.startDist, selection.currentDist);
+      const maxDistVal = Math.max(selection.startDist, selection.currentDist);
+
+      if (maxDistVal - minDist >= 10) {
+        onZoomChange?.([minDist, maxDistVal]);
+      }
+      setSelection(null);
+    }
+  }, [selection, onZoomChange]);
+
+  useEffect(() => {
+    if (selection) {
+      const onGlobalMouseUp = () => handleMouseUp();
+      window.addEventListener("mouseup", onGlobalMouseUp);
+      return () => window.removeEventListener("mouseup", onGlobalMouseUp);
+    }
+  }, [selection, handleMouseUp]);
 
   const option = useMemo<EChartsOption>(() => {
     const lapIds = Object.keys(data.laps);
@@ -163,8 +217,8 @@ export function StackedCharts({
         type: "inside",
         xAxisIndex: allXAxisIndices,
         filterMode: "none",
-        zoomOnMouseWheel: "shift", // Prevent accidental page-scroll zooming; require Shift+Scroll
-        moveOnMouseMove: true,
+        zoomOnMouseWheel: false, // Disable scroll wheel zoom so web page scrolling is natural
+        moveOnMouseMove: false,
         moveOnMouseWheel: false,
       },
       {
@@ -246,28 +300,13 @@ export function StackedCharts({
             <span className="text-ink-dim">Full lap (0m – {maxDist.toFixed(0)}m)</span>
           )}
           <span className="hidden text-[11px] text-ink-dim/70 sm:inline">
-            • Hold <kbd className="rounded border border-edge bg-panel-2 px-1 text-[10px]">Shift</kbd> + Scroll to scale
+            • Click & drag across chart to zoom into a section
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={toggleBoxZoom}
-            className={`rounded border px-2 py-0.5 text-xs transition-colors ${
-              isBoxZoom
-                ? "border-accent bg-accent/20 font-semibold text-accent"
-                : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
-            }`}
-            title="Click to activate crosshair drag section zoom tool"
-          >
-            🎯 {isBoxZoom ? "Cancel Box Select" : "Drag Section to Zoom"}
-          </button>
-
           {zoomRange && (
             <button
-              onClick={() => {
-                onZoomChange?.(null);
-                if (isBoxZoom) toggleBoxZoom();
-              }}
+              onClick={() => onZoomChange?.(null)}
               className="rounded border border-edge bg-panel-2 px-2 py-0.5 text-xs font-medium text-ink transition-colors hover:border-accent hover:text-accent"
               title="Reset zoom to full lap"
             >
@@ -294,48 +333,71 @@ export function StackedCharts({
           </button>
         </div>
       </div>
-      <EChart
-        option={option}
-        className="w-full"
-        notMerge={false}
-        onInit={(chart) => {
-          chartRef.current = chart;
-          chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
-          chart.resize();
-          chart.on("updateAxisPointer", (e) => {
-            const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo;
-            const x = info?.find((a) => a.axisDim === "x");
-            onCursorDist?.(x ? x.value : null);
-          });
-          chart.on("dataZoom", (e: any) => {
-            let startVal: number | undefined;
-            let endVal: number | undefined;
+      <div
+        ref={containerRef}
+        className="relative w-full cursor-crosshair select-none"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+      >
+        {selection && Math.abs(selection.currentX - selection.startX) > 4 && (
+          <div
+            className="pointer-events-none absolute top-4 bottom-7 z-30 border-x-2 border-dashed border-[#38bdf8] bg-[#38bdf8]/20"
+            style={{
+              left: `${Math.min(selection.startX, selection.currentX)}px`,
+              width: `${Math.abs(selection.currentX - selection.startX)}px`,
+            }}
+          >
+            <div className="absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-edge bg-panel-2 px-2 py-0.5 font-tabular text-[11px] font-semibold text-accent shadow-lg">
+              🔍 {Math.min(selection.startDist, selection.currentDist).toFixed(0)}m –{" "}
+              {Math.max(selection.startDist, selection.currentDist).toFixed(0)}m (
+              {Math.abs(selection.currentDist - selection.startDist).toFixed(0)}m section)
+            </div>
+          </div>
+        )}
+        <EChart
+          option={option}
+          className="w-full"
+          notMerge={false}
+          onInit={(chart) => {
+            chartRef.current = chart;
+            chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
+            chart.resize();
+            chart.on("updateAxisPointer", (e) => {
+              const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo;
+              const x = info?.find((a) => a.axisDim === "x");
+              onCursorDist?.(x ? x.value : null);
+            });
+            chart.on("dataZoom", (e: any) => {
+              let startVal: number | undefined;
+              let endVal: number | undefined;
 
-            if (e.batch && e.batch[0]) {
-              startVal = e.batch[0].startValue;
-              endVal = e.batch[0].endValue;
-            } else if (e.startValue != null && e.endValue != null) {
-              startVal = e.startValue;
-              endVal = e.endValue;
-            }
-
-            if (startVal != null && endVal != null) {
-              onZoomChange?.([startVal, endVal]);
-            } else {
-              const startPct = e.batch?.[0]?.start ?? e.start ?? 0;
-              const endPct = e.batch?.[0]?.end ?? e.end ?? 100;
-              if (startPct <= 1 && endPct >= 99) {
-                onZoomChange?.(null);
-              } else {
-                const minD = (startPct / 100) * maxDist;
-                const maxD = (endPct / 100) * maxDist;
-                onZoomChange?.([minD, maxD]);
+              if (e.batch && e.batch[0]) {
+                startVal = e.batch[0].startValue;
+                endVal = e.batch[0].endValue;
+              } else if (e.startValue != null && e.endValue != null) {
+                startVal = e.startValue;
+                endVal = e.endValue;
               }
-            }
-          });
-          chart.getZr().on("globalout", () => onCursorDist?.(null));
-        }}
-      />
+
+              if (startVal != null && endVal != null) {
+                onZoomChange?.([startVal, endVal]);
+              } else {
+                const startPct = e.batch?.[0]?.start ?? e.start ?? 0;
+                const endPct = e.batch?.[0]?.end ?? e.end ?? 100;
+                if (startPct <= 1 && endPct >= 99) {
+                  onZoomChange?.(null);
+                } else {
+                  const minD = (startPct / 100) * maxDist;
+                  const maxD = (endPct / 100) * maxDist;
+                  onZoomChange?.([minD, maxD]);
+                }
+              }
+            });
+            chart.getZr().on("globalout", () => onCursorDist?.(null));
+          }}
+        />
+      </div>
     </div>
   );
 }
