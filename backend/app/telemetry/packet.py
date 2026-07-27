@@ -166,9 +166,16 @@ def build_packet(
     brake: int = 0,
     wheel_rps: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
     tire_radius: tuple[float, float, float, float] = (0.33, 0.33, 0.33, 0.33),
+    suspension: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
+    oil_pressure: float = 0.0,
+    water_temp: float = 85.0,
+    oil_temp: float = 90.0,
+    gear_ratios: tuple[float, ...] = (),
+    transmission_top_speed: float = 300.0,
     car_id: int = 0,
 ) -> bytes:
     """Build a plaintext packet (simulator / test fixture)."""
+    ratios = (tuple(gear_ratios) + (0.0,) * 8)[:8]
     return _HEAD.pack(
         MAGIC,
         *position,
@@ -181,7 +188,7 @@ def build_packet(
         struct.pack("<I", iv),
         fuel_level, fuel_capacity,
         speed_mps, boost + 1.0,
-        0.0, 85.0, 90.0,  # oil pressure, water temp, oil temp
+        oil_pressure, water_temp, oil_temp,
         *tire_temps,
         packet_id,
         current_lap, total_laps,
@@ -196,10 +203,10 @@ def build_packet(
         0.0, 0.0, 0.0, 0.0,  # road plane
         *wheel_rps,
         *tire_radius,
-        0.0, 0.0, 0.0, 0.0,  # suspension
+        *suspension,
         *([0.0] * 8),  # reserved
         0.0, 1.0, 0.0,  # clutch, engagement, rpm after clutch
-        300.0,  # top speed
-        *([0.0] * 8),  # gear ratios
+        transmission_top_speed,
+        *ratios,
         car_id,
     )

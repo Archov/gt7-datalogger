@@ -117,15 +117,52 @@ class SimTelemetrySource:
 
             gear = min(6, max(1, int(speed / 11) + 1))
             rpm = 2000 + (speed * 3.6 % 60) / 60 * 5500 + gear * 100
-            slipping = brake > 200 or (throttle == 255 and speed < 25)
-            wheel_speed_factor = 1.12 if slipping else 1.0
-            wheel_rps = speed * wheel_speed_factor / 0.33
+
+            # Per-wheel slip: hard braking locks the fronts, hard launches spin
+            # the rears — gives the lockup/wheelspin detectors real events.
+            locking = brake > 200
+            spinning = throttle == 255 and speed < 25
+            base_rps = speed / 0.33
+            factor = [1.0, 1.0, 1.0, 1.0]  # FL FR RL RR
+            if locking:
+                factor[0] = 0.72 + rng.uniform(0, 0.08)
+                factor[1] = 0.86 + rng.uniform(0, 0.08)
+            if spinning:
+                factor[2] = factor[3] = 1.18 + rng.uniform(0, 0.1)
+            rps = (
+                base_rps * factor[0],
+                base_rps * factor[1],
+                base_rps * factor[2],
+                base_rps * factor[3],
+            )
+
+            # Suspension compression (m): braking loads the front axle,
+            # cornering loads the outside; corner 1 apex adds a kerb strike.
+            lat = math.sin(angle * 2) * 0.3  # matches angular velocity below
+            front = 0.030 + (0.028 if brake > 100 else 0.0)
+            rear = 0.030 + (0.012 if throttle > 200 else 0.0)
+            roll = lat * 0.02
+            kerb = 0.05 if abs(s - 0.21) < 0.0008 else 0.0
+            suspension = (
+                front + max(0, -roll) + kerb + rng.uniform(0, 0.002),
+                front + max(0, roll) + rng.uniform(0, 0.002),
+                rear + max(0, -roll) + rng.uniform(0, 0.002),
+                rear + max(0, roll) + rng.uniform(0, 0.002),
+            )
+
+            flags = SimulatorFlags.CAR_ON_TRACK | SimulatorFlags.IN_GEAR
+            if spinning:
+                flags |= SimulatorFlags.TCS_ACTIVE
+            if locking:
+                flags |= SimulatorFlags.ASM_ACTIVE
+            if rpm > 8600:
+                flags |= SimulatorFlags.REV_LIMITER
 
             plain = build_packet(
                 packet_id=tick,
                 position=(px, 10.0, pz),
                 velocity=(speed, 0.0, 0.0),
-                angular_velocity=(0.0, math.sin(angle * 2) * 0.3, 0.0),
+                angular_velocity=(0.0, lat, 0.0),
                 body_height=0.08 + rng.uniform(0, 0.01),
                 engine_rpm=rpm,
                 fuel_level=fuel,
@@ -138,12 +175,18 @@ class SimTelemetrySource:
                 best_lap_time_ms=best_ms,
                 last_lap_time_ms=last_ms,
                 day_progression_ms=int(tick * TICK * 1000),
-                flags=int(SimulatorFlags.CAR_ON_TRACK | SimulatorFlags.IN_GEAR),
+                flags=int(flags),
                 current_gear=gear,
                 suggested_gear=15,
                 throttle=throttle,
                 brake=brake,
-                wheel_rps=(wheel_rps, wheel_rps, wheel_rps, wheel_rps),
+                wheel_rps=rps,
+                suspension=suspension,
+                oil_pressure=6.5 - rpm / 9000 * 1.5,
+                water_temp=84.0 + (tick % 36000) / 36000 * 8,
+                oil_temp=88.0 + (tick % 36000) / 36000 * 12,
+                gear_ratios=(3.2, 2.3, 1.8, 1.4, 1.15, 0.95),
+                transmission_top_speed=290.0,
                 car_id=CAR_ID,
             )
             self._packet_count += 1

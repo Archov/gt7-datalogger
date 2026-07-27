@@ -10,6 +10,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.processing import analysis
+from app.processing.laps import SAMPLE_COLUMNS
 from app.processing.tracks import signature_from_samples
 
 if TYPE_CHECKING:
@@ -104,6 +105,19 @@ CSV_CHANNELS = (
     ("pos_z", "Pos Z", "m"),
     ("body_height", "Ride Height", "mm"),
     ("fuel", "Fuel Level", "L"),
+    ("slip_fl", "Tyre Slip FL", ""),
+    ("slip_fr", "Tyre Slip FR", ""),
+    ("slip_rl", "Tyre Slip RL", ""),
+    ("slip_rr", "Tyre Slip RR", ""),
+    ("tt_fl", "Tyre Temp FL", "C"),
+    ("tt_fr", "Tyre Temp FR", "C"),
+    ("tt_rl", "Tyre Temp RL", "C"),
+    ("tt_rr", "Tyre Temp RR", "C"),
+    ("sus_fl", "Susp Travel FL", "mm"),
+    ("sus_fr", "Susp Travel FR", "mm"),
+    ("sus_rl", "Susp Travel RL", "mm"),
+    ("sus_rr", "Susp Travel RR", "mm"),
+    ("aids", "Driver Aids", ""),
 )
 
 
@@ -208,9 +222,16 @@ async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]
 
 # --- analysis ---------------------------------------------------------------
 
+# Default channel set — the pre-Tier-1 payload, so clients that never open the
+# newer channels pay nothing extra.
 COMPARE_COLUMNS = (
     "t", "speed", "throttle", "brake", "coast", "gear", "rpm", "boost", "tire_slip", "yaw_rate",
     "pos_x", "pos_z",
+)
+
+# Columns the channels= param may request beyond the defaults.
+EXTRA_COMPARE_COLUMNS = tuple(
+    c for c in SAMPLE_COLUMNS if c not in COMPARE_COLUMNS and c != "dist"
 )
 
 
@@ -220,6 +241,11 @@ async def compare(
     laps: str = Query(..., description="comma-separated lap ids"),
     ref: int = Query(..., description="reference lap id"),
     step: float = Query(5.0, gt=0.5, le=50),
+    channels: str | None = Query(
+        None,
+        description="comma-separated sample channels; defaults to the classic set. "
+        "t/pos_x/pos_z are always included.",
+    ),
 ) -> dict[str, Any]:
     """Distance-resampled series for each lap + time delta vs the reference."""
     try:
@@ -228,15 +254,31 @@ async def compare(
         raise HTTPException(400, "laps must be comma-separated integers") from exc
     if ref not in lap_ids:
         lap_ids.append(ref)
+
+    columns: tuple[str, ...]
+    if channels is None:
+        columns = COMPARE_COLUMNS
+    else:
+        requested = [c for c in channels.split(",") if c.strip()]
+        allowed = set(COMPARE_COLUMNS) | set(EXTRA_COMPARE_COLUMNS)
+        unknown = [c for c in requested if c not in allowed]
+        if unknown:
+            raise HTTPException(400, f"unknown channels: {', '.join(unknown)}")
+        # Delta and the race-line map always need these three.
+        columns = tuple(dict.fromkeys(["t", "pos_x", "pos_z", *requested]))
+
     samples_by_id = await svc(request).repo.get_laps_samples(lap_ids)
     if ref not in samples_by_id:
         raise HTTPException(404, f"reference lap {ref} not found")
+    events_by_id = await svc(request).repo.get_laps_events(lap_ids)
 
-    out: dict[str, Any] = {"ref": ref, "step": step, "laps": {}}
+    out: dict[str, Any] = {"ref": ref, "step": step, "channels": list(columns), "laps": {}}
     for lap_id, samples in samples_by_id.items():
+        present = tuple(c for c in columns if c in samples)
         entry: dict[str, Any] = {
-            "series": analysis.resample_by_distance(samples, step, COMPARE_COLUMNS),
+            "series": analysis.resample_by_distance(samples, step, present),
             "peaks_valleys": analysis.speed_peaks_valleys(samples),
+            "events": events_by_id.get(lap_id, []),
         }
         if lap_id != ref:
             entry["delta"] = analysis.time_delta_series(samples, samples_by_id[ref], step)

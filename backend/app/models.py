@@ -22,6 +22,21 @@ class SimulatorFlags(IntFlag):
     TCS_ACTIVE = 1 << 11
 
 
+class AidsBits(IntFlag):
+    """Compact per-tick driver-aid bitmask stored in the lap samples.
+
+    Four flags for the price of one column; decoded by the frontend and the
+    per-lap aid metrics. Distinct from SimulatorFlags so the stored format
+    stays stable even if GT7 shuffles its flag bits.
+    """
+
+    NONE = 0
+    TCS = 1 << 0
+    ASM = 1 << 1
+    HANDBRAKE = 1 << 2
+    REV_LIMITER = 1 << 3
+
+
 @dataclass(slots=True)
 class TelemetryPacket:
     packet_id: int
@@ -128,13 +143,36 @@ class TelemetryPacket:
         """Average tire surface speed / car speed. ~1.0 when gripping."""
         if self.speed_mps < 1.0:
             return 1.0
-        surface = (
-            abs(self.wheel_rps_fl) * self.tire_radius_fl
-            + abs(self.wheel_rps_fr) * self.tire_radius_fr
-            + abs(self.wheel_rps_rl) * self.tire_radius_rl
-            + abs(self.wheel_rps_rr) * self.tire_radius_rr
-        ) / 4.0
-        return surface / self.speed_mps
+        return sum(self.wheel_slips) / 4.0
+
+    @property
+    def wheel_slips(self) -> tuple[float, float, float, float]:
+        """Per-wheel tire surface speed / car speed (FL, FR, RL, RR).
+
+        <1 under braking = locking; >1 on throttle = spinning.
+        """
+        if self.speed_mps < 1.0:
+            return (1.0, 1.0, 1.0, 1.0)
+        return (
+            abs(self.wheel_rps_fl) * self.tire_radius_fl / self.speed_mps,
+            abs(self.wheel_rps_fr) * self.tire_radius_fr / self.speed_mps,
+            abs(self.wheel_rps_rl) * self.tire_radius_rl / self.speed_mps,
+            abs(self.wheel_rps_rr) * self.tire_radius_rr / self.speed_mps,
+        )
+
+    @property
+    def aids_bits(self) -> int:
+        """Driver-aid state as an AidsBits mask."""
+        bits = AidsBits.NONE
+        if self.flags & SimulatorFlags.TCS_ACTIVE:
+            bits |= AidsBits.TCS
+        if self.flags & SimulatorFlags.ASM_ACTIVE:
+            bits |= AidsBits.ASM
+        if self.flags & SimulatorFlags.HANDBRAKE:
+            bits |= AidsBits.HANDBRAKE
+        if self.flags & SimulatorFlags.REV_LIMITER:
+            bits |= AidsBits.REV_LIMITER
+        return int(bits)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

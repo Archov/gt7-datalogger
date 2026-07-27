@@ -13,7 +13,9 @@ from app.processing.laps import CompletedLap, SessionInfo
 from app.processing.tracks import TrackSignature, matches
 from app.storage.db import LapRow, SessionRow, SettingRow, TrackRow
 
-EXPORT_VERSION = 1
+# v2 (Tier 1): per-corner sample columns, events, aid/engine metrics, gearing.
+# v1 files import fine — missing columns stay absent and charts skip them.
+EXPORT_VERSION = 2
 
 
 def lap_summary(row: LapRow) -> dict[str, Any]:
@@ -35,7 +37,23 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "min_body_height": row.min_body_height,
         "total_ticks": row.total_ticks,
         "tod_ms": row.tod_ms,
+        "tcs_active_pct": row.tcs_active_pct,
+        "asm_active_pct": row.asm_active_pct,
+        "max_water_temp": row.max_water_temp,
+        "max_oil_temp": row.max_oil_temp,
+        "min_oil_pressure": row.min_oil_pressure,
+        "event_counts": _event_counts(row.events_json),
     }
+
+
+def _event_counts(events_json: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    try:
+        for e in json.loads(events_json or "[]"):
+            counts[e["type"]] = counts.get(e["type"], 0) + 1
+    except (ValueError, KeyError, TypeError):
+        pass
+    return counts
 
 
 class Repository:
@@ -68,6 +86,13 @@ class Repository:
                 min_body_height=lap.min_body_height,
                 total_ticks=lap.total_ticks,
                 tod_ms=lap.tod_ms,
+                tcs_active_pct=lap.tcs_active_pct,
+                asm_active_pct=lap.asm_active_pct,
+                max_water_temp=lap.max_water_temp,
+                max_oil_temp=lap.max_oil_temp,
+                min_oil_pressure=lap.min_oil_pressure,
+                events_json=json.dumps(lap.events, separators=(",", ":")),
+                gearing_json=json.dumps(lap.gearing, separators=(",", ":")) if lap.gearing else "",
                 samples_json=json.dumps(lap.samples, separators=(",", ":")),
             )
             db.add(row)
@@ -134,6 +159,8 @@ class Repository:
             if row is None:
                 return None
             data = lap_summary(row)
+            data["events"] = json.loads(row.events_json or "[]")
+            data["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
             if with_samples:
                 data["samples"] = json.loads(row.samples_json)
             return data
@@ -142,6 +169,15 @@ class Repository:
         async with self._sf() as db:
             rows = (await db.execute(select(LapRow).where(LapRow.id.in_(lap_ids)))).scalars()
             return {r.id: json.loads(r.samples_json) for r in rows}
+
+    async def get_laps_events(self, lap_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        async with self._sf() as db:
+            rows = (
+                await db.execute(
+                    select(LapRow.id, LapRow.events_json).where(LapRow.id.in_(lap_ids))
+                )
+            ).all()
+            return {lap_id: json.loads(ev or "[]") for lap_id, ev in rows}
 
     async def delete_session(self, session_id: int) -> None:
         async with self._sf() as db:
@@ -259,5 +295,13 @@ class Repository:
             fuel_start=float(lap.get("fuel_start", 0)),
             fuel_end=float(lap.get("fuel_end", 0)),
         )
+        # Aid metrics and events are recomputed from samples; engine-health
+        # aggregates and gearing aren't derivable, so carry them from v2 files
+        # (v1 files simply keep the "unknown" defaults).
+        completed.max_water_temp = float(lap.get("max_water_temp", 0.0))
+        completed.max_oil_temp = float(lap.get("max_oil_temp", 0.0))
+        completed.min_oil_pressure = float(lap.get("min_oil_pressure", -1.0))
+        gearing = lap.get("gearing")
+        completed.gearing = gearing if isinstance(gearing, dict) else None
         completed.compute_metrics()
         return await self.save_lap(session_id, completed)
