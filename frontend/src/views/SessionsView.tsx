@@ -1,24 +1,34 @@
 // Sessions view: browse historical sessions, inspect and manage laps,
-// export/import laps as JSON, manual "log lap now".
+// export/import laps as JSON, manual "log lap now", and jump into the
+// Analysis view with a session or lap pre-selected.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { LapSparkline } from "@/components/LapSparkline";
+import { ConfirmDialog, PromptDialog } from "@/components/ui/Dialog";
 import { api } from "@/lib/api";
+import { lapColor } from "@/lib/colors";
 import { formatLapTime, formatSpeed, formatTime } from "@/lib/format";
+import { openInAnalysis } from "@/lib/router";
 import type { LapSummary, SessionSummary } from "@/lib/types";
 import { useSettings } from "@/store/settings";
 import { useTelemetry } from "@/store/telemetry";
+import { toast } from "@/store/toasts";
 
 export function SessionsView() {
   const units = useSettings((s) => s.units);
   const lapEpoch = useTelemetry((s) => s.lapEpoch);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [laps, setLaps] = useState<Record<number, LapSummary[]>>({});
-  const [message, setMessage] = useState<string | null>(null);
+  const [naming, setNaming] = useState<number | null>(null); // session id
+  const [deletingSession, setDeletingSession] = useState<number | null>(null);
+  const [deletingLap, setDeletingLap] = useState<{ sessionId: number; lapId: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
-    api.sessions().then(setSessions).catch(() => {});
+    api.sessions()
+      .then(setSessions)
+      .catch(() => toast("Could not load sessions", "error"));
   }, []);
 
   useEffect(refresh, [refresh, lapEpoch]);
@@ -27,11 +37,6 @@ export function SessionsView() {
     if (expanded == null) return;
     api.sessionLaps(expanded).then((ls) => setLaps((cur) => ({ ...cur, [expanded]: ls })));
   }, [expanded, lapEpoch]);
-
-  const flash = (text: string) => {
-    setMessage(text);
-    window.setTimeout(() => setMessage(null), 3000);
-  };
 
   async function exportLap(id: number) {
     const data = await api.exportLap(id);
@@ -48,40 +53,41 @@ export function SessionsView() {
     try {
       const payload = JSON.parse(await file.text());
       await api.importLap(payload);
-      flash(`Imported ${file.name}`);
+      toast(`Imported ${file.name}`, "success");
       refresh();
     } catch {
-      flash("Import failed — not a valid lap file");
+      toast("Import failed — not a valid lap file", "error");
     }
   }
 
-  async function nameTrack(sessionId: number) {
-    const name = prompt(
-      "Name this track (future sessions on it will be identified automatically):",
-    )?.trim();
-    if (!name) return;
+  async function nameTrack(sessionId: number, name: string) {
     try {
       const ls = laps[sessionId] ?? (await api.sessionLaps(sessionId));
       if (ls.length === 0) {
-        flash("Session has no laps to identify the track from");
+        toast("Session has no laps to identify the track from", "error");
         return;
       }
       await api.createTrack(name, ls[0].id);
-      flash(`Track saved as "${name}"`);
+      toast(`Track saved as "${name}"`, "success");
       refresh();
     } catch {
-      flash("Could not save track");
+      toast("Could not save track", "error");
     }
   }
 
   async function logLapNow() {
     try {
       const res = await api.logLapNow();
-      flash(`Saved in-progress lap #${res.id}`);
+      toast(`Saved in-progress lap #${res.id}`, "success");
       refresh();
     } catch {
-      flash("No lap in progress");
+      toast("No lap in progress", "error");
     }
+  }
+
+  // Open a session in the Analysis view (default latest-vs-best selection).
+  function analyzeSession(s: SessionSummary) {
+    openInAnalysis({ session: s.id });
   }
 
   return (
@@ -105,59 +111,84 @@ export function SessionsView() {
         </div>
       </div>
 
-      {message && (
-        <div className="mb-3 rounded-md bg-accent/10 px-3 py-2 text-sm text-accent">{message}</div>
+      {sessions == null && (
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="skeleton h-12" />
+          ))}
+        </div>
       )}
 
-      {sessions.length === 0 && (
+      {sessions != null && sessions.length === 0 && (
         <div className="rounded-xl bg-panel p-8 text-center text-ink-dim">
-          No sessions recorded yet.
+          <div className="mb-1 text-lg text-ink">No sessions recorded yet</div>
+          Laps are recorded automatically while you drive — or import a lap file above.
         </div>
       )}
 
       <div className="space-y-2">
-        {sessions.map((s) => (
+        {(sessions ?? []).map((s) => (
           <div key={s.id} className="rounded-xl bg-panel">
-            <button
-              onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-              className="flex w-full items-center gap-4 px-4 py-3 text-left"
-            >
-              <span className="font-tabular text-sm text-ink-dim">#{s.id}</span>
-              <span className="font-medium">{s.car_name}</span>
-              {s.track_name ? (
-                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent">
-                  {s.track_name}
-                </span>
-              ) : (
-                s.lap_count > 0 && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="rounded-full border border-dashed border-edge px-2 py-0.5 text-xs text-ink-dim hover:text-ink"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      nameTrack(s.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.stopPropagation();
-                        nameTrack(s.id);
-                      }
-                    }}
-                  >
-                    name track…
+            <div className="flex w-full items-center gap-4 px-4 py-3">
+              <button
+                onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                className="flex min-w-0 flex-1 items-center gap-4 text-left"
+              >
+                <span className="font-tabular text-sm text-ink-dim">#{s.id}</span>
+                <span className="truncate font-medium">{s.car_name}</span>
+                {s.track_name ? (
+                  <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent">
+                    {s.track_name}
                   </span>
-                )
-              )}
-              <span className="text-xs text-ink-dim">{formatTime(s.started_at)}</span>
-              <span className="ml-auto font-tabular text-sm">
-                {s.lap_count} laps
-                {s.best_lap_time_ms != null && (
-                  <span className="ml-3 text-accent">{formatLapTime(s.best_lap_time_ms)}</span>
+                ) : (
+                  s.lap_count > 0 && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      className="rounded-full border border-dashed border-edge px-2 py-0.5 text-xs text-ink-dim hover:text-ink"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setNaming(s.id);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.stopPropagation();
+                          setNaming(s.id);
+                        }
+                      }}
+                    >
+                      name track…
+                    </span>
+                  )
                 )}
-              </span>
-              <span className="text-ink-dim">{expanded === s.id ? "▾" : "▸"}</span>
-            </button>
+                <span className="text-xs text-ink-dim">{formatTime(s.started_at)}</span>
+                <span className="ml-auto flex items-center gap-3">
+                  {s.lap_count > 1 && <LapSparkline sessionId={s.id} lapCount={s.lap_count} />}
+                  <span className="font-tabular text-sm">
+                    {s.lap_count} laps
+                    {s.best_lap_time_ms != null && (
+                      <span className="ml-3 text-accent">{formatLapTime(s.best_lap_time_ms)}</span>
+                    )}
+                  </span>
+                </span>
+              </button>
+              {s.lap_count > 0 && (
+                <button
+                  className="btn shrink-0"
+                  title="Open this session in the Analysis view"
+                  onClick={() => analyzeSession(s)}
+                >
+                  Analyze
+                </button>
+              )}
+              <button
+                onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                className="text-ink-dim"
+                aria-label={expanded === s.id ? "Collapse session" : "Expand session"}
+              >
+                {expanded === s.id ? "▾" : "▸"}
+              </button>
+            </div>
 
             {expanded === s.id && (
               <div className="border-t border-edge px-2 pb-2">
@@ -166,25 +197,17 @@ export function SessionsView() {
                   units={units}
                   bestMs={s.best_lap_time_ms}
                   onExport={exportLap}
-                  onDelete={async (id) => {
-                    await api.deleteLap(id);
-                    setLaps((cur) => ({
-                      ...cur,
-                      [s.id]: (cur[s.id] ?? []).filter((l) => l.id !== id),
-                    }));
-                    refresh();
-                  }}
+                  onDelete={(id) => setDeletingLap({ sessionId: s.id, lapId: id })}
+                  onCompare={(id, refId) =>
+                    openInAnalysis({
+                      session: s.id,
+                      laps: refId != null && refId !== id ? [id, refId] : [id],
+                      ref: refId ?? id,
+                    })
+                  }
                 />
                 <div className="flex justify-end px-2 pt-2">
-                  <button
-                    className="btn-danger"
-                    onClick={async () => {
-                      if (!confirm(`Delete session #${s.id} and all its laps?`)) return;
-                      await api.deleteSession(s.id);
-                      setExpanded(null);
-                      refresh();
-                    }}
-                  >
+                  <button className="btn-danger" onClick={() => setDeletingSession(s.id)}>
                     Delete session
                   </button>
                 </div>
@@ -193,6 +216,56 @@ export function SessionsView() {
           </div>
         ))}
       </div>
+
+      <PromptDialog
+        open={naming != null}
+        title="Name this track"
+        label="Future sessions on this track will be identified automatically."
+        placeholder="e.g. Suzuka Circuit"
+        onSubmit={(name) => {
+          const id = naming!;
+          setNaming(null);
+          nameTrack(id, name);
+        }}
+        onCancel={() => setNaming(null)}
+      />
+
+      <ConfirmDialog
+        open={deletingSession != null}
+        title={`Delete session #${deletingSession ?? ""}?`}
+        body="The session and all its laps will be removed. This cannot be undone."
+        confirmLabel="Delete session"
+        danger
+        onConfirm={async () => {
+          const id = deletingSession!;
+          setDeletingSession(null);
+          await api.deleteSession(id);
+          setExpanded((cur) => (cur === id ? null : cur));
+          toast(`Session #${id} deleted`, "success");
+          refresh();
+        }}
+        onCancel={() => setDeletingSession(null)}
+      />
+
+      <ConfirmDialog
+        open={deletingLap != null}
+        title="Delete lap?"
+        body="The lap and its telemetry samples will be removed. This cannot be undone."
+        confirmLabel="Delete lap"
+        danger
+        onConfirm={async () => {
+          const { sessionId, lapId } = deletingLap!;
+          setDeletingLap(null);
+          await api.deleteLap(lapId);
+          setLaps((cur) => ({
+            ...cur,
+            [sessionId]: (cur[sessionId] ?? []).filter((l) => l.id !== lapId),
+          }));
+          toast("Lap deleted", "success");
+          refresh();
+        }}
+        onCancel={() => setDeletingLap(null)}
+      />
     </div>
   );
 }
@@ -203,14 +276,17 @@ function LapTable({
   bestMs,
   onExport,
   onDelete,
+  onCompare,
 }: {
   laps: LapSummary[];
   units: "metric" | "imperial";
   bestMs: number | null;
   onExport: (id: number) => void;
   onDelete: (id: number) => void;
+  onCompare: (id: number, refId: number | null) => void;
 }) {
   if (laps.length === 0) return <div className="p-4 text-sm text-ink-dim">No laps.</div>;
+  const bestId = laps.reduce((a, b) => (b.time_ms < a.time_ms ? b : a)).id;
   return (
     <div className="overflow-x-auto">
       <table className="w-full font-tabular text-xs">
@@ -229,12 +305,25 @@ function LapTable({
             const diff = bestMs != null ? lap.time_ms - bestMs : null;
             return (
               <tr key={lap.id} className="border-t border-edge/50 hover:bg-panel-2/50">
-                <td className="px-2 py-1.5 text-ink-dim">{lap.number}</td>
+                <td className="px-2 py-1.5 text-ink-dim">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: lapColor(lap.id) }}
+                      title="This lap's color in charts and maps"
+                    />
+                    {lap.number}
+                  </span>
+                </td>
                 <td className={`px-2 py-1.5 ${isBest ? "text-accent" : ""}`}>
                   {formatLapTime(lap.time_ms)}
                 </td>
-                <td className="px-2 py-1.5 text-ink-dim">
-                  {diff == null || diff === 0 ? "–" : `+${(diff / 1000).toFixed(3)}`}
+                <td
+                  className={`px-2 py-1.5 ${
+                    diff == null ? "text-ink-dim" : diff === 0 ? "text-throttle" : "text-brake"
+                  }`}
+                >
+                  {diff == null ? "–" : diff === 0 ? "best" : `+${(diff / 1000).toFixed(3)}`}
                 </td>
                 <td className="px-2 py-1.5">{lap.fuel_consumed.toFixed(2)} L</td>
                 <td className="px-2 py-1.5">{lap.full_throttle_pct.toFixed(0)}%</td>
@@ -243,6 +332,20 @@ function LapTable({
                 <td className="px-2 py-1.5">{lap.tire_spin_pct.toFixed(0)}%</td>
                 <td className="px-2 py-1.5">{formatSpeed(lap.max_speed, units)}</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                  <button
+                    className="mr-2 text-ink-dim hover:text-accent"
+                    onClick={() => onCompare(lap.id, lap.id === bestId ? null : bestId)}
+                    title="Compare against the session's best lap in Analysis"
+                  >
+                    compare
+                  </button>
+                  <button
+                    className="mr-2 text-ink-dim hover:text-accent"
+                    onClick={() => onCompare(lap.id, lap.id)}
+                    title="Open Analysis with this lap as the reference"
+                  >
+                    set ref
+                  </button>
                   <button className="mr-2 text-ink-dim hover:text-ink" onClick={() => onExport(lap.id)}>
                     json
                   </button>
