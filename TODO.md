@@ -132,10 +132,14 @@ sellable-app finish.
   (`components/LapSparkline.tsx`).
 - [x] **Responsive pass** — Analysis lap-picker chips scroll horizontally on narrow screens;
   StatusBar nav scrolls instead of wrapping; global `:focus-visible` ring.
-- [ ] **Adopt a component library** (shadcn/ui, per the project brief) for Select / Tabs /
-  Tooltip. Deliberately deferred: the new in-house Dialog/Toast cover the acute need without
-  pulling in Radix; revisit if the component surface keeps growing. Apply the dataviz palette
-  method for accessible, consistent light/dark chart colors.
+- [x] **Adopt a component library**: shadcn-style owned wrappers over Radix primitives in
+  `components/ui/` — `Select` (replaces every native `<select>`), `SegmentedControl`
+  (ToggleGroup; replaces the ad-hoc button rows — chosen over Tabs because these are
+  exclusive-choice pickers, not tabbed panels), `Tip` tooltip (replaces `title=` attrs on key
+  actions), and `Dialog` re-ported onto Radix Dialog. Chart palette re-derived with the
+  dataviz palette method: same six hue families, re-stepped into the dark-mode lightness band
+  and re-ordered so it passes the full validator (CVD separation, normal-vision floor,
+  contrast) on both app surfaces; trade-offs documented in `lib/colors.ts`.
 
 ## Tier 5 — Overlay enhancements
 
