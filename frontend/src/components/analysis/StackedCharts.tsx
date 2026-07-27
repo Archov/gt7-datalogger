@@ -429,7 +429,14 @@ export function StackedCharts({
               onCursorDist?.(x ? x.value : null);
             });
             // Fired by the native drag-select box and by the bottom slider.
-            chart.on("dataZoom", (e: any) => {
+            chart.on("dataZoom", (raw) => {
+              const e = raw as {
+                batch?: { startValue?: number; endValue?: number; start?: number; end?: number }[];
+                startValue?: number;
+                endValue?: number;
+                start?: number;
+                end?: number;
+              };
               if (applyingZoom.current) return; // our own dispatch echoing back
               let startVal: number | undefined;
               let endVal: number | undefined;

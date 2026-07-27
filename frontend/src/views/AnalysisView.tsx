@@ -59,7 +59,8 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
       if (withRef.length > 0) setSelected(withRef);
       if (request.ref != null) setRefLap(request.ref);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Deliberately keyed on the serialized request only — re-running on every
+    // object identity change would clobber in-view selection edits.
   }, [requestKey]);
 
   // Load sessions (refreshed when a new lap arrives live)

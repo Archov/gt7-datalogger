@@ -59,7 +59,7 @@ export function EChart({ option, group, className, onInit, notMerge, replaceMerg
       chart.dispose();
       chartRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Deliberately depends only on `group`: init/dispose must not re-run on option changes.
   }, [group]);
 
   useEffect(() => {
