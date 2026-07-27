@@ -1,16 +1,26 @@
 // Series palette shared by charts, the race line map, and lap chips.
+//
+// Values are validated (dataviz palette method) for the dark surfaces
+// #14171c / #0b0d10: OKLCH lightness band, chroma floor, WCAG >= 3:1 contrast,
+// and — in this slot order — adjacent-pair colorblind separation (worst
+// protan/deutan ΔE 12.7, above the ≥8 target) and normal-vision floor. Keep
+// the order fixed when using slots by index; re-run the validator if any hex
+// changes.
+//
 // A lap's color is keyed to its id so the same lap keeps the same color in
-// every view (Sessions table, Live feed, Analysis charts/map). Two laps whose
-// ids collide mod the palette length share a color — acceptable for the small
-// selections we chart, in exchange for a stable cross-view identity.
+// every view (Sessions table, Live feed, Analysis charts/map). Id-keying means
+// any pair of slots can co-occur, and no 6-hue palette can make ALL pairs
+// CVD-safe (amber↔orange is the weakest here) — which is why every colored
+// mark ships with a text label (lap number / legend entry) beside it; color is
+// never the only identity channel.
 
 export const SERIES_COLORS = [
-  "#38bdf8",
-  "#f472b6",
-  "#a3e635",
-  "#facc15",
-  "#c084fc",
-  "#fb923c",
+  "#0284c7", // sky
+  "#d97706", // amber
+  "#a855f7", // purple
+  "#65a30d", // lime
+  "#ec4899", // pink
+  "#ea580c", // orange
 ] as const;
 
 export function lapColor(lapId: number): string {
