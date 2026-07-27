@@ -29,7 +29,7 @@ class Collector:
 @pytest.fixture
 def setup() -> tuple[LapProcessor, Collector]:
     c = Collector()
-    return LapProcessor(on_lap=c.on_lap, on_session=c.on_session), c
+    return LapProcessor(on_lap=c.on_lap, on_session=c.on_session, min_lap_ticks=1), c
 
 
 async def feed_lap(proc: LapProcessor, lap_number: int, ticks: int, **kw) -> None:
@@ -133,7 +133,7 @@ async def test_no_duplicate_laps_while_save_is_slow() -> None:
         await asyncio.sleep(0.05)  # simulate the DB write
         collector.laps.append(lap)
 
-    proc = LapProcessor(on_lap=slow_on_lap, on_session=collector.on_session)
+    proc = LapProcessor(on_lap=slow_on_lap, on_session=collector.on_session, min_lap_ticks=1)
     await feed_lap(proc, 1, 30, speed_mps=50.0)
 
     # The boundary packet plus a burst of following packets, processed
@@ -147,6 +147,21 @@ async def test_no_duplicate_laps_while_save_is_slow() -> None:
     await asyncio.gather(*tasks)
     assert len(collector.laps) == 1
     assert collector.laps[0].number == 1
+
+
+async def test_phantom_lap_with_few_samples_is_discarded() -> None:
+    """In menus/replays GT7's lap counter flickers through old values with a
+    stale last_lap_time; a 'lap' with almost no samples must not be saved."""
+    c = Collector()
+    proc = LapProcessor(on_lap=c.on_lap, on_session=c.on_session)  # real threshold
+    # A genuine lap: 700 ticks, then the boundary
+    await feed_lap(proc, 1, 700, speed_mps=50.0)
+    await proc.feed(make_packet(current_lap=2, last_lap_time_ms=61_000, speed_mps=50.0))
+    assert len(c.laps) == 1
+    # Counter flicker: 2 -> 1 (reset/new session) -> 2 again with a stale time
+    await proc.feed(make_packet(current_lap=1, last_lap_time_ms=61_000))
+    await proc.feed(make_packet(current_lap=2, last_lap_time_ms=61_000))
+    assert len(c.laps) == 1  # no phantom zero-sample lap
 
 
 async def test_no_samples_recorded_after_race_finish(setup) -> None:

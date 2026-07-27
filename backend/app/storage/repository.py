@@ -96,6 +96,30 @@ class Repository:
                 )
             return out
 
+    async def session_lap_stats(self, session_id: int) -> dict[str, Any]:
+        """Aggregates for a session without materializing lap rows.
+
+        Loading LapRow objects pulls the (large) samples_json column along;
+        session-boundary bookkeeping only needs these numbers.
+        """
+        async with self._sf() as db:
+            count, best_ms, fuel_used, car_id = (
+                await db.execute(
+                    select(
+                        func.count(LapRow.id),
+                        func.min(LapRow.time_ms),
+                        func.coalesce(func.sum(LapRow.fuel_consumed), 0.0),
+                        func.min(LapRow.car_id),
+                    ).where(LapRow.session_id == session_id)
+                )
+            ).one()
+            return {
+                "count": count,
+                "best_ms": best_ms if best_ms is not None else -1,
+                "fuel_used": fuel_used,
+                "car_id": car_id if car_id is not None else 0,
+            }
+
     async def list_laps(self, session_id: int | None = None) -> list[dict[str, Any]]:
         async with self._sf() as db:
             q = select(LapRow).order_by(LapRow.id.desc())

@@ -69,8 +69,53 @@ Change who would use the tool.
 - [x] **Track auto-identification + minimap library**.
   Detect the track from position bounds; store named tracks and reuse map orientation.
 - [x] **Weather / time-of-day tracking** via `day_progression_ms` for endurance stints.
+- [ ] **Track borders via edge tracing** *(tabled 2026-07-26 — prototyped, then reverted)*.
+  GT7 doesn't broadcast track geometry, but the gt-telemetry.com approach works with
+  data we already capture: drive one slow lap hugging the outer edge and one hugging
+  the inner edge, mark those laps as edge traces, store the two [x, z] polylines on the
+  named track, and render them under the racing lines. The reverted prototype
+  (schema columns `tracks.outer_json/inner_json`, `POST /api/tracks/{name}/border`,
+  `GET /api/tracks/{name}/geometry`, ⊂out/⊃in buttons in the Sessions lap table)
+  worked end-to-end and can be recovered from this description. Note: the two columns
+  already exist in live DBs (migration ran before the revert) — harmless, reusable.
+  **Better source for real circuits (investigated 2026-07-26):** gt-telemetry.com's
+  bundle ships Mapbox GL / OSM / CARTO — their outlines for real tracks come from
+  geographic map data, not crowd traces. OpenStreetMap has real circuits mapped in
+  detail (`highway=raceway`, often both edges + named corners) under ODbL (usable with
+  attribution) via the Overpass API. Needs a lat/lon → GT7-world similarity transform
+  (rotate/translate/scale) least-squares-fitted between a driven lap and the OSM
+  centerline. Fictional GT7 tracks still need edge tracing. Their own backend
+  (api.gt-telemetry.com/tracks) is auth-gated and its data unlicensed — don't scrape it;
+  ask via GitHub issue if we ever want their fictional-track layouts.
+- [ ] **Auto-numbered corners on the track map** *(tabled 2026-07-26 — prototyped, then
+  reverted; the naive version was wrong)*. Detect corners from racing-line curvature and
+  number them from the start line, GT7-Data-Logger style. Lesson from the failed attempt:
+  UNSIGNED curvature is not enough — a long hairpin splits into two corners where curvature
+  dips mid-arc, and an S-section merges into one. A correct detector needs **signed**
+  curvature (split regions when turn direction flips, merge only same-direction arcs),
+  hysteresis on the threshold, and probably apex-at-minimum-speed rather than
+  apex-at-max-curvature. Display rule that worked: dots on the full map, numbered circles
+  only when the zoomed section shows ≤ ~30 corners.
 
 ---
+
+## Done beyond this list
+
+Shipped along the way, not part of the original tiers:
+
+- [x] Admin view: runtime PS IP / source / log level (persisted), live log viewer,
+  diagnostics, car-DB updater, data management
+- [x] Overlay builder: pick/order widgets, strip / stack / phone-grid layouts, scale,
+  background opacity, green-screen page mode, placeholder telemetry for designing,
+  per-device URLs (path-based for strict validators, LAN URL shown)
+- [x] Multi-lap racing-line overlay on the track map (GT7 Data Logger-style) with a
+  synced cursor dot per lap
+- [x] Synchronized click-and-drag section zoom across all charts + track map +
+  deviation chart (native ECharts dataZoomSelect), sector presets, double-click reset
+- [x] Live delta vs previous best (was: always +0.000), FIN state after the checkered flag
+- [x] Capture robustness: serialized UDP pipeline (duplicate-lap race fix), phantom-lap
+  guard, empty-session cleanup
+- [x] One-command dev environment (`./dev.sh`)
 
 ## Suggested starting point
 

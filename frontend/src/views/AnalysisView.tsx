@@ -31,7 +31,8 @@ export function AnalysisView() {
   useEffect(() => {
     api.sessions().then((s) => {
       setSessions(s);
-      setSessionId((cur) => cur ?? s[0]?.id ?? null);
+      // Default to the newest session that actually has laps to chart.
+      setSessionId((cur) => cur ?? s.find((x) => x.lap_count > 0)?.id ?? s[0]?.id ?? null);
     }).catch(() => setError("Could not load sessions"));
   }, [lapEpoch]);
 
@@ -40,7 +41,11 @@ export function AnalysisView() {
   const manualSelection = useRef(false);
   useEffect(() => {
     if (sessionId == null) return;
-    api.sessionLaps(sessionId).then((ls) => {
+    api.sessionLaps(sessionId).then((all) => {
+      // Laps without samples (phantoms from menu/replay flicker in old
+      // recordings) have nothing to chart — keep them out of the picker.
+      // Unknown tick counts are treated as empty, not as chartable.
+      const ls = all.filter((lap) => (lap.total_ticks ?? 0) > 0);
       setLaps(ls);
       if (ls.length === 0) return;
       const best = [...ls].sort((a, b) => a.time_ms - b.time_ms)[0];
@@ -77,6 +82,14 @@ export function AnalysisView() {
     if (sessionId == null) return;
     api.deviation(sessionId).then(setDeviation).catch(() => setDeviation(null));
   }, [sessionId, lapEpoch]);
+
+  // Synchronized zoom state across all charts (minDist, maxDist in meters)
+  const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
+
+  // Reset zoom window when session or lap selection changes
+  useEffect(() => {
+    setZoomRange(null);
+  }, [sessionId, selected, refLap]);
 
   // Cursor sync (rAF-throttled to keep hover smooth)
   const [cursorDist, setCursorDist] = useState<number | null>(null);
@@ -204,6 +217,8 @@ export function AnalysisView() {
               lapLabels={lapLabels}
               units={units}
               onCursorDist={onCursorDist}
+              zoomRange={zoomRange}
+              onZoomChange={setZoomRange}
             />
           </div>
         )}
@@ -215,12 +230,17 @@ export function AnalysisView() {
           <SidePanel
             title={mapLaps.length > 1 ? "Race lines — selected laps" : "Race line (reference lap)"}
           >
-            <RaceLineMap laps={mapLaps} cursorDist={cursorDist} step={compare!.step} />
+            <RaceLineMap
+              laps={mapLaps}
+              cursorDist={cursorDist}
+              step={compare!.step}
+              zoomRange={zoomRange}
+            />
           </SidePanel>
         )}
         {deviation && deviation.dist.length > 0 && (
           <SidePanel title={`Consistency — best ${deviation.lap_ids.length} laps`}>
-            <DeviationChart data={deviation} units={units} />
+            <DeviationChart data={deviation} units={units} zoomRange={zoomRange} />
           </SidePanel>
         )}
         {refLap != null && (

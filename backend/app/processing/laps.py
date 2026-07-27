@@ -14,6 +14,10 @@ log = logging.getLogger(__name__)
 TICK_SECONDS = 1 / 60
 FULL_INPUT = 250  # of 255; GT7 rarely reports exactly 255 with analog triggers
 TIRE_SPIN_THRESHOLD = 1.1
+# A "completed lap" with almost no samples is a phantom: GT7's lap counter
+# flickers through old values in menus/replays and re-reports a stale
+# last_lap_time. No real lap is shorter than this many ticks (~10 s).
+MIN_LAP_TICKS = 600
 
 # Columnar per-tick series kept for each lap. Column order matters for the
 # frontend; keep in sync with frontend/src/lib/types.ts.
@@ -86,6 +90,7 @@ class LapProcessor:
 
     on_lap: LapCallback
     on_session: SessionCallback
+    min_lap_ticks: int = MIN_LAP_TICKS
 
     _session: SessionInfo | None = None
     _current_lap: int = -1
@@ -134,7 +139,12 @@ class LapProcessor:
 
     async def _handle_lap_boundary(self, p: TelemetryPacket) -> None:
         prev = self._current_lap
-        completing = prev > 0 and p.current_lap == prev + 1 and p.last_lap_time_ms > 0
+        completing = (
+            prev > 0
+            and p.current_lap == prev + 1
+            and p.last_lap_time_ms > 0
+            and len(self._samples["t"]) >= self.min_lap_ticks
+        )
         finished_samples = self._samples
         fuel_start = self._fuel_start
 
