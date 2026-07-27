@@ -26,8 +26,24 @@ const PRESETS_KEY = "gt7-overlay-presets";
 
 const WIDGET_SCALE_STEPS = [0.75, 1, 1.25, 1.5, 2];
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// Merge untrusted JSON (localStorage, imported preset files) over the
+// defaults, sanitizing the fields later code dereferences.
 function normalizeConfig(raw: unknown): OverlayConfig {
-  return { ...DEFAULT_CONFIG, ...(raw as OverlayConfig) };
+  const merged = { ...DEFAULT_CONFIG, ...(isPlainObject(raw) ? raw : {}) } as OverlayConfig;
+  if (!isPlainObject(merged.widgetScales)) merged.widgetScales = {};
+  const size = merged.size as unknown;
+  if (
+    !isPlainObject(size) ||
+    !Number.isFinite(size.width) ||
+    !Number.isFinite(size.height)
+  ) {
+    if (merged.size != null) merged.size = null;
+  }
+  return merged;
 }
 
 function loadSaved(): OverlayConfig {
@@ -111,11 +127,13 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
 
   function exportConfig() {
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = "gt7-overlay.json";
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Revoking synchronously can cancel the download in some browsers.
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   async function importConfig(file: File) {

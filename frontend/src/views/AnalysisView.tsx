@@ -173,6 +173,15 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   }, [compare, lapLabels, refLap]);
 
   if (sessions == null) {
+    // Failed fetch would otherwise leave the skeleton up forever.
+    if (error) {
+      return (
+        <div className="flex h-64 flex-col items-center justify-center gap-1 text-ink-dim">
+          <div className="text-lg text-brake">{error}</div>
+          <div className="text-sm">Check that the server is running, then reload.</div>
+        </div>
+      );
+    }
     return (
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
         <div className="space-y-3">

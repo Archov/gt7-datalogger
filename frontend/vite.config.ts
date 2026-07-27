@@ -12,7 +12,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (/node_modules\/(echarts|zrender)\//.test(id)) return "echarts";
+          if (/node_modules[\\/](echarts|zrender)[\\/]/.test(id)) return "echarts";
         },
       },
     },

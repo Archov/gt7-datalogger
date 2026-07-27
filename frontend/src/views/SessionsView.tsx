@@ -47,7 +47,8 @@ export function SessionsView() {
     a.href = url;
     a.download = `gt7-lap-${id}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Revoking synchronously can cancel the download in some browsers.
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   async function importLap(file: File) {
@@ -131,9 +132,13 @@ export function SessionsView() {
         {(sessions ?? []).map((s) => (
           <div key={s.id} className="rounded-xl bg-panel">
             <div className="flex w-full items-center gap-4 px-4 py-3">
-              <button
+              {/* Click-to-toggle convenience area. Deliberately a div, not a
+                  button: it contains the "name track…" button, and interactive
+                  elements must not nest. The chevron button below is the
+                  accessible toggle. */}
+              <div
                 onClick={() => setExpanded(expanded === s.id ? null : s.id)}
-                className="flex min-w-0 flex-1 items-center gap-4 text-left"
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-4 text-left"
               >
                 <span className="font-tabular text-sm text-ink-dim">#{s.id}</span>
                 <span className="truncate font-medium">{s.car_name}</span>
@@ -143,23 +148,15 @@ export function SessionsView() {
                   </span>
                 ) : (
                   s.lap_count > 0 && (
-                    <span
-                      role="button"
-                      tabIndex={0}
+                    <button
                       className="rounded-full border border-dashed border-edge px-2 py-0.5 text-xs text-ink-dim hover:text-ink"
                       onClick={(e) => {
                         e.stopPropagation();
                         setNaming(s.id);
                       }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.stopPropagation();
-                          setNaming(s.id);
-                        }
-                      }}
                     >
                       name track…
-                    </span>
+                    </button>
                   )
                 )}
                 <span className="text-xs text-ink-dim">{formatTime(s.started_at)}</span>
@@ -172,7 +169,7 @@ export function SessionsView() {
                     )}
                   </span>
                 </span>
-              </button>
+              </div>
               {s.lap_count > 0 && (
                 <Tip content="Open this session in the Analysis view">
                   <button className="btn shrink-0" onClick={() => analyzeSession(s)}>
@@ -183,6 +180,7 @@ export function SessionsView() {
               <button
                 onClick={() => setExpanded(expanded === s.id ? null : s.id)}
                 className="text-ink-dim"
+                aria-expanded={expanded === s.id}
                 aria-label={expanded === s.id ? "Collapse session" : "Expand session"}
               >
                 {expanded === s.id ? "▾" : "▸"}
