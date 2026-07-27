@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LapSparkline } from "@/components/LapSparkline";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/Dialog";
+import { Tip } from "@/components/ui/Tooltip";
 import { api } from "@/lib/api";
 import { lapColor } from "@/lib/colors";
 import { formatLapTime, formatSpeed, formatTime } from "@/lib/format";
@@ -173,13 +174,11 @@ export function SessionsView() {
                 </span>
               </button>
               {s.lap_count > 0 && (
-                <button
-                  className="btn shrink-0"
-                  title="Open this session in the Analysis view"
-                  onClick={() => analyzeSession(s)}
-                >
-                  Analyze
-                </button>
+                <Tip content="Open this session in the Analysis view">
+                  <button className="btn shrink-0" onClick={() => analyzeSession(s)}>
+                    Analyze
+                  </button>
+                </Tip>
               )}
               <button
                 onClick={() => setExpanded(expanded === s.id ? null : s.id)}
@@ -332,20 +331,22 @@ function LapTable({
                 <td className="px-2 py-1.5">{lap.tire_spin_pct.toFixed(0)}%</td>
                 <td className="px-2 py-1.5">{formatSpeed(lap.max_speed, units)}</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                  <button
-                    className="mr-2 text-ink-dim hover:text-accent"
-                    onClick={() => onCompare(lap.id, lap.id === bestId ? null : bestId)}
-                    title="Compare against the session's best lap in Analysis"
-                  >
-                    compare
-                  </button>
-                  <button
-                    className="mr-2 text-ink-dim hover:text-accent"
-                    onClick={() => onCompare(lap.id, lap.id)}
-                    title="Open Analysis with this lap as the reference"
-                  >
-                    set ref
-                  </button>
+                  <Tip content="Compare against the session's best lap in Analysis">
+                    <button
+                      className="mr-2 text-ink-dim hover:text-accent"
+                      onClick={() => onCompare(lap.id, lap.id === bestId ? null : bestId)}
+                    >
+                      compare
+                    </button>
+                  </Tip>
+                  <Tip content="Open Analysis with this lap as the reference">
+                    <button
+                      className="mr-2 text-ink-dim hover:text-accent"
+                      onClick={() => onCompare(lap.id, lap.id)}
+                    >
+                      set ref
+                    </button>
+                  </Tip>
                   <button className="mr-2 text-ink-dim hover:text-ink" onClick={() => onExport(lap.id)}>
                     json
                   </button>

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Tip } from "@/components/ui/Tooltip";
 import { api } from "@/lib/api";
 import { navigate, type View } from "@/lib/router";
 import { useSettings } from "@/store/settings";
@@ -57,28 +58,30 @@ export function StatusBar({ view }: { view: View }) {
             <span className="hidden sm:inline">
               {status.source === "sim" ? "Simulated source" : status.console_ip || "auto-discover"}
             </span>
-            <button
-              onClick={() =>
-                api.setRecording(!status.recording).then(setStatus).catch(() => {})
-              }
-              className={`rounded-md border px-2 py-1 ${
-                status.recording
-                  ? "border-brake/50 text-brake"
-                  : "border-edge text-ink-dim hover:text-ink"
-              }`}
-              title="Toggle lap recording"
-            >
-              {status.recording ? "● REC" : "○ Paused"}
-            </button>
+            <Tip content="Toggle lap recording">
+              <button
+                onClick={() =>
+                  api.setRecording(!status.recording).then(setStatus).catch(() => {})
+                }
+                className={`rounded-md border px-2 py-1 ${
+                  status.recording
+                    ? "border-brake/50 text-brake"
+                    : "border-edge text-ink-dim hover:text-ink"
+                }`}
+              >
+                {status.recording ? "● REC" : "○ Paused"}
+              </button>
+            </Tip>
           </>
         )}
-        <button
-          onClick={() => setUnits(units === "metric" ? "imperial" : "metric")}
-          className="rounded-md border border-edge px-2 py-1 hover:text-ink"
-          title="Toggle speed units"
-        >
-          {units === "metric" ? "km/h" : "mph"}
-        </button>
+        <Tip content="Toggle speed units">
+          <button
+            onClick={() => setUnits(units === "metric" ? "imperial" : "metric")}
+            className="rounded-md border border-edge px-2 py-1 hover:text-ink"
+          >
+            {units === "metric" ? "km/h" : "mph"}
+          </button>
+        </Tip>
       </div>
     </header>
   );

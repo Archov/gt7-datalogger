@@ -8,6 +8,8 @@ import { DeviationChart } from "@/components/analysis/DeviationChart";
 import { FuelMapPanel } from "@/components/analysis/FuelMapPanel";
 import { RaceLineMap, type MapLap } from "@/components/analysis/RaceLineMap";
 import { StackedCharts } from "@/components/analysis/StackedCharts";
+import { Select } from "@/components/ui/Select";
+import { Tip } from "@/components/ui/Tooltip";
 import { api } from "@/lib/api";
 import { lapColor } from "@/lib/colors";
 import { formatLapTime, formatSpeed } from "@/lib/format";
@@ -198,74 +200,73 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
       {/* Left: selector + stacked charts */}
       <div className="min-w-0">
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel p-3">
-          <select
-            value={sessionId ?? ""}
-            onChange={(e) => {
+          <Select
+            ariaLabel="Session"
+            value={String(sessionId ?? "")}
+            onValueChange={(v) => {
               manualSelection.current = false;
-              setSessionId(Number(e.target.value));
+              setSessionId(Number(v));
             }}
-            className="rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-sm"
-          >
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                #{s.id} · {s.car_name} · {s.lap_count} laps
-              </option>
-            ))}
-          </select>
+            options={sessions.map((s) => ({
+              value: String(s.id),
+              label: `#${s.id} · ${s.car_name} · ${s.lap_count} laps`,
+            }))}
+            className="px-2 py-1.5 text-sm"
+          />
           {/* Scrolls horizontally on narrow screens instead of overflowing */}
           <div className="flex min-w-0 max-w-full gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-x-visible sm:pb-0">
             {laps.map((lap) => {
               const active = selected.includes(lap.id);
               const isRef = lap.id === refLap;
               return (
-                <button
-                  key={lap.id}
-                  onClick={() => {
-                    manualSelection.current = true;
-                    setSelected((cur) =>
-                      active ? cur.filter((id) => id !== lap.id) : [...cur, lap.id],
-                    );
-                  }}
-                  onDoubleClick={() => {
-                    manualSelection.current = true;
-                    setRefLap(lap.id);
-                  }}
-                  title="Click to toggle, double-click to set as reference"
-                  className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-tabular text-xs transition-colors ${
-                    isRef
-                      ? "border-accent bg-accent/15 text-accent"
-                      : active
-                        ? "border-edge bg-panel-2 text-ink"
-                        : "border-edge text-ink-dim hover:text-ink"
-                  }`}
-                >
-                  {active && (
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: lapColor(lap.id) }}
-                    />
-                  )}
-                  L{lap.number} {formatLapTime(lap.time_ms)}
-                </button>
+                <Tip key={lap.id} content="Click to toggle, double-click to set as reference">
+                  <button
+                    onClick={() => {
+                      manualSelection.current = true;
+                      setSelected((cur) =>
+                        active ? cur.filter((id) => id !== lap.id) : [...cur, lap.id],
+                      );
+                    }}
+                    onDoubleClick={() => {
+                      manualSelection.current = true;
+                      setRefLap(lap.id);
+                    }}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-tabular text-xs transition-colors ${
+                      isRef
+                        ? "border-accent bg-accent/15 text-accent"
+                        : active
+                          ? "border-edge bg-panel-2 text-ink"
+                          : "border-edge text-ink-dim hover:text-ink"
+                    }`}
+                  >
+                    {active && (
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: lapColor(lap.id) }}
+                      />
+                    )}
+                    L{lap.number} {formatLapTime(lap.time_ms)}
+                  </button>
+                </Tip>
               );
             })}
           </div>
           {refLap != null && (
-            <select
-              value={refLap}
-              onChange={(e) => {
-                manualSelection.current = true;
-                setRefLap(Number(e.target.value));
-              }}
-              className="ml-auto rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-xs"
-              title="Reference lap"
-            >
-              {laps.map((lap) => (
-                <option key={lap.id} value={lap.id}>
-                  ref: L{lap.number} {formatLapTime(lap.time_ms)}
-                </option>
-              ))}
-            </select>
+            <div className="ml-auto">
+              <Select
+                ariaLabel="Reference lap"
+                value={String(refLap)}
+                onValueChange={(v) => {
+                  manualSelection.current = true;
+                  setRefLap(Number(v));
+                }}
+                options={laps.map((lap) => ({
+                  value: String(lap.id),
+                  label: `ref: L${lap.number} ${formatLapTime(lap.time_ms)}`,
+                }))}
+                className="px-2 py-1.5 text-xs"
+              />
+            </div>
           )}
         </div>
 

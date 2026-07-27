@@ -5,6 +5,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PromptDialog } from "@/components/ui/Dialog";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
 import {
   buildOverlayUrl,
@@ -278,62 +280,49 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
 
           <div>
             <span className="mb-1 block text-xs text-ink-dim">Layout</span>
-            <div className="flex overflow-hidden rounded-md border border-edge">
-              {(
-                [
-                  ["strip", "Strip (OBS)"],
-                  ["stack", "Stack (side)"],
-                  ["grid", "Grid (phone)"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  onClick={() => setConfig((c) => ({ ...c, layout: value }))}
-                  className={`px-3 py-1.5 text-xs ${
-                    config.layout === value
-                      ? "bg-accent/15 text-accent"
-                      : "text-ink-dim hover:text-ink"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              ariaLabel="Overlay layout"
+              value={config.layout}
+              onValueChange={(layout) => setConfig((c) => ({ ...c, layout }))}
+              options={[
+                { value: "strip", label: "Strip (OBS)" },
+                { value: "stack", label: "Stack (side)" },
+                { value: "grid", label: "Grid (phone)" },
+              ]}
+            />
           </div>
 
           {config.layout !== "grid" && (
             <div>
               <span className="mb-1 block text-xs text-ink-dim">Vertical alignment</span>
-              <div className="flex overflow-hidden rounded-md border border-edge">
-                {(["top", "center", "bottom"] as const).map((a) => (
-                  <button
-                    key={a}
-                    onClick={() => setConfig((c) => ({ ...c, align: a }))}
-                    className={`px-3 py-1.5 text-xs capitalize ${
-                      config.align === a ? "bg-accent/15 text-accent" : "text-ink-dim hover:text-ink"
-                    }`}
-                  >
-                    {a}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                ariaLabel="Vertical alignment"
+                value={config.align}
+                onValueChange={(align) => setConfig((c) => ({ ...c, align }))}
+                options={[
+                  { value: "top", label: "Top" },
+                  { value: "center", label: "Center" },
+                  { value: "bottom", label: "Bottom" },
+                ]}
+              />
             </div>
           )}
 
           <div className="flex items-center gap-4">
-            <label className="text-xs text-ink-dim">
+            <label className="flex items-center text-xs text-ink-dim">
               Scale
-              <select
-                value={config.scale}
-                onChange={(e) => setConfig((c) => ({ ...c, scale: Number(e.target.value) }))}
-                className="ml-2 rounded-md border border-edge bg-panel-2 px-2 py-1 text-xs text-ink"
-              >
-                {[0.75, 1, 1.25, 1.5, 2].map((s) => (
-                  <option key={s} value={s}>
-                    {s * 100}%
-                  </option>
-                ))}
-              </select>
+              <span className="ml-2">
+                <Select
+                  ariaLabel="Global scale"
+                  value={String(config.scale)}
+                  onValueChange={(v) => setConfig((c) => ({ ...c, scale: Number(v) }))}
+                  options={[0.75, 1, 1.25, 1.5, 2].map((s) => ({
+                    value: String(s),
+                    label: `${s * 100}%`,
+                  }))}
+                  className="px-2 py-1 text-xs"
+                />
+              </span>
             </label>
             <label className="flex flex-1 items-center gap-2 text-xs text-ink-dim">
               Background {config.bg}%
@@ -387,27 +376,16 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
 
           <div>
             <span className="mb-1 block text-xs text-ink-dim">Page behind the widgets</span>
-            <div className="flex overflow-hidden rounded-md border border-edge">
-              {(
-                [
-                  ["transparent", "Transparent"],
-                  ["green", "Green screen"],
-                  ["dark", "Solid dark"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  onClick={() => setConfig((c) => ({ ...c, page: value }))}
-                  className={`px-3 py-1.5 text-xs ${
-                    config.page === value
-                      ? "bg-accent/15 text-accent"
-                      : "text-ink-dim hover:text-ink"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              ariaLabel="Page behind the widgets"
+              value={config.page}
+              onValueChange={(page) => setConfig((c) => ({ ...c, page }))}
+              options={[
+                { value: "transparent", label: "Transparent" },
+                { value: "green", label: "Green screen" },
+                { value: "dark", label: "Solid dark" },
+              ]}
+            />
             <p className="mt-1 text-[11px] text-ink-dim">
               Transparent needs an alpha-capable source (OBS “Browser”). If your app shows the
               page as black (e.g. TikTok LIVE Studio links), pick{" "}
@@ -456,18 +434,16 @@ export function OverlayBuilder({ flash }: { flash: (text: string) => void }) {
                       </label>
                       {active && (
                         <>
-                          <select
-                            value={config.widgetScales[id] ?? 1}
-                            onChange={(e) => setWidgetScale(id, Number(e.target.value))}
-                            className="rounded border border-edge bg-panel px-1 py-0.5 text-[10px] text-ink-dim"
-                            title="Size of this widget relative to the others"
-                          >
-                            {WIDGET_SCALE_STEPS.map((s) => (
-                              <option key={s} value={s}>
-                                {s * 100}%
-                              </option>
-                            ))}
-                          </select>
+                          <Select
+                            ariaLabel={`Size of the ${WIDGET_LABELS[id]} widget`}
+                            value={String(config.widgetScales[id] ?? 1)}
+                            onValueChange={(v) => setWidgetScale(id, Number(v))}
+                            options={WIDGET_SCALE_STEPS.map((s) => ({
+                              value: String(s),
+                              label: `${s * 100}%`,
+                            }))}
+                            className="px-1.5 py-0.5 text-[10px]"
+                          />
                           <button
                             className="px-1 text-ink-dim hover:text-ink"
                             onClick={() => moveWidget(id, -1)}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { StatusBar } from "@/components/StatusBar";
 import { Toasts } from "@/components/ui/Toasts";
+import { TooltipProvider } from "@/components/ui/Tooltip";
 import { isOverlayLocation, parseOverlayLocation } from "@/lib/overlay";
 import { parseAnalysisParams, parseHash, type Route } from "@/lib/router";
 import { AdminView } from "@/views/AdminView";
@@ -39,15 +40,17 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <StatusBar view={route.view} />
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        {route.view === "live" && <LiveView />}
-        {route.view === "analysis" && <AnalysisView request={analysisRequest} />}
-        {route.view === "sessions" && <SessionsView />}
-        {route.view === "admin" && <AdminView />}
-      </main>
-      <Toasts />
-    </div>
+    <TooltipProvider delayDuration={300}>
+      <div className="flex h-full flex-col">
+        <StatusBar view={route.view} />
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          {route.view === "live" && <LiveView />}
+          {route.view === "analysis" && <AnalysisView request={analysisRequest} />}
+          {route.view === "sessions" && <SessionsView />}
+          {route.view === "admin" && <AdminView />}
+        </main>
+        <Toasts />
+      </div>
+    </TooltipProvider>
   );
 }
