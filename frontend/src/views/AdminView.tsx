@@ -3,10 +3,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OverlayBuilder } from "@/components/OverlayBuilder";
+import { ConfirmDialog } from "@/components/ui/Dialog";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import type { AdminSettings, AdminStats, LogRecord } from "@/lib/types";
 import { useTelemetry } from "@/store/telemetry";
+import { toast } from "@/store/toasts";
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
 
@@ -22,12 +24,11 @@ export function AdminView() {
   const setStatus = useTelemetry((s) => s.setStatus);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
-  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const flash = useCallback((text: string, error = false) => {
-    setMessage({ text, error });
-    window.setTimeout(() => setMessage(null), 4000);
+    toast(text, error ? "error" : "success");
   }, []);
 
   const refreshStats = useCallback(() => {
@@ -72,14 +73,7 @@ export function AdminView() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-3 p-3">
-      <div className="flex items-center gap-3">
-        <h2 className="text-lg font-semibold">Admin</h2>
-        {message && (
-          <span className={`text-sm ${message.error ? "text-brake" : "text-accent"}`}>
-            {message.text}
-          </span>
-        )}
-      </div>
+      <h2 className="text-lg font-semibold">Admin</h2>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* Connection settings */}
@@ -168,10 +162,7 @@ export function AdminView() {
           <button
             className="btn-danger"
             disabled={busy !== null}
-            onClick={() => {
-              if (!confirm("Delete ALL recorded sessions and laps? This cannot be undone.")) return;
-              run("Clear data", api.admin.clearData, () => "All sessions and laps deleted");
-            }}
+            onClick={() => setConfirmingClear(true)}
           >
             Delete all recorded data
           </button>
@@ -180,6 +171,19 @@ export function AdminView() {
           </span>
         </div>
       </Panel>
+
+      <ConfirmDialog
+        open={confirmingClear}
+        title="Delete ALL recorded data?"
+        body="Every session and lap will be deleted. This cannot be undone — export laps you want to keep first."
+        confirmLabel="Delete everything"
+        danger
+        onConfirm={() => {
+          setConfirmingClear(false);
+          run("Clear data", api.admin.clearData, () => "All sessions and laps deleted");
+        }}
+        onCancel={() => setConfirmingClear(false)}
+      />
     </div>
   );
 }
