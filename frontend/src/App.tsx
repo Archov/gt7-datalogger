@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StatusBar } from "@/components/StatusBar";
+import { Toasts } from "@/components/ui/Toasts";
 import { isOverlayLocation, parseOverlayLocation } from "@/lib/overlay";
+import { parseAnalysisParams, parseHash, type Route } from "@/lib/router";
 import { AdminView } from "@/views/AdminView";
 import { AnalysisView } from "@/views/AnalysisView";
 import { LiveView } from "@/views/LiveView";
@@ -8,19 +10,29 @@ import { OverlayView } from "@/views/OverlayView";
 import { SessionsView } from "@/views/SessionsView";
 import { useTelemetry } from "@/store/telemetry";
 
-export type View = "live" | "analysis" | "sessions" | "admin";
-
-export default function App() {
-  const [view, setView] = useState<View>("live");
-  const [, setHashTick] = useState(0);
-  const connect = useTelemetry((s) => s.connect);
-
-  useEffect(() => connect(), [connect]);
+function useRoute(): Route {
+  const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
   useEffect(() => {
-    const onHash = () => setHashTick((n) => n + 1);
+    const onHash = () => setRoute(parseHash(window.location.hash));
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+  return route;
+}
+
+export default function App() {
+  const route = useRoute();
+  const connect = useTelemetry((s) => s.connect);
+
+  useEffect(() => connect(), [connect]);
+
+  // Selection handed to Analysis via deep link / cross-view navigation.
+  // Keyed on the serialized params so pasting a new URL re-applies it.
+  const analysisParams = route.params.toString();
+  const analysisRequest = useMemo(
+    () => parseAnalysisParams(new URLSearchParams(analysisParams)),
+    [analysisParams],
+  );
 
   if (isOverlayLocation(window.location)) {
     return <OverlayView config={parseOverlayLocation(window.location)} />;
@@ -28,13 +40,14 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <StatusBar view={view} onViewChange={setView} />
+      <StatusBar view={route.view} />
       <main className="min-h-0 flex-1 overflow-y-auto">
-        {view === "live" && <LiveView />}
-        {view === "analysis" && <AnalysisView />}
-        {view === "sessions" && <SessionsView />}
-        {view === "admin" && <AdminView />}
+        {route.view === "live" && <LiveView />}
+        {route.view === "analysis" && <AnalysisView request={analysisRequest} />}
+        {route.view === "sessions" && <SessionsView />}
+        {route.view === "admin" && <AdminView />}
       </main>
+      <Toasts />
     </div>
   );
 }

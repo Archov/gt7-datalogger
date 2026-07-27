@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import type { View } from "@/App";
 import { api } from "@/lib/api";
+import { navigate, type View } from "@/lib/router";
 import { useSettings } from "@/store/settings";
 import { useTelemetry } from "@/store/telemetry";
 
@@ -11,13 +11,7 @@ const TABS: { id: View; label: string }[] = [
   { id: "admin", label: "Admin" },
 ];
 
-export function StatusBar({
-  view,
-  onViewChange,
-}: {
-  view: View;
-  onViewChange: (v: View) => void;
-}) {
+export function StatusBar({ view }: { view: View }) {
   const { status, wsConnected, setStatus } = useTelemetry();
   const { units, setUnits } = useSettings();
 
@@ -40,12 +34,13 @@ export function StatusBar({
         <h1 className="text-sm font-semibold tracking-wide">GT7 Datalogger</h1>
       </div>
 
-      <nav className="flex gap-1">
+      <nav className="flex gap-1 overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.id}
-            onClick={() => onViewChange(t.id)}
-            className={`rounded-md px-3 py-1 text-sm transition-colors ${
+            onClick={() => navigate(t.id)}
+            aria-current={view === t.id ? "page" : undefined}
+            className={`shrink-0 rounded-md px-3 py-1 text-sm transition-colors ${
               view === t.id
                 ? "bg-panel-2 text-ink"
                 : "text-ink-dim hover:bg-panel-2/60 hover:text-ink"
