@@ -2,6 +2,7 @@
 // linked axis pointer: hovering any panel shows the cursor at the same
 // distance in every panel. Far cheaper than N connected chart instances.
 
+import type * as echarts from "echarts";
 import type { EChartsOption, SeriesOption } from "echarts";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";

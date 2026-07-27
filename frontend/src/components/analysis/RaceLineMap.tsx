@@ -82,25 +82,38 @@ export function RaceLineMap({
     }
 
     // Comparison laps first (under the reference), as solid colored lines.
+    // Per-point itemStyle only affects symbols, never the line stroke, so
+    // zoom-dimming needs two series: a dim full-lap line plus a bright
+    // overlay covering only the zoomed section.
     for (const lap of laps) {
       if (lap.isRef) continue;
       const s = lap.entry.series;
       series.push({
         id: `line-${lap.id}`,
         type: "line",
-        data: s.dist.map((d, i) => {
-          const inZoom = zoomRange ? d >= zoomRange[0] && d <= zoomRange[1] : true;
-          return {
-            value: [s.pos_x[i], s.pos_z[i]],
-            symbolSize: inZoom ? 3 : 1,
-            itemStyle: { opacity: inZoom ? 0.9 : 0.2 },
-          };
-        }),
+        data: s.dist.map((_, i) => [s.pos_x[i], s.pos_z[i]]),
         showSymbol: false,
-        lineStyle: { color: lap.color, width: zoomRange ? 2 : 1.6, opacity: zoomRange ? 0.85 : 0.9 },
+        lineStyle: { color: lap.color, width: 1.6, opacity: zoomRange ? 0.15 : 0.9 },
         silent: true,
         z: 2,
       });
+      if (zoomRange) {
+        const inZoom: [number, number][] = [];
+        for (let i = 0; i < s.dist.length; i++) {
+          if (s.dist[i] >= zoomRange[0] && s.dist[i] <= zoomRange[1]) {
+            inZoom.push([s.pos_x[i], s.pos_z[i]]);
+          }
+        }
+        series.push({
+          id: `line-zoom-${lap.id}`,
+          type: "line",
+          data: inZoom,
+          showSymbol: false,
+          lineStyle: { color: lap.color, width: 2, opacity: 0.9 },
+          silent: true,
+          z: 2,
+        });
+      }
     }
 
     if (ref) {

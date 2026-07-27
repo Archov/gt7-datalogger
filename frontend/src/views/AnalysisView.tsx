@@ -44,7 +44,8 @@ export function AnalysisView() {
     api.sessionLaps(sessionId).then((all) => {
       // Laps without samples (phantoms from menu/replay flicker in old
       // recordings) have nothing to chart — keep them out of the picker.
-      const ls = all.filter((lap) => (lap.total_ticks ?? 1) > 0);
+      // Unknown tick counts are treated as empty, not as chartable.
+      const ls = all.filter((lap) => (lap.total_ticks ?? 0) > 0);
       setLaps(ls);
       if (ls.length === 0) return;
       const best = [...ls].sort((a, b) => a.time_ms - b.time_ms)[0];

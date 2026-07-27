@@ -88,14 +88,7 @@ class TelemetryService:
             await self._broadcast({"type": "telemetry", "data": self._live_frame(p)})
 
     async def _on_session(self, info: SessionInfo) -> None:
-        await self._summarize_previous_session()
-        # Menu visits and race restarts open sessions that never get a lap;
-        # drop the previous session if it stayed empty so they don't pile up.
-        if self.session_id is not None:
-            prev_laps = await self.repo.list_laps(self.session_id)
-            if not prev_laps:
-                await self.repo.delete_session(self.session_id)
-                log.info("dropped empty session %s", self.session_id)
+        await self._close_previous_session()
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
         self.track_name = ""
         self._session_best_ms = None
@@ -103,18 +96,27 @@ class TelemetryService:
         log.info("new session %s (car %s)", self.session_id, self.cars.name(info.car_id))
         await self._broadcast({"type": "session", "data": await self.status()})
 
-    async def _summarize_previous_session(self) -> None:
+    async def _close_previous_session(self) -> None:
+        """Summarize a finished session, or drop it if it never got a lap.
+
+        One aggregate query serves both paths — loading the lap rows would
+        drag every samples_json blob out of the DB just for bookkeeping.
+        """
         if self.session_id is None:
             return
-        laps = await self.repo.list_laps(self.session_id)
-        if not laps:
+        stats = await self.repo.session_lap_stats(self.session_id)
+        if stats["count"] == 0:
+            # Menu visits and race restarts open sessions that never get a
+            # lap; drop them so they don't pile up.
+            await self.repo.delete_session(self.session_id)
+            log.info("dropped empty session %s", self.session_id)
             return
         self.notifier.session_summary(
-            car=self.cars.name(laps[0]["car_id"]),
+            car=self.cars.name(stats["car_id"]),
             track=self.track_name,
-            lap_count=len(laps),
-            best_ms=min(lap["time_ms"] for lap in laps),
-            fuel_used=sum(lap["fuel_consumed"] for lap in laps),
+            lap_count=stats["count"],
+            best_ms=stats["best_ms"],
+            fuel_used=stats["fuel_used"],
         )
 
     async def _on_lap(self, lap: CompletedLap) -> None:
