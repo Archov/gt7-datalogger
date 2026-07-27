@@ -195,7 +195,7 @@ export function RaceLineMap({
       tooltip: { show: false },
       series,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Deliberately depends only on laps/zoomRange: cursor updates merge separately below.
   }, [laps, zoomRange]);
 
   // Cursor updates merge into the existing chart by series id — no rebuild.

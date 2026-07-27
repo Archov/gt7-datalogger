@@ -10,6 +10,8 @@ import {
   speedUnit,
   speedValue,
 } from "@/lib/format";
+import { lapColor } from "@/lib/colors";
+import { openInAnalysis } from "@/lib/router";
 import { projectStrategy } from "@/lib/strategy";
 import type { LapSummary, LiveFrame } from "@/lib/types";
 import { useSettings } from "@/store/settings";
@@ -187,14 +189,22 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
             <div className="text-ink-dim">Completed laps appear here.</div>
           )}
           {recentLaps.map((lap) => (
-            <div
+            <button
               key={lap.id}
-              className="flex items-center justify-between rounded-md bg-panel-2/60 px-2 py-1.5"
+              onClick={() => openInAnalysis({ session: lap.session_id, laps: [lap.id] })}
+              title="Open this lap in Analysis"
+              className="flex w-full items-center justify-between rounded-md bg-panel-2/60 px-2 py-1.5 text-left transition-colors hover:bg-panel-2"
             >
-              <span className="text-ink-dim">L{lap.number}</span>
+              <span className="flex items-center gap-1.5 text-ink-dim">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: lapColor(lap.id) }}
+                />
+                L{lap.number}
+              </span>
               <span>{formatLapTime(lap.time_ms)}</span>
               <span className="text-xs text-ink-dim">{lap.fuel_consumed.toFixed(1)}L</span>
-            </div>
+            </button>
           ))}
           </div>
         </Panel>

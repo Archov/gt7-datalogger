@@ -1,31 +1,67 @@
 // Analysis view: multi-lap comparison with synced cursors, race line map,
-// consistency (deviation), fuel strategy, and tuning info.
+// consistency (deviation), fuel strategy, and tuning info. The lap selection
+// can arrive via deep link (#/analysis?session=…&laps=…&ref=…) from the
+// Sessions or Live views, and is mirrored back into the URL for sharing.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeviationChart } from "@/components/analysis/DeviationChart";
 import { FuelMapPanel } from "@/components/analysis/FuelMapPanel";
 import { RaceLineMap, type MapLap } from "@/components/analysis/RaceLineMap";
-import { CHART_COLORS } from "@/components/EChart";
 import { StackedCharts } from "@/components/analysis/StackedCharts";
+import { Select } from "@/components/ui/Select";
+import { Tip } from "@/components/ui/Tooltip";
 import { api } from "@/lib/api";
+import { lapColor } from "@/lib/colors";
 import { formatLapTime, formatSpeed } from "@/lib/format";
+import { reflectAnalysisSelection, type AnalysisRequest } from "@/lib/router";
 import type { CompareResult, DeviationResult, LapSummary, SessionSummary } from "@/lib/types";
+import { useAnalysisSelection } from "@/store/analysis";
 import { useSettings } from "@/store/settings";
 import { useTelemetry } from "@/store/telemetry";
 
-export function AnalysisView() {
+export function AnalysisView({ request }: { request: AnalysisRequest }) {
   const units = useSettings((s) => s.units);
   const lapEpoch = useTelemetry((s) => s.lapEpoch);
 
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  // Seed from the shared selection so switching tabs doesn't reset the view.
+  const stored = useRef(useAnalysisSelection.getState()).current;
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [sessionId, setSessionId] = useState<number | null>(request.session ?? stored.sessionId);
   const [laps, setLaps] = useState<LapSummary[]>([]);
-  const [selected, setSelected] = useState<number[]>([]);
-  const [refLap, setRefLap] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number[]>(request.laps ?? stored.selectedLapIds);
+  const [refLap, setRefLap] = useState<number | null>(request.ref ?? stored.refLapId);
   const [compare, setCompare] = useState<CompareResult | null>(null);
   const [deviation, setDeviation] = useState<DeviationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Until the user (or a deep link) picks laps, selection follows
+  // "latest vs best" as new laps arrive live.
+  const manualSelection = useRef(
+    (request.laps ?? stored.selectedLapIds).length > 0 || (request.ref ?? stored.refLapId) != null,
+  );
+
+  // Apply a new deep link while the view is mounted (pasted URL).
+  const requestKey = `${request.session ?? ""}|${(request.laps ?? []).join(",")}|${request.ref ?? ""}`;
+  const firstRequest = useRef(true);
+  useEffect(() => {
+    if (firstRequest.current) {
+      firstRequest.current = false; // initial state already covers the mount
+      return;
+    }
+    if (request.session == null && request.laps == null && request.ref == null) return;
+    if (request.session != null) setSessionId(request.session);
+    if (request.laps != null || request.ref != null) {
+      manualSelection.current = true;
+      const lapIds = request.laps ?? [];
+      const withRef =
+        request.ref != null && !lapIds.includes(request.ref) ? [...lapIds, request.ref] : lapIds;
+      if (withRef.length > 0) setSelected(withRef);
+      if (request.ref != null) setRefLap(request.ref);
+    }
+    // Deliberately keyed on the serialized request only — re-running on every
+    // object identity change would clobber in-view selection edits.
+  }, [requestKey]);
 
   // Load sessions (refreshed when a new lap arrives live)
   useEffect(() => {
@@ -36,9 +72,7 @@ export function AnalysisView() {
     }).catch(() => setError("Could not load sessions"));
   }, [lapEpoch]);
 
-  // Load laps for the chosen session. Until the user picks laps manually,
-  // selection follows "latest vs best" as new laps arrive live.
-  const manualSelection = useRef(false);
+  // Load laps for the chosen session.
   useEffect(() => {
     if (sessionId == null) return;
     api.sessionLaps(sessionId).then((all) => {
@@ -61,6 +95,14 @@ export function AnalysisView() {
       );
     }).catch(() => setError("Could not load laps"));
   }, [sessionId, lapEpoch]);
+
+  // Publish the resolved selection: shared store (tab switches) + URL (sharing).
+  const setSharedSelection = useAnalysisSelection((s) => s.setSelection);
+  useEffect(() => {
+    if (sessionId == null || refLap == null || selected.length === 0) return;
+    setSharedSelection({ sessionId, selectedLapIds: selected, refLapId: refLap });
+    reflectAnalysisSelection({ session: sessionId, laps: selected, ref: refLap });
+  }, [sessionId, selected, refLap, setSharedSelection]);
 
   // Fetch comparison + deviation when the selection changes
   useEffect(() => {
@@ -118,23 +160,47 @@ export function AnalysisView() {
   const refEntry = compare?.laps[String(refLap)];
   const refSummary = laps.find((l) => l.id === refLap);
 
-  // Laps for the track map, colored exactly like the chart series (both use
-  // the same key order over compare.laps).
+  // Laps for the track map, colored by lap id exactly like the chart series.
   const mapLaps = useMemo<MapLap[]>(() => {
     if (!compare) return [];
-    return Object.keys(compare.laps).map((id, i) => ({
+    return Object.keys(compare.laps).map((id) => ({
       id,
       entry: compare.laps[id],
-      color: CHART_COLORS.series[i % CHART_COLORS.series.length],
+      color: lapColor(Number(id)),
       label: lapLabels[id] ?? `Lap ${id}`,
       isRef: id === String(refLap),
     }));
   }, [compare, lapLabels, refLap]);
 
+  if (sessions == null) {
+    // Failed fetch would otherwise leave the skeleton up forever.
+    if (error) {
+      return (
+        <div className="flex h-64 flex-col items-center justify-center gap-1 text-ink-dim">
+          <div className="text-lg text-brake">{error}</div>
+          <div className="text-sm">Check that the server is running, then reload.</div>
+        </div>
+      );
+    }
+    return (
+      <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
+        <div className="space-y-3">
+          <div className="skeleton h-14" />
+          <div className="skeleton h-96" />
+        </div>
+        <div className="hidden space-y-3 xl:block">
+          <div className="skeleton h-64" />
+          <div className="skeleton h-40" />
+        </div>
+      </div>
+    );
+  }
+
   if (sessions.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center text-ink-dim">
-        No sessions yet — drive some laps first.
+      <div className="flex h-64 flex-col items-center justify-center gap-1 text-ink-dim">
+        <div className="text-lg">No sessions yet</div>
+        <div className="text-sm">Drive some laps first — they'll show up here for comparison.</div>
       </div>
     );
   }
@@ -144,72 +210,78 @@ export function AnalysisView() {
       {/* Left: selector + stacked charts */}
       <div className="min-w-0">
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel p-3">
-          <select
-            value={sessionId ?? ""}
-            onChange={(e) => {
+          <Select
+            ariaLabel="Session"
+            value={String(sessionId ?? "")}
+            onValueChange={(v) => {
               manualSelection.current = false;
-              setSessionId(Number(e.target.value));
+              setSessionId(Number(v));
             }}
-            className="rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-sm"
-          >
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                #{s.id} · {s.car_name} · {s.lap_count} laps
-              </option>
-            ))}
-          </select>
-          <div className="flex flex-wrap gap-1.5">
+            options={sessions.map((s) => ({
+              value: String(s.id),
+              label: `#${s.id} · ${s.car_name} · ${s.lap_count} laps`,
+            }))}
+            className="px-2 py-1.5 text-sm"
+          />
+          {/* Scrolls horizontally on narrow screens instead of overflowing */}
+          <div className="flex min-w-0 max-w-full gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-x-visible sm:pb-0">
             {laps.map((lap) => {
               const active = selected.includes(lap.id);
               const isRef = lap.id === refLap;
               return (
-                <button
-                  key={lap.id}
-                  onClick={() => {
-                    manualSelection.current = true;
-                    setSelected((cur) =>
-                      active ? cur.filter((id) => id !== lap.id) : [...cur, lap.id],
-                    );
-                  }}
-                  onDoubleClick={() => {
-                    manualSelection.current = true;
-                    setRefLap(lap.id);
-                  }}
-                  title="Click to toggle, double-click to set as reference"
-                  className={`rounded-md border px-2 py-1 font-tabular text-xs transition-colors ${
-                    isRef
-                      ? "border-accent bg-accent/15 text-accent"
-                      : active
-                        ? "border-edge bg-panel-2 text-ink"
-                        : "border-edge text-ink-dim hover:text-ink"
-                  }`}
-                >
-                  L{lap.number} {formatLapTime(lap.time_ms)}
-                </button>
+                <Tip key={lap.id} content="Click to toggle, double-click to set as reference">
+                  <button
+                    onClick={() => {
+                      manualSelection.current = true;
+                      setSelected((cur) =>
+                        active ? cur.filter((id) => id !== lap.id) : [...cur, lap.id],
+                      );
+                    }}
+                    onDoubleClick={() => {
+                      manualSelection.current = true;
+                      setRefLap(lap.id);
+                    }}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-tabular text-xs transition-colors ${
+                      isRef
+                        ? "border-accent bg-accent/15 text-accent"
+                        : active
+                          ? "border-edge bg-panel-2 text-ink"
+                          : "border-edge text-ink-dim hover:text-ink"
+                    }`}
+                  >
+                    {active && (
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: lapColor(lap.id) }}
+                      />
+                    )}
+                    L{lap.number} {formatLapTime(lap.time_ms)}
+                  </button>
+                </Tip>
               );
             })}
           </div>
           {refLap != null && (
-            <select
-              value={refLap}
-              onChange={(e) => {
-                manualSelection.current = true;
-                setRefLap(Number(e.target.value));
-              }}
-              className="ml-auto rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-xs"
-              title="Reference lap"
-            >
-              {laps.map((lap) => (
-                <option key={lap.id} value={lap.id}>
-                  ref: L{lap.number} {formatLapTime(lap.time_ms)}
-                </option>
-              ))}
-            </select>
+            <div className="ml-auto">
+              <Select
+                ariaLabel="Reference lap"
+                value={String(refLap)}
+                onValueChange={(v) => {
+                  manualSelection.current = true;
+                  setRefLap(Number(v));
+                }}
+                options={laps.map((lap) => ({
+                  value: String(lap.id),
+                  label: `ref: L${lap.number} ${formatLapTime(lap.time_ms)}`,
+                }))}
+                className="px-2 py-1.5 text-xs"
+              />
+            </div>
           )}
         </div>
 
         {error && <div className="mb-3 rounded-md bg-brake/10 p-2 text-sm text-brake">{error}</div>}
-        {loading && !compare && <div className="p-8 text-center text-ink-dim">Loading…</div>}
+        {loading && !compare && <div className="skeleton h-96" />}
         {compare && (
           <div className="rounded-xl bg-panel p-2">
             <StackedCharts

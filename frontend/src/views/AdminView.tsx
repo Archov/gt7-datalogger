@@ -3,10 +3,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OverlayBuilder } from "@/components/OverlayBuilder";
+import { ConfirmDialog } from "@/components/ui/Dialog";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import { Select } from "@/components/ui/Select";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import type { AdminSettings, AdminStats, LogRecord } from "@/lib/types";
 import { useTelemetry } from "@/store/telemetry";
+import { toast } from "@/store/toasts";
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
 
@@ -22,12 +26,11 @@ export function AdminView() {
   const setStatus = useTelemetry((s) => s.setStatus);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
-  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const flash = useCallback((text: string, error = false) => {
-    setMessage({ text, error });
-    window.setTimeout(() => setMessage(null), 4000);
+    toast(text, error ? "error" : "success");
   }, []);
 
   const refreshStats = useCallback(() => {
@@ -72,14 +75,7 @@ export function AdminView() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-3 p-3">
-      <div className="flex items-center gap-3">
-        <h2 className="text-lg font-semibold">Admin</h2>
-        {message && (
-          <span className={`text-sm ${message.error ? "text-brake" : "text-accent"}`}>
-            {message.text}
-          </span>
-        )}
-      </div>
+      <h2 className="text-lg font-semibold">Admin</h2>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* Connection settings */}
@@ -168,10 +164,7 @@ export function AdminView() {
           <button
             className="btn-danger"
             disabled={busy !== null}
-            onClick={() => {
-              if (!confirm("Delete ALL recorded sessions and laps? This cannot be undone.")) return;
-              run("Clear data", api.admin.clearData, () => "All sessions and laps deleted");
-            }}
+            onClick={() => setConfirmingClear(true)}
           >
             Delete all recorded data
           </button>
@@ -180,6 +173,19 @@ export function AdminView() {
           </span>
         </div>
       </Panel>
+
+      <ConfirmDialog
+        open={confirmingClear}
+        title="Delete ALL recorded data?"
+        body="Every session and lap will be deleted. This cannot be undone — export laps you want to keep first."
+        confirmLabel="Delete everything"
+        danger
+        onConfirm={() => {
+          setConfirmingClear(false);
+          run("Clear data", api.admin.clearData, () => "All sessions and laps deleted");
+        }}
+        onCancel={() => setConfirmingClear(false)}
+      />
     </div>
   );
 }
@@ -230,35 +236,28 @@ function ConnectionForm({
       <div className="flex items-center gap-6">
         <div>
           <span className="mb-1 block text-xs text-ink-dim">Telemetry source</span>
-          <div className="flex overflow-hidden rounded-md border border-edge">
-            {(["udp", "sim"] as const).map((s) => (
-              <button
-                key={s}
-                disabled={busy !== null}
-                onClick={() => s !== settings.source && onApply({ source: s }, "Source")}
-                className={`px-3 py-1.5 text-xs ${
-                  settings.source === s ? "bg-accent/15 text-accent" : "text-ink-dim hover:text-ink"
-                }`}
-              >
-                {s === "udp" ? "PlayStation" : "Simulated"}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            ariaLabel="Telemetry source"
+            value={settings.source}
+            disabled={busy !== null}
+            onValueChange={(s) => s !== settings.source && onApply({ source: s }, "Source")}
+            options={[
+              { value: "udp", label: "PlayStation" },
+              { value: "sim", label: "Simulated" },
+            ]}
+          />
         </div>
         <div>
           <span className="mb-1 block text-xs text-ink-dim">Log level</span>
-          <select
+          <Select
+            ariaLabel="Log level"
             value={settings.log_level}
-            disabled={busy !== null}
-            onChange={(e) =>
-              onApply({ log_level: e.target.value as AdminSettings["log_level"] }, "Log level")
+            onValueChange={(l) =>
+              onApply({ log_level: l as AdminSettings["log_level"] }, "Log level")
             }
-            className="rounded-md border border-edge bg-panel-2 px-2 py-1.5 text-xs"
-          >
-            {LOG_LEVELS.map((l) => (
-              <option key={l} value={l}>{l}</option>
-            ))}
-          </select>
+            options={LOG_LEVELS.map((l) => ({ value: l, label: l }))}
+            className="px-2 py-1.5 text-xs"
+          />
         </div>
       </div>
     </div>
@@ -357,16 +356,16 @@ function LogViewer() {
   return (
     <div>
       <div className="flex items-center gap-2 border-b border-edge px-3 py-2">
-        <select
-          value={level}
-          onChange={(e) => setLevel(e.target.value)}
-          className="rounded-md border border-edge bg-panel-2 px-2 py-1 text-xs"
-        >
-          <option value="">All levels</option>
-          {LOG_LEVELS.map((l) => (
-            <option key={l} value={l}>{l}+</option>
-          ))}
-        </select>
+        <Select
+          ariaLabel="Log level filter"
+          value={level || "all"}
+          onValueChange={(v) => setLevel(v === "all" ? "" : v)}
+          options={[
+            { value: "all", label: "All levels" },
+            ...LOG_LEVELS.map((l) => ({ value: l, label: `${l}+` })),
+          ]}
+          className="px-2 py-1 text-xs"
+        />
         <button className="btn" onClick={() => setPaused((p) => !p)}>
           {paused ? "Resume" : "Pause"}
         </button>

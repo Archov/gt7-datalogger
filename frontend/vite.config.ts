@@ -11,7 +11,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: { echarts: ["echarts"] },
+        manualChunks(id) {
+          if (/node_modules[\\/](echarts|zrender)[\\/]/.test(id)) return "echarts";
+        },
       },
     },
   },

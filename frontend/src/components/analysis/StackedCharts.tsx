@@ -6,6 +6,7 @@ import type * as echarts from "echarts";
 import type { EChartsOption, SeriesOption } from "echarts";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
+import { lapColor } from "@/lib/colors";
 import { speedUnit, speedValue, type Units } from "@/lib/format";
 import type { CompareResult } from "@/lib/types";
 
@@ -32,6 +33,9 @@ const PANELS: PanelDef[] = [
 
 const TOP_PAD = 20;
 const PANEL_GAP = 26;
+// Stable identity — an inline literal would re-trigger the chart's setOption
+// effect on every render (hover re-renders at cursor rate).
+const REPLACE_SERIES = ["series"];
 
 export function StackedCharts({
   data,
@@ -111,9 +115,10 @@ export function StackedCharts({
     const yAxes: object[] = [];
     const series: SeriesOption[] = [];
     const titles: object[] = [];
-    // Parallel to `series`: which panel each series belongs to, so the
-    // tooltip can label values instead of dumping bare numbers.
-    const seriesMeta: { panelKey: string; panelTitle: string }[] = [];
+    // Tooltip metadata keyed by series id ("panel|lap") — ids survive merge
+    // updates, unlike series indexes, so values can't pair with the wrong
+    // panel after the lap selection changes.
+    const seriesMeta = new Map<string, { panelKey: string; panelTitle: string; lapId: string }>();
 
     const formatValue = (key: string, v: number): string => {
       switch (key) {
@@ -179,7 +184,7 @@ export function StackedCharts({
         splitNumber: 3,
       });
 
-      lapIds.forEach((lapId, li) => {
+      lapIds.forEach((lapId) => {
         const entry = data.laps[lapId];
         const isDelta = panel.key === "delta";
         if (isDelta && !entry.delta) return; // reference lap has no delta
@@ -188,9 +193,11 @@ export function StackedCharts({
           ? entry.delta!.delta_ms.map((v) => v / 1000)
           : entry.series[panel.key] ?? [];
         const values = panel.transform ? raw.map((v) => panel.transform!(v, units)) : raw;
-        seriesMeta.push({ panelKey: panel.key, panelTitle: panel.title });
+        const seriesId = `${panel.key}|${lapId}`;
+        seriesMeta.set(seriesId, { panelKey: panel.key, panelTitle: panel.title, lapId });
         series.push({
           type: "line",
+          id: seriesId,
           name: lapLabels[lapId] ?? `Lap ${lapId}`,
           xAxisIndex: gi,
           yAxisIndex: gi,
@@ -198,7 +205,7 @@ export function StackedCharts({
           showSymbol: false,
           step: panel.step ? "end" : undefined,
           lineStyle: { width: 1.4 },
-          color: CHART_COLORS.series[li % CHART_COLORS.series.length],
+          color: lapColor(Number(lapId)),
           ...(isDelta
             ? {
                 markLine: {
@@ -298,11 +305,13 @@ export function StackedCharts({
         backgroundColor: "#1b1f26",
         borderColor: "#262b33",
         textStyle: { color: "#e6e9ee", fontSize: 11 },
-        // One distance header, then one labeled row per metric — the default
-        // repeats the distance for every panel and shows unlabeled numbers.
+        // One distance header, then a table with one labeled row per metric
+        // and one right-aligned column per lap — the default repeats the
+        // distance for every panel and shows unlabeled numbers. Values are
+        // matched to panels via series id, never index.
         formatter: (params: unknown) => {
           const list = (Array.isArray(params) ? params : [params]) as {
-            seriesIndex: number;
+            seriesId?: string;
             axisValue: number | string;
             value: [number, number] | number;
             marker: string;
@@ -311,33 +320,43 @@ export function StackedCharts({
           const dist = Number(list[0].axisValue);
           const multiLap = lapIds.length > 1;
 
-          // Group values by panel, preserving PANELS order.
-          const byPanel = new Map<string, { title: string; cells: string[] }>();
+          const cellValue = new Map<string, string>(); // series id -> formatted value
+          const lapMarker = new Map<string, string>(); // lap id -> colored dot html
           for (const p of list) {
-            const meta = seriesMeta[p.seriesIndex];
-            if (!meta) continue;
+            const meta = p.seriesId ? seriesMeta.get(p.seriesId) : undefined;
+            if (!meta) continue; // not one of ours (e.g. a stale series)
             const v = Array.isArray(p.value) ? p.value[1] : p.value;
             if (v == null || Number.isNaN(v)) continue;
-            const cell = `${multiLap ? p.marker : ""}<span style="font-variant-numeric:tabular-nums">${formatValue(meta.panelKey, v)}</span>`;
-            const group = byPanel.get(meta.panelKey) ?? { title: meta.panelTitle, cells: [] };
-            group.cells.push(cell);
-            byPanel.set(meta.panelKey, group);
+            cellValue.set(p.seriesId!, formatValue(meta.panelKey, v));
+            if (!lapMarker.has(meta.lapId)) lapMarker.set(meta.lapId, p.marker);
           }
+          if (cellValue.size === 0) return "";
 
-          const rows = PANELS.filter((p) => byPanel.has(p.key))
-            .map((p) => {
-              const g = byPanel.get(p.key)!;
-              const label = g.title.replace(/ \(.*\)| %/, "");
-              return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.7">
-                <span style="color:#8b93a1">${label}</span>
-                <span style="display:flex;gap:10px">${g.cells.join("")}</span>
-              </div>`;
-            })
-            .join("");
-          return `<div style="min-width:150px">
-            <div style="font-weight:600;margin-bottom:4px">${Math.round(dist).toLocaleString()} m</div>
-            ${rows}
-          </div>`;
+          const cols = lapIds.filter((id) => lapMarker.has(id));
+          const header = multiLap
+            ? `<tr><td></td>${cols
+                .map(
+                  (id) =>
+                    `<td style="text-align:right;padding:0 0 3px 14px;color:#8b93a1">${lapMarker.get(id)}${(lapLabels[id] ?? `Lap ${id}`).split(" ")[0]}</td>`,
+                )
+                .join("")}</tr>`
+            : "";
+          const rows = PANELS.map((panel) => {
+            const cells = cols.map((id) => cellValue.get(`${panel.key}|${id}`));
+            if (cells.every((c) => c == null)) return "";
+            const label = panel.title.replace(/ \(.*\)| %/, "");
+            return `<tr>
+              <td style="color:#8b93a1;padding:1px 0;line-height:1.6">${label}</td>
+              ${cells
+                .map(
+                  (c) =>
+                    `<td style="text-align:right;padding-left:14px;font-variant-numeric:tabular-nums">${c ?? '<span style="color:#8b93a1">–</span>'}</td>`,
+                )
+                .join("")}
+            </tr>`;
+          }).join("");
+          return `<div style="font-weight:600;margin-bottom:4px">${Math.round(dist).toLocaleString()} m</div>
+            <table style="border-collapse:collapse">${header}${rows}</table>`;
         },
       },
     };
@@ -394,15 +413,12 @@ export function StackedCharts({
           </button>
         </div>
       </div>
-      <div
-        className="relative w-full select-none"
-        onDoubleClick={() => onZoomChange?.(null)}
-        title="Drag across a chart to zoom into that section; double-click to reset"
-      >
+      <div className="relative w-full select-none" onDoubleClick={() => onZoomChange?.(null)}>
         <EChart
           option={option}
           className="w-full"
           notMerge={false}
+          replaceMerge={REPLACE_SERIES}
           onInit={(chart) => {
             chartRef.current = chart;
             chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
@@ -413,7 +429,14 @@ export function StackedCharts({
               onCursorDist?.(x ? x.value : null);
             });
             // Fired by the native drag-select box and by the bottom slider.
-            chart.on("dataZoom", (e: any) => {
+            chart.on("dataZoom", (raw) => {
+              const e = raw as {
+                batch?: { startValue?: number; endValue?: number; start?: number; end?: number }[];
+                startValue?: number;
+                endValue?: number;
+                start?: number;
+                end?: number;
+              };
               if (applyingZoom.current) return; // our own dispatch echoing back
               let startVal: number | undefined;
               let endVal: number | undefined;

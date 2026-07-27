@@ -75,6 +75,20 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
     ? {}
     : { backgroundColor: `rgba(8, 10, 14, ${cardAlpha})` };
   const laps = placeholder ? DEMO_LAPS : recentLaps;
+  // Explicit canvas: render at exactly size.width x size.height so the page
+  // matches the OBS browser-source dimensions. The global zoom scales content,
+  // so the un-zoomed box is size/scale to land on the exact pixel size.
+  const frameStyle: CSSProperties = {
+    zoom: config.scale,
+    padding: `${config.padY}px ${config.padX}px`,
+    ...(config.size
+      ? {
+          width: config.size.width / config.scale,
+          height: config.size.height / config.scale,
+          overflow: "hidden",
+        }
+      : {}),
+  };
   const widgets = config.widgets.map((id) => (
     <Widget
       key={id}
@@ -84,6 +98,7 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
       card={card}
       layout={config.layout}
       bare={bare}
+      scale={config.widgetScales[id] ?? 1}
     />
   ));
 
@@ -95,7 +110,7 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
 
   if (config.layout === "grid") {
     return (
-      <div className="min-h-full p-3" style={{ zoom: config.scale }}>
+      <div className={config.size ? "" : "min-h-full"} style={frameStyle}>
         <div className="mx-auto grid max-w-md grid-cols-2 gap-2 font-tabular">{widgets}</div>
         {badge}
       </div>
@@ -106,14 +121,20 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
     config.align === "top" ? "items-start" : config.align === "center" ? "items-center" : "items-end";
   if (config.layout === "stack") {
     return (
-      <div className={`flex h-full justify-start p-4 ${justify}`} style={{ zoom: config.scale }}>
+      <div
+        className={`flex justify-start ${justify} ${config.size ? "" : "h-full"}`}
+        style={frameStyle}
+      >
         <div className="flex w-56 flex-col gap-2 font-tabular">{widgets}</div>
         {badge}
       </div>
     );
   }
   return (
-    <div className={`flex h-full justify-center p-4 ${justify}`} style={{ zoom: config.scale }}>
+    <div
+      className={`flex justify-center ${justify} ${config.size ? "" : "h-full"}`}
+      style={frameStyle}
+    >
       <div
         className={`flex items-stretch gap-3 rounded-2xl px-4 py-3 font-tabular ${
           bare ? "" : "border border-white/10 backdrop-blur-sm"
@@ -121,7 +142,16 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
         style={card}
       >
         {config.widgets.map((id) => (
-          <Widget key={id} id={id} frame={frame} laps={laps} card={{}} layout="strip" bare={bare} />
+          <Widget
+            key={id}
+            id={id}
+            frame={frame}
+            laps={laps}
+            card={{}}
+            layout="strip"
+            bare={bare}
+            scale={config.widgetScales[id] ?? 1}
+          />
         ))}
       </div>
       {badge}
@@ -138,17 +168,26 @@ interface WidgetProps {
   card: CSSProperties;
   layout: OverlayConfig["layout"];
   bare: boolean;
+  scale: number; // per-widget, on top of the global scale
 }
 
-function Widget({ id, frame, laps, card, layout, bare }: WidgetProps) {
+function Widget({ id, frame, laps, card, layout, bare, scale }: WidgetProps) {
   const inStrip = layout === "strip";
   const body = pickWidget(id, frame, laps, inStrip);
   if (body === null) return null;
-  if (inStrip) return body;
+  if (inStrip) {
+    return scale !== 1 ? (
+      <div className="flex items-center" style={{ zoom: scale }}>
+        {body}
+      </div>
+    ) : (
+      body
+    );
+  }
   return (
     <div
       className={`rounded-xl p-3 ${bare ? "" : "border border-white/10"}`}
-      style={card}
+      style={{ ...card, ...(scale !== 1 ? { zoom: scale } : {}) }}
     >
       {body}
     </div>
