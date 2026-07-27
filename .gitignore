@@ -13,6 +13,7 @@ build/
 # Node
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # App data
 data/*.db
