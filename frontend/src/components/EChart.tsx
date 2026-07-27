@@ -34,9 +34,12 @@ interface Props {
   className?: string;
   onInit?: (chart: echarts.ECharts) => void;
   notMerge?: boolean;
+  // In merge mode, replace these components wholesale (matched by id) so
+  // entries dropped from the option are removed instead of lingering.
+  replaceMerge?: string[];
 }
 
-export function EChart({ option, group, className, onInit, notMerge }: Props) {
+export function EChart({ option, group, className, onInit, notMerge, replaceMerge }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -60,8 +63,12 @@ export function EChart({ option, group, className, onInit, notMerge }: Props) {
   }, [group]);
 
   useEffect(() => {
-    chartRef.current?.setOption(option, { notMerge: notMerge ?? true, lazyUpdate: true });
-  }, [option, notMerge]);
+    chartRef.current?.setOption(option, {
+      notMerge: notMerge ?? true,
+      replaceMerge,
+      lazyUpdate: true,
+    });
+  }, [option, notMerge, replaceMerge]);
 
   return <div ref={el} className={className ?? "h-48 w-full"} />;
 }
