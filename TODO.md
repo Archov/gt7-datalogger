@@ -99,6 +99,77 @@ Change who would use the tool.
 
 ---
 
+## Tier 4 — UI, navigation & polish
+
+### Navigation / page linking
+
+The app has no router: `App.tsx` holds the active view in `useState`, and the `hashchange`
+listener only forces a re-render — it never reads the hash. So no view is deep-linkable, and
+there's no way to hand a selection from one view to another. Sessions and Analysis each fetch
+sessions/laps and hold their own selection independently, which is why a session doesn't open
+in Analysis.
+
+- [ ] **Hash router + deep links**. Parse `#/live`, `#/analysis`, `#/sessions`, `#/admin` in
+  `App.tsx`, and let Analysis accept `#/analysis?session=<id>&laps=<ids>&ref=<id>`. Makes
+  every view bookmarkable and shareable, and is the foundation for the links below.
+- [ ] **Shared analysis-selection state**. Add `{ sessionId, selectedLapIds, refLapId }` to
+  the store (or a new `store/analysis.ts`); Sessions writes it, Analysis reads it as its
+  initial selection instead of always defaulting to latest-vs-best.
+- [ ] **Sessions → Analysis link** *(the reported gap)*. Add an "Analyze" action to the
+  session header row and a per-lap "compare / set as reference" action in `LapTable`
+  (rows currently only have json / csv / delete). Choosing laps there jumps to Analysis with
+  them pre-loaded and the reference set.
+- [ ] **Live feed → Analysis**. Click a completed lap in `LiveView`'s lap feed to open it in
+  Analysis.
+- [ ] **Active-route highlight** in `StatusBar`, driven by the route rather than local state.
+
+### Visual polish
+
+Base theme (panel / ink-dim / accent tokens, tabular figures) is solid; these lift it to a
+sellable-app finish.
+
+- [ ] **Replace native `prompt()` / `confirm()`** (Sessions track-naming and delete, import
+  errors) with styled in-app modals + toasts. Native dialogs can't be themed and undercut the
+  polished feel — more important now that this may ship as a product.
+- [ ] **Consistent per-lap color identity**. Reuse `CHART_COLORS.series` wherever a lap
+  appears — add a color chip in the Sessions lap table and Live feed so a lap keeps the same
+  color across views.
+- [ ] **Color the Δ column** in the lap table (green faster / red slower, accent/brake
+  tokens) instead of flat ink-dim.
+- [ ] **Skeleton / empty states** for the sessions list and charts, replacing bare "Loading…"
+  and "No sessions".
+- [ ] **Session-row recognition** — a mini track-map thumbnail or best-lap sparkline per
+  session so they're scannable at a glance.
+- [ ] **Responsive pass** — the Analysis lap-picker chip row overflows on narrow screens;
+  make it horizontally scrollable, and audit grid breakpoints for tablet/phone.
+- [ ] **Adopt a component library** (shadcn/ui, per the project brief) for Select / Dialog /
+  Tabs / Tooltip and focus-visible a11y states, instead of ad-hoc `.btn` classes and native
+  selects. Apply the dataviz palette method for accessible, consistent light/dark chart colors.
+
+## Tier 5 — Overlay enhancements
+
+`OverlayConfig` (in `frontend/src/lib/overlay.ts`) supports widgets + order, layout
+(strip/stack/grid), align, scale, background opacity, and page mode — but **no explicit canvas
+dimensions**, so sizing is a manual "1920×260" hint and the preview (a fixed-height iframe)
+doesn't match what OBS actually shows.
+
+- [ ] **Custom canvas size** *(the requested one)*. Add `width` / `height` to `OverlayConfig`,
+  encode them in the overlay URL, and apply them in `OverlayView`. Ship presets — 1920×1080,
+  1920×260 strip, 1080×1920 vertical (TikTok / Shorts), 720×1280 — plus a custom W×H input.
+- [ ] **True-to-size preview**. Render the builder preview at the real aspect ratio (scaled
+  down) with a dimensions readout, so it matches the OBS browser source instead of a fixed
+  288px box.
+- [ ] **Edge offset / padding (x, y)** so the widget strip sits exactly where you want within
+  the canvas.
+- [ ] **Per-widget scale/size** beyond the single global scale; longer term, a drag-to-place
+  canvas editor for free widget positioning.
+- [ ] **Named, saved overlay presets** with export / import / share, instead of the single
+  `localStorage` blob today.
+- [ ] **Safe-area guides** for common stream resolutions in the preview.
+
+
+---
+
 ## Done beyond this list
 
 Shipped along the way, not part of the original tiers:
