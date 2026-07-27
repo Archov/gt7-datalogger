@@ -1,68 +1,32 @@
-// In-app modal dialogs replacing native prompt()/confirm(): themable, with
-// backdrop, Escape to close, focus trap, and focus restore on close.
+// In-app modal dialogs replacing native prompt()/confirm(), built on Radix
+// Dialog: portal, backdrop, focus trap + restore, Escape, aria wiring.
 
-import { useEffect, useRef, useState } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { useEffect, useState } from "react";
 
 function Dialog({
+  open,
   title,
   onClose,
   children,
 }: {
+  open: boolean;
   title: string;
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const panel = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const el = panel.current;
-    const focusables = () =>
-      el?.querySelectorAll<HTMLElement>(
-        'button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ) ?? [];
-    (focusables()[0] ?? el)?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      } else if (e.key === "Tab") {
-        const list = [...focusables()];
-        if (list.length === 0) return;
-        const first = list[0];
-        const last = list[list.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      previous?.focus();
-    };
-  }, [onClose]);
-
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div
-        ref={panel}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        className="relative w-full max-w-sm rounded-xl border border-edge bg-panel p-4 shadow-xl shadow-black/40"
-      >
-        <h3 className="mb-3 text-sm font-semibold">{title}</h3>
-        {children}
-      </div>
-    </div>
+    <DialogPrimitive.Root open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/60" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-40 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-edge bg-panel p-4 shadow-xl shadow-black/40">
+          <DialogPrimitive.Title className="mb-3 text-sm font-semibold">
+            {title}
+          </DialogPrimitive.Title>
+          {children}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 
@@ -83,10 +47,13 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  if (!open) return null;
   return (
-    <Dialog title={title} onClose={onCancel}>
-      {body && <p className="mb-4 text-sm text-ink-dim">{body}</p>}
+    <Dialog open={open} title={title} onClose={onCancel}>
+      {body && (
+        <DialogPrimitive.Description className="mb-4 text-sm text-ink-dim">
+          {body}
+        </DialogPrimitive.Description>
+      )}
       <div className="flex justify-end gap-2">
         <button className="btn" onClick={onCancel}>
           Cancel
@@ -124,14 +91,17 @@ export function PromptDialog({
     if (open) setValue(initialValue);
   }, [open, initialValue]);
 
-  if (!open) return null;
   const submit = () => {
     const v = value.trim();
     if (v) onSubmit(v);
   };
   return (
-    <Dialog title={title} onClose={onCancel}>
-      {label && <p className="mb-2 text-xs text-ink-dim">{label}</p>}
+    <Dialog open={open} title={title} onClose={onCancel}>
+      {label && (
+        <DialogPrimitive.Description className="mb-2 text-xs text-ink-dim">
+          {label}
+        </DialogPrimitive.Description>
+      )}
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
