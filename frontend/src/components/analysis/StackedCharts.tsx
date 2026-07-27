@@ -6,6 +6,7 @@ import type * as echarts from "echarts";
 import type { EChartsOption, SeriesOption } from "echarts";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
+import { lapColor } from "@/lib/colors";
 import { speedUnit, speedValue, type Units } from "@/lib/format";
 import type { CompareResult } from "@/lib/types";
 
@@ -179,7 +180,7 @@ export function StackedCharts({
         splitNumber: 3,
       });
 
-      lapIds.forEach((lapId, li) => {
+      lapIds.forEach((lapId) => {
         const entry = data.laps[lapId];
         const isDelta = panel.key === "delta";
         if (isDelta && !entry.delta) return; // reference lap has no delta
@@ -198,7 +199,7 @@ export function StackedCharts({
           showSymbol: false,
           step: panel.step ? "end" : undefined,
           lineStyle: { width: 1.4 },
-          color: CHART_COLORS.series[li % CHART_COLORS.series.length],
+          color: lapColor(Number(lapId)),
           ...(isDelta
             ? {
                 markLine: {

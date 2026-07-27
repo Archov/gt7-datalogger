@@ -2,12 +2,13 @@
 
 import * as echarts from "echarts";
 import { useEffect, useRef } from "react";
+import { SERIES_COLORS } from "@/lib/colors";
 
 export const CHART_COLORS = {
   axis: "#3a414c",
   label: "#8b93a1",
   split: "#1e232b",
-  series: ["#38bdf8", "#f472b6", "#a3e635", "#facc15", "#c084fc", "#fb923c"],
+  series: [...SERIES_COLORS] as string[],
   throttle: "#22c55e",
   brake: "#ef4444",
   coast: "#3b82f6",
