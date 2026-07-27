@@ -23,6 +23,8 @@ export interface LiveFrame {
   tire_slip: number;
   water_temp: number;
   oil_temp: number;
+  oil_pressure: number;
+  aids: number; // AIDS_* bitmask
   car_id: number;
   car_name: string;
   session_best_ms: number;
@@ -61,6 +63,36 @@ export interface LapSummary {
   min_body_height: number;
   total_ticks?: number;
   tod_ms?: number;
+  tcs_active_pct?: number;
+  asm_active_pct?: number;
+  max_water_temp?: number;
+  max_oil_temp?: number;
+  min_oil_pressure?: number; // -1 = unknown
+  event_counts?: Record<string, number>;
+}
+
+// Driver-aids bitmask stored per tick in the "aids" sample column and sent in
+// live frames. Mirrors backend AidsBits.
+export const AIDS_TCS = 1;
+export const AIDS_ASM = 2;
+export const AIDS_HANDBRAKE = 4;
+export const AIDS_REV_LIMITER = 8;
+
+export type EventType = "lockup" | "wheelspin" | "bottoming" | "kerb";
+
+export interface LapEvent {
+  type: EventType;
+  start_dist: number;
+  end_dist: number;
+  wheels: string[]; // "fl" | "fr" | "rl" | "rr"
+  severity: number;
+}
+
+// Static per-lap gearing metadata (present when the recording backend saw it)
+export interface LapGearing {
+  ratios: number[];
+  top_speed: number;
+  rpm_alert: number;
 }
 
 export interface SessionSummary {
@@ -93,6 +125,7 @@ export interface PeakValley {
 export interface CompareLapEntry {
   series: Samples & { dist: number[] };
   peaks_valleys: { peaks: PeakValley[]; valleys: PeakValley[] };
+  events?: LapEvent[];
   delta?: { dist: number[]; delta_ms: number[] };
 }
 

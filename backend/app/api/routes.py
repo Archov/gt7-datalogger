@@ -67,8 +67,12 @@ async def laps(request: Request) -> list[dict[str, Any]]:
 
 
 @router.get("/laps/{lap_id}")
-async def lap_detail(request: Request, lap_id: int) -> dict[str, Any]:
-    lap = await svc(request).repo.get_lap(lap_id)
+async def lap_detail(
+    request: Request,
+    lap_id: int,
+    samples: bool = Query(True, description="include the per-tick sample series"),
+) -> dict[str, Any]:
+    lap = await svc(request).repo.get_lap(lap_id, with_samples=samples)
     if lap is None:
         raise HTTPException(404, "lap not found")
     lap["car_name"] = svc(request).cars.name(lap["car_id"])

@@ -53,6 +53,8 @@ export function demoFrame(nowMs: number): LiveFrame {
     tire_slip: exitSpin ? 1.18 : 1.0,
     water_temp: 85,
     oil_temp: 102,
+    oil_pressure: 5.4,
+    aids: exitSpin ? 1 : 0, // TCS bit flickers with the fake wheelspin
     car_id: 0,
     car_name: "Placeholder GT '26",
     session_best_ms: 111_410,

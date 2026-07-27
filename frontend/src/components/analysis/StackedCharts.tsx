@@ -6,9 +6,10 @@ import type * as echarts from "echarts";
 import type { EChartsOption, SeriesOption } from "echarts";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CHART_COLORS, EChart } from "@/components/EChart";
+import { channelValues, type ChannelDef } from "@/lib/channels";
 import { lapColor } from "@/lib/colors";
-import { speedUnit, speedValue, type Units } from "@/lib/format";
-import type { CompareResult } from "@/lib/types";
+import { speedUnit, type Units } from "@/lib/format";
+import { AIDS_ASM, AIDS_TCS, type CompareResult, type LapEvent } from "@/lib/types";
 
 interface PanelDef {
   key: string;
@@ -16,20 +17,55 @@ interface PanelDef {
   height: number; // relative weight
   transform?: (v: number, units: Units) => number;
   step?: boolean;
+  def?: ChannelDef; // channel-backed panels; absent for the delta panel
 }
 
-const PANELS: PanelDef[] = [
-  { key: "delta", title: "Time diff (s)", height: 1.2 },
-  { key: "speed", title: "Speed", height: 1.6, transform: speedValue },
-  { key: "throttle", title: "Throttle %", height: 0.8 },
-  { key: "brake", title: "Brake %", height: 0.8 },
-  { key: "coast", title: "Coasting", height: 0.5, step: true },
-  { key: "gear", title: "Gear", height: 0.7, step: true },
-  { key: "rpm", title: "RPM", height: 1 },
-  { key: "boost", title: "Boost (bar)", height: 0.7 },
-  { key: "tire_slip", title: "Tire spd / car spd", height: 0.8 },
-  { key: "yaw_rate", title: "Yaw rate (rad/s)", height: 0.8 },
-];
+// The time-diff panel is the anchor of the view and always first;
+// every other panel comes from the channel picker.
+const DELTA_PANEL: PanelDef = { key: "delta", title: "Time diff (s)", height: 1.2 };
+
+type MarkAreaBand = [{ xAxis: number }, { xAxis: number }];
+type MarkAreaData = MarkAreaBand[];
+
+// Contiguous [startDist, endDist] runs where the aids bit is set.
+function aidBands(dist: number[], aids: number[] | undefined, bit: number): MarkAreaData {
+  if (!aids || aids.length === 0) return [];
+  const bands: MarkAreaData = [];
+  let start: number | null = null;
+  const n = Math.min(dist.length, aids.length);
+  for (let i = 0; i < n; i++) {
+    const on = (aids[i] & bit) !== 0;
+    if (on && start === null) start = dist[i];
+    if (!on && start !== null) {
+      bands.push([{ xAxis: start }, { xAxis: dist[i] }]);
+      start = null;
+    }
+  }
+  if (start !== null) bands.push([{ xAxis: start }, { xAxis: dist[n - 1] }]);
+  return bands;
+}
+
+// Which event types shade which panel. Suspension events land on either
+// suspension channel; slip events on the pedal that caused them.
+function eventBandsFor(panelKey: string, events: LapEvent[]): MarkAreaData {
+  const wanted =
+    panelKey === "brake"
+      ? ["lockup"]
+      : panelKey === "throttle"
+        ? ["wheelspin"]
+        : panelKey.startsWith("sus_")
+          ? ["bottoming", "kerb"]
+          : [];
+  if (wanted.length === 0) return [];
+  return events
+    .filter((e) => wanted.includes(e.type))
+    .map(
+      (e): MarkAreaBand => [
+        { xAxis: e.start_dist },
+        { xAxis: Math.max(e.end_dist, e.start_dist + 2) },
+      ],
+    );
+}
 
 const TOP_PAD = 20;
 const PANEL_GAP = 26;
@@ -41,6 +77,7 @@ export function StackedCharts({
   data,
   lapLabels,
   units,
+  channels,
   onCursorDist,
   zoomRange,
   onZoomChange,
@@ -48,11 +85,35 @@ export function StackedCharts({
   data: CompareResult;
   lapLabels: Record<string, string>;
   units: Units;
+  channels: ChannelDef[]; // ordered, from the channel picker
   onCursorDist?: (dist: number | null) => void;
   zoomRange?: [number, number] | null;
   onZoomChange?: (range: [number, number] | null) => void;
 }) {
   const chartRef = useRef<echarts.ECharts | null>(null);
+
+  const panels = useMemo<PanelDef[]>(
+    () => [
+      DELTA_PANEL,
+      ...channels.map((c) => ({
+        key: c.key,
+        title: c.title,
+        height: c.height,
+        transform: c.transform,
+        step: c.step,
+        def: c,
+      })),
+    ],
+    [channels],
+  );
+
+  // Panel count changes with the picker; the canvas height must follow.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.getDom().style.height = `${panels.length * 110 + TOP_PAD + PANEL_GAP}px`;
+    chart.resize();
+  }, [panels.length]);
   // True while WE dispatch a zoom action, so the resulting dataZoom event
   // isn't echoed back through onZoomChange (which would loop).
   const applyingZoom = useRef(false);
@@ -106,7 +167,7 @@ export function StackedCharts({
 
   const option = useMemo<EChartsOption>(() => {
     const lapIds = Object.keys(data.laps);
-    const heights = PANELS.map((p) => p.height);
+    const heights = panels.map((p) => p.height);
     const totalWeight = heights.reduce((a, b) => a + b, 0);
     const usable = 100 - 8; // percent, minus bottom margin for slider
 
@@ -121,6 +182,12 @@ export function StackedCharts({
     const seriesMeta = new Map<string, { panelKey: string; panelTitle: string; lapId: string }>();
 
     const formatValue = (key: string, v: number): string => {
+      if (key.startsWith("slip_") || key === "tire_slip") return `${v.toFixed(2)}×`;
+      if (key.startsWith("tt_")) {
+        const sign = key === "tt_balance" && v > 0 ? "+" : "";
+        return `${sign}${v.toFixed(1)} °C`;
+      }
+      if (key.startsWith("sus_") || key === "body_height") return `${v.toFixed(1)} mm`;
       switch (key) {
         case "delta":
           return `${v >= 0 ? "+" : ""}${v.toFixed(3)} s`;
@@ -137,8 +204,6 @@ export function StackedCharts({
           return `${Math.round(v).toLocaleString()} rpm`;
         case "boost":
           return `${v.toFixed(2)} bar`;
-        case "tire_slip":
-          return `${v.toFixed(2)}×`;
         case "yaw_rate":
           return `${v.toFixed(2)} rad/s`;
         default:
@@ -147,7 +212,7 @@ export function StackedCharts({
     };
 
     let cursor = 2;
-    PANELS.forEach((panel, gi) => {
+    panels.forEach((panel, gi) => {
       const h = (panel.height / totalWeight) * usable;
       grids.push({
         left: 56,
@@ -168,12 +233,12 @@ export function StackedCharts({
         min: 0,
         max: "dataMax",
         axisLabel:
-          gi === PANELS.length - 1
+          gi === panels.length - 1
             ? { color: CHART_COLORS.label, fontSize: 10, formatter: (v: number) => `${v} m` }
             : { show: false },
         axisLine: { lineStyle: { color: CHART_COLORS.axis } },
         splitLine: { show: false },
-        axisTick: { show: gi === PANELS.length - 1 },
+        axisTick: { show: gi === panels.length - 1 },
       });
       yAxes.push({
         type: "value",
@@ -191,10 +256,23 @@ export function StackedCharts({
         const dist = isDelta ? entry.delta!.dist : entry.series.dist;
         const raw = isDelta
           ? entry.delta!.delta_ms.map((v) => v / 1000)
-          : entry.series[panel.key] ?? [];
+          : panel.def
+            ? channelValues(panel.def, entry.series)
+            : entry.series[panel.key] ?? [];
+        if (raw === null) return; // lap predates this channel — skip gracefully
         const values = panel.transform ? raw.map((v) => panel.transform!(v, units)) : raw;
         const seriesId = `${panel.key}|${lapId}`;
         seriesMeta.set(seriesId, { panelKey: panel.key, panelTitle: panel.title, lapId });
+
+        // Shaded context bands: detected events on the causing panel, plus
+        // TCS activation on throttle and ASM on speed (aids bitmask runs).
+        let bands: MarkAreaData = eventBandsFor(panel.key, entry.events ?? []);
+        if (panel.key === "throttle") {
+          bands = bands.concat(aidBands(entry.series.dist, entry.series.aids, AIDS_TCS));
+        } else if (panel.key === "speed") {
+          bands = bands.concat(aidBands(entry.series.dist, entry.series.aids, AIDS_ASM));
+        }
+
         series.push({
           type: "line",
           id: seriesId,
@@ -217,11 +295,20 @@ export function StackedCharts({
                 },
               }
             : {}),
+          ...(bands.length > 0
+            ? {
+                markArea: {
+                  silent: true,
+                  itemStyle: { color: lapColor(Number(lapId)), opacity: 0.14 },
+                  data: bands,
+                },
+              }
+            : {}),
         });
       });
     });
 
-    const allXAxisIndices = PANELS.map((_, i) => i);
+    const allXAxisIndices = panels.map((_, i) => i);
 
     const dataZoom: EChartsOption["dataZoom"] = [
       {
@@ -341,7 +428,7 @@ export function StackedCharts({
                 )
                 .join("")}</tr>`
             : "";
-          const rows = PANELS.map((panel) => {
+          const rows = panels.map((panel) => {
             const cells = cols.map((id) => cellValue.get(`${panel.key}|${id}`));
             if (cells.every((c) => c == null)) return "";
             const label = panel.title.replace(/ \(.*\)| %/, "");
@@ -360,7 +447,7 @@ export function StackedCharts({
         },
       },
     };
-  }, [data, lapLabels, units]);
+  }, [data, lapLabels, units, panels]);
 
   return (
     <div className="flex flex-col">
@@ -421,7 +508,7 @@ export function StackedCharts({
           replaceMerge={REPLACE_SERIES}
           onInit={(chart) => {
             chartRef.current = chart;
-            chart.getDom().style.height = `${PANELS.length * 110 + TOP_PAD + PANEL_GAP}px`;
+            chart.getDom().style.height = `${panels.length * 110 + TOP_PAD + PANEL_GAP}px`;
             chart.resize();
             chart.on("updateAxisPointer", (e) => {
               const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo;

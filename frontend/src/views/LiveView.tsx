@@ -13,7 +13,14 @@ import {
 import { lapColor } from "@/lib/colors";
 import { openInAnalysis } from "@/lib/router";
 import { projectStrategy } from "@/lib/strategy";
-import type { LapSummary, LiveFrame } from "@/lib/types";
+import {
+  AIDS_ASM,
+  AIDS_HANDBRAKE,
+  AIDS_REV_LIMITER,
+  AIDS_TCS,
+  type LapSummary,
+  type LiveFrame,
+} from "@/lib/types";
 import { useSettings } from "@/store/settings";
 import { liveFrameRef, useTelemetry } from "@/store/telemetry";
 
@@ -50,7 +57,9 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
   const recentLaps = useTelemetry((s) => s.recentLaps);
   const speed = Math.round(speedValue(frame.speed_kmh, units));
   const rpmPct = Math.min(100, (frame.rpm / Math.max(1, frame.rpm_alert)) * 100);
-  const nearLimit = frame.rpm >= frame.rpm_alert * 0.95;
+  const aids = frame.aids ?? 0;
+  const onLimiter = (aids & AIDS_REV_LIMITER) !== 0;
+  const nearLimit = onLimiter || frame.rpm >= frame.rpm_alert * 0.95;
   const fuelPct = (frame.fuel_level / Math.max(1, frame.fuel_capacity)) * 100;
   // Compare the latest lap against the best BEFORE it, so a new personal
   // best shows its improvement instead of +0.000.
@@ -69,7 +78,7 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
             <div
               className={`h-full rounded-full transition-[width] duration-75 ${
                 nearLimit ? "bg-brake" : "bg-accent"
-              }`}
+              } ${onLimiter ? "animate-pulse" : ""}`}
               style={{ width: `${rpmPct}%` }}
             />
           </div>
@@ -166,8 +175,37 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
               <span className="text-lg text-ink-dim">/{frame.total_positions}</span>
             </div>
             <div className="mt-2 space-y-1 font-tabular text-xs text-ink-dim">
-              <Row k="Water" v={`${frame.water_temp.toFixed(0)}°C`} />
-              <Row k="Oil" v={`${frame.oil_temp.toFixed(0)}°C`} />
+              <Row
+                k="Water"
+                v={`${frame.water_temp.toFixed(0)}°C`}
+                className={frame.water_temp >= 110 ? "text-brake" : frame.water_temp >= 100 ? "text-warn" : ""}
+              />
+              <Row
+                k="Oil"
+                v={`${frame.oil_temp.toFixed(0)}°C`}
+                className={frame.oil_temp >= 130 ? "text-brake" : frame.oil_temp >= 115 ? "text-warn" : ""}
+              />
+            </div>
+            {/* Driver-aid pills light while the aid is intervening */}
+            <div className="mt-2 flex gap-1">
+              {(
+                [
+                  ["TCS", AIDS_TCS],
+                  ["ASM", AIDS_ASM],
+                  ["HB", AIDS_HANDBRAKE],
+                ] as const
+              ).map(([label, bit]) => (
+                <span
+                  key={label}
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                    aids & bit
+                      ? "bg-warn text-black"
+                      : "border border-edge text-ink-dim/60"
+                  }`}
+                >
+                  {label}
+                </span>
+              ))}
             </div>
           </Panel>
         </div>

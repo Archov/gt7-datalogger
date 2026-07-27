@@ -9,26 +9,142 @@ Grouped into: **quick wins** (data already decoded), **derived analytics**, and
 ## Tier 1 — Surface data already decoded
 
 These fields are already parsed in `backend/app/telemetry/packet.py` and present on the
-`TelemetryPacket` model, but never make it into the per-lap sample series or the UI. Most
-require adding a column to `SAMPLE_COLUMNS` in `backend/app/processing/laps.py`, appending
-it in `_append_sample`, adding it to the frontend `types.ts` column list, and drawing it.
+`TelemetryPacket` model, but never make it into the per-lap sample series or the UI.
 
-- [ ] **Per-corner tire temperatures** in the lap series (FL/FR/RL/RR).
-  Decoded (`tire_temp_fl/fr/rl/rr`) and shown live, but not stored per lap.
-  Value: understeer (hot fronts) vs oversteer (hot rears); setup tuning.
-- [ ] **Suspension travel per corner** (`suspension_fl/fr/rl/rr`).
-  Decoded, currently unused. Value: bottoming-out, kerb strikes, ride-height behavior.
-- [ ] **Engine health channels** — `oil_temp`, `water_temp`, `oil_pressure`.
-  Decoded, not sampled. Value: endurance monitoring, catching overheating.
-- [ ] **Per-wheel slip / lockup / wheelspin**.
-  Today all four wheels are averaged into `tire_slip_ratio`. Keep per-wheel
-  (`wheel_rps_*` × `tire_radius_*`) to show which wheel locks under braking or spins on exit.
-- [ ] **Gearing panel** — `gear_ratios` + `transmission_top_speed`.
-  Decoded, unused. Value: shift-point analysis, theoretical top speed per gear for tuning.
-- [ ] **Driver-aid activation** — surface `TCS_ACTIVE`, `ASM_ACTIVE`, `HANDBRAKE` flags.
-  Value: TCS cutting in marks where you're over the limit and losing time.
-- [ ] **Clutch channels** — `clutch`, `clutch_engagement`, `rpm_after_clutch` (optional).
-- [ ] **Suggested-gear vs actual-gear** comparison using the decoded `suggested_gear` nibble.
+**Display design principle (2026-07-27):** the Analysis view already stacks 10 chart
+panels. Most Tier 1 data is per-corner (×4 channels), so "one line panel per field" would
+triple that into an unreadable wall — and a 4-line spaghetti panel answers no question.
+Each channel instead gets the display that answers its *driver question*
+("which wheel locked?", "understeer or oversteer?", "can I turn TCS down?"), built on four
+display primitives: **(a)** a channel picker for the stacked charts, **(b)** a
+cursor-synced per-corner car widget, **(c)** detected events (bands/markers/counts), and
+**(d)** per-lap aggregates in the existing tables/panels. Raw curves stay available but
+off by default.
+
+### 1.0 Plumbing prerequisites *(do first — everything below rides on this)*
+
+- [x] **Channel-selectable compare API.** New columns go into `SAMPLE_COLUMNS`, but
+  `GET /api/laps/compare` takes a `channels=` param defaulting to today's set, so the
+  payload doesn't double for users who never open the new channels. Same for the live
+  WebSocket frame: additions are cheap scalars only.
+- [x] **Channel picker UI.** `PANELS` in `StackedCharts.tsx` becomes data-driven: a
+  "Channels" popover in the Analysis toolbar, grouped (Driving · Tires & wheels ·
+  Chassis · Engine), persisted to localStorage and mirrored into the analysis URL params
+  so a shared deep link reproduces the same panel set. Default = the current 10 panels.
+- [x] **Lap-file format version bump** (v2) + import shim (older exports lack new columns →
+  fill with empty arrays, charts skip them gracefully).
+
+### 1.1 Corner Detail widget — the flagship display *(primitive b)*
+
+- [x] New Analysis side panel, placed **directly under the race-line map** — they are the
+  cursor-synced pair: scrub a chart, the map dot moves, the car widget shows what the
+  chassis was doing at that spot. (A live variant in the Live view / OBS overlay is a
+  follow-up; the Analysis version is the one that answers setup questions.)
+- [x] Top-down car outline with four corner cells, synced to the chart cursor / map dot.
+  Scrubbing through a corner replays the load transfer story:
+  - **Tire temp** as cell fill color (cold-blue → optimal-green → hot-red, same scale as
+    the Live tire tiles).
+  - **Suspension compression** as a vertical bar per corner, normalized to the lap's
+    min–max travel.
+  - **Slip state** badge per corner: LOCK (slip ≪ 1 while braking) / SPIN (slip ≫ 1 on
+    throttle). Focus lap only — cross-lap event comparison belongs to the 1.2 map
+    markers and lap-table counts, not this widget.
+  - **F/R temp balance** readout ("F +6.2 °C" → understeer-hot) below the car.
+- [x] **Multi-lap = focus model** (N laps × 4 corners × 3 channels at once is noise):
+  - The widget renders **one focus lap**; a row of small `lapColor` chips at the top
+    switches focus (default: most recently selected non-reference lap).
+  - The **reference lap is always the ghost**: secondary numbers per corner
+    (`78° / 71°`), hollow outlines on the suspension bars — focus-vs-ref at the same
+    distance stays visible without any switching.
+  - Corner cells tint toward red/blue when hotter/cooler than the ref, so flipping
+    focus is scannable rather than a number-reading exercise.
+  - With exactly 2 laps selected (latest vs best, the common case) this collapses to
+    zero extra UI: chips hide, focus = latest, ghost = ref.
+  This one widget makes all 12 per-corner channels legible without a single new line panel.
+
+### 1.2 Per-wheel slip → lockup / wheelspin events *(primitives b, c)*
+
+- [x] Store `slip_fl/fr/rl/rr` per tick (`|wheel_rps| × tire_radius / speed`); keep the
+  averaged `tire_slip` column for compatibility and the existing panel.
+- [x] Detect events server-side at lap save (new `processing/events.py`):
+  **lockup** = braking ∧ min wheel slip < ~0.9 sustained ≥ N ticks;
+  **wheelspin** = throttle ∧ max slip > 1.1. Each event: `{start_dist, end_dist, wheels,
+  severity}`, persisted with the lap.
+- [x] Display *(partial: chart bands + lap-table/tuning counts shipped; race-line map markers remain)*: shaded bands on the stacked charts (ECharts `markArea`, like coasting),
+  markers on the race-line map at the event location (tooltip names the wheels), and
+  counts in the lap table + tuning panel ("3 lockups · 2 spins"). Comparing event
+  positions between laps is the actionable part — "you lock the inside-front into T3 on
+  every fast lap".
+- [x] The tire-slip panel gains picker variants: avg (default) · front/rear · per-wheel.
+
+### 1.3 Per-corner tire temperatures *(primitives b, a, d)*
+
+- [x] Per-tick columns `tt_fl/fr/rl/rr`; primary display is the Corner Detail widget (1.1).
+- [x] Optional stacked channels (off by default): **front avg**, **rear avg**, and
+  **F−R balance** — the balance line is *one* curve that answers the setup question
+  directly, where four raw lines can't.
+- [ ] *(remaining)* Race-line map gains a coloring-mode dropdown: input zones (today) · speed ·
+  tire temp · F−R balance. "Where on the lap do the fronts overheat" as a picture.
+- [ ] *(remaining)* Lap aggregates (avg/max per corner) into the tuning panel — feeds the Tier 2 stint
+  degradation trend.
+
+### 1.4 Suspension travel per corner *(primitives b, c, d)*
+
+- [x] Per-tick columns (mm); Corner Detail bars (1.1).
+- [x] **Bottoming / kerb-strike events** through the same event pipeline as 1.2: travel
+  within ~2% of the lap's max compression (absolute range varies per car, so normalize
+  per lap), or a single-tick spike ≫ neighbors = kerb strike. Bands + map markers +
+  per-lap count.
+- [x] Optional stacked channels: front avg / rear avg travel.
+- [ ] *(remaining)* Tuning panel: min/max travel per corner, next to min body height.
+
+### 1.5 Driver aids — TCS / ASM / handbrake / rev limiter *(primitives c, d)*
+
+- [x] One per-tick `aids` bitmask column (bit0 TCS · bit1 ASM · bit2 handbrake ·
+  bit3 rev-limiter) — four flags for the price of one column.
+- [x] Stacked charts: **overlay bands, not new panels** — TCS activation shades the
+  throttle panel, ASM shades the speed panel.
+- [ ] *(remaining)* Race-line map: TCS-active dots along the line. "TCS catches you at the same exit
+  every lap" is a direct coaching cue (over the limit there) and a setup cue (TCS can
+  come down when the % falls without lap-time loss).
+- [x] Lap metrics: `tcs_active_pct`, `asm_active_pct` in the lap table + tuning panel.
+- [x] Live view: TCS/ASM/HB indicator pills that light on activation; rev-limiter flashes
+  the RPM bar.
+
+### 1.6 Engine health — oil/water temp, oil pressure *(primitive d only)*
+
+- [x] **Not** per-tick lap channels — these move over minutes, not corners, so per-lap
+  aggregates carry all the signal: max water temp, max oil temp, min oil pressure
+  (sampled only above ~idle rpm).
+- [ ] *(remaining)* Sessions view: per-lap trend columns/sparkline so an endurance stint shows drift.
+- [x] Live view already shows both temps — added warning color thresholds *(one-shot exceedance toast remains)* and a one-shot
+  toast on first exceedance (pairs with the existing webhook notifications).
+
+### 1.7 Gearing panel *(static per lap, primitive d)*
+
+- [x] Capture `gear_ratios`, `transmission_top_speed`, `rpm_alert_max` once per lap as
+  metadata (not series — they only change when the tune changes).
+- [x] *(partial: ratio table + est. redline speeds shipped; sawtooth chart remains)* Analysis side panel "Gearing": table of ratio + theoretical speed at redline per
+  gear, and a **sawtooth chart** — speed-vs-RPM line per gear with the lap's actual
+  (speed, rpm) samples scattered on top. Shows real shift points vs redline, ratio gaps,
+  and whether top gear is ever reached (final drive too short/long).
+
+### 1.8 Suggested vs actual gear *(rides on existing gear panel)*
+
+- [ ] Per-tick `suggested_gear` column (15 = none → gap in the series).
+- [ ] Display as a dashed ghost step-line on the *existing* gear panel, only where a
+  suggestion is active; shade mismatches where actual > suggested through a corner.
+- [ ] Lap metric: count of corners taken a gear high.
+
+### 1.9 Clutch channels — deferred
+
+- [ ] Record nothing for now. Revisit as a derived "shift duration" metric (from
+  `clutch_engagement` dips) if manual-clutch users ask; near-zero value for the
+  pad/paddle majority, and it would spend three columns.
+
+**Suggested order:** 1.0 → 1.2 (slip/events — biggest driving-improvement payoff) →
+1.3 (temps) + 1.1 (widget lands with two of its three data sources) → 1.5 (aids) →
+1.4 (suspension) → 1.7 (gearing) → 1.6 (engine) → 1.8 → (1.9 deferred).
 
 ## Tier 2 — Derived analytics
 
@@ -184,14 +300,16 @@ Shipped along the way, not part of the original tiers:
 
 ## Suggested starting point
 
-Sector timing + theoretical best (Tier 2), plus wiring the already-decoded **tire temps**
-and **suspension travel** (Tier 1) into the lap series — the biggest jump in usefulness for
-the least new plumbing.
+Sector timing + theoretical best (Tier 2), plus Tier 1 in its suggested order: the 1.0
+plumbing pass, then per-wheel slip + events (1.2) and tire temps (1.3) so the Corner
+Detail widget (1.1) can land — the biggest jump in usefulness for the least new plumbing.
 
 ### Shared plumbing note
 
-Adding any per-lap channel touches the same spots, so batch them:
-`SAMPLE_COLUMNS` and `_append_sample` in `backend/app/processing/laps.py`, the persisted lap
-schema in `backend/app/storage/`, the JSON lap export/import version, the frontend column
-list in `frontend/src/lib/types.ts`, and the relevant chart components. Bump the lap-file
-format version when the column set changes so older exports still import cleanly.
+Adding any per-lap channel touches the same spots, so batch them (one 1.0 pass, not once
+per feature): `SAMPLE_COLUMNS` and `_append_sample` in `backend/app/processing/laps.py`,
+the persisted lap schema in `backend/app/storage/`, the JSON lap export/import version,
+the frontend column list in `frontend/src/lib/types.ts`, and the relevant chart
+components. Bump the lap-file format version when the column set changes so older exports
+still import cleanly. New per-tick columns should also be added to the `channels=`
+allowlist on the compare endpoint rather than the default response set.
