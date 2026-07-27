@@ -103,48 +103,39 @@ Change who would use the tool.
 
 ### Navigation / page linking
 
-The app has no router: `App.tsx` holds the active view in `useState`, and the `hashchange`
-listener only forces a re-render — it never reads the hash. So no view is deep-linkable, and
-there's no way to hand a selection from one view to another. Sessions and Analysis each fetch
-sessions/laps and hold their own selection independently, which is why a session doesn't open
-in Analysis.
-
-- [ ] **Hash router + deep links**. Parse `#/live`, `#/analysis`, `#/sessions`, `#/admin` in
-  `App.tsx`, and let Analysis accept `#/analysis?session=<id>&laps=<ids>&ref=<id>`. Makes
-  every view bookmarkable and shareable, and is the foundation for the links below.
-- [ ] **Shared analysis-selection state**. Add `{ sessionId, selectedLapIds, refLapId }` to
-  the store (or a new `store/analysis.ts`); Sessions writes it, Analysis reads it as its
-  initial selection instead of always defaulting to latest-vs-best.
-- [ ] **Sessions → Analysis link** *(the reported gap)*. Add an "Analyze" action to the
-  session header row and a per-lap "compare / set as reference" action in `LapTable`
-  (rows currently only have json / csv / delete). Choosing laps there jumps to Analysis with
-  them pre-loaded and the reference set.
-- [ ] **Live feed → Analysis**. Click a completed lap in `LiveView`'s lap feed to open it in
-  Analysis.
-- [ ] **Active-route highlight** in `StatusBar`, driven by the route rather than local state.
+- [x] **Hash router + deep links** (`lib/router.ts`): `#/live`, `#/analysis`, `#/sessions`,
+  `#/admin`, and Analysis accepts `#/analysis?session=<id>&laps=<ids>&ref=<id>`. The current
+  Analysis selection is mirrored back into the URL (replaceState) so it's always shareable.
+- [x] **Shared analysis-selection state** (`store/analysis.ts`): Analysis keeps
+  `{ sessionId, selectedLapIds, refLapId }` current, and re-entering the tab restores it
+  instead of resetting to latest-vs-best. Cross-view handoff itself rides the URL params.
+- [x] **Sessions → Analysis link**: "Analyze" button on the session header row, plus per-lap
+  "compare" (vs session best) and "set ref" actions in `LapTable`.
+- [x] **Live feed → Analysis**: completed laps in `LiveView`'s feed are clickable.
+- [x] **Active-route highlight** in `StatusBar`, driven by the route (with `aria-current`).
 
 ### Visual polish
 
 Base theme (panel / ink-dim / accent tokens, tabular figures) is solid; these lift it to a
 sellable-app finish.
 
-- [ ] **Replace native `prompt()` / `confirm()`** (Sessions track-naming and delete, import
-  errors) with styled in-app modals + toasts. Native dialogs can't be themed and undercut the
-  polished feel — more important now that this may ship as a product.
-- [ ] **Consistent per-lap color identity**. Reuse `CHART_COLORS.series` wherever a lap
-  appears — add a color chip in the Sessions lap table and Live feed so a lap keeps the same
-  color across views.
-- [ ] **Color the Δ column** in the lap table (green faster / red slower, accent/brake
-  tokens) instead of flat ink-dim.
-- [ ] **Skeleton / empty states** for the sessions list and charts, replacing bare "Loading…"
-  and "No sessions".
-- [ ] **Session-row recognition** — a mini track-map thumbnail or best-lap sparkline per
-  session so they're scannable at a glance.
-- [ ] **Responsive pass** — the Analysis lap-picker chip row overflows on narrow screens;
-  make it horizontally scrollable, and audit grid breakpoints for tablet/phone.
-- [ ] **Adopt a component library** (shadcn/ui, per the project brief) for Select / Dialog /
-  Tabs / Tooltip and focus-visible a11y states, instead of ad-hoc `.btn` classes and native
-  selects. Apply the dataviz palette method for accessible, consistent light/dark chart colors.
+- [x] **Replace native `prompt()` / `confirm()`** with in-app dialogs
+  (`components/ui/Dialog.tsx`: focus trap, Escape, backdrop) and a global toast stack
+  (`store/toasts.ts` + `components/ui/Toasts.tsx`). Covers track naming, session/lap delete,
+  admin clear-data, and all flash messages; lap delete gained a confirm it never had.
+- [x] **Consistent per-lap color identity** (`lib/colors.ts`): color keyed to lap id, used by
+  the Analysis charts/map/picker chips, the Sessions lap table, and the Live feed.
+- [x] **Color the Δ column** (green "best" / red +delta).
+- [x] **Skeleton / empty states** for the sessions list and Analysis (`.skeleton` class),
+  with friendlier empty-state copy.
+- [x] **Session-row recognition** — best-lap-dot sparkline of lap times per session row
+  (`components/LapSparkline.tsx`).
+- [x] **Responsive pass** — Analysis lap-picker chips scroll horizontally on narrow screens;
+  StatusBar nav scrolls instead of wrapping; global `:focus-visible` ring.
+- [ ] **Adopt a component library** (shadcn/ui, per the project brief) for Select / Tabs /
+  Tooltip. Deliberately deferred: the new in-house Dialog/Toast cover the acute need without
+  pulling in Radix; revisit if the component surface keeps growing. Apply the dataviz palette
+  method for accessible, consistent light/dark chart colors.
 
 ## Tier 5 — Overlay enhancements
 
@@ -153,19 +144,18 @@ sellable-app finish.
 dimensions**, so sizing is a manual "1920×260" hint and the preview (a fixed-height iframe)
 doesn't match what OBS actually shows.
 
-- [ ] **Custom canvas size** *(the requested one)*. Add `width` / `height` to `OverlayConfig`,
-  encode them in the overlay URL, and apply them in `OverlayView`. Ship presets — 1920×1080,
-  1920×260 strip, 1080×1920 vertical (TikTok / Shorts), 720×1280 — plus a custom W×H input.
-- [ ] **True-to-size preview**. Render the builder preview at the real aspect ratio (scaled
-  down) with a dimensions readout, so it matches the OBS browser source instead of a fixed
-  288px box.
-- [ ] **Edge offset / padding (x, y)** so the widget strip sits exactly where you want within
-  the canvas.
-- [ ] **Per-widget scale/size** beyond the single global scale; longer term, a drag-to-place
-  canvas editor for free widget positioning.
-- [ ] **Named, saved overlay presets** with export / import / share, instead of the single
-  `localStorage` blob today.
-- [ ] **Safe-area guides** for common stream resolutions in the preview.
+- [x] **Custom canvas size**: `size` on `OverlayConfig`, encoded as `size=WxH` in the URL and
+  applied in `OverlayView` (exact pixel box, global scale compensated). Presets: 1920×1080,
+  1920×260 strip, 1080×1920 (TikTok / Shorts), 720×1280, plus custom W×H inputs and a
+  "fill source" mode (the legacy behavior — old URLs without `size=` keep working).
+- [x] **True-to-size preview**: the builder renders the overlay iframe at real pixel
+  dimensions scaled to fit, with a size + "shown at N%" readout.
+- [x] **Edge padding (x, y)**: `pad=XxY` in the URL, number inputs in the builder.
+- [x] **Per-widget scale** (75–200%, encoded as `w=gear:1.5,…`); a drag-to-place canvas
+  editor for free positioning remains future work.
+- [x] **Named, saved overlay presets** (localStorage map) with save/load/delete chips and
+  JSON export / import for sharing between machines.
+- [x] **Safe-area guides** (action-safe 90% / title-safe 80%) toggle in the preview.
 
 
 ---
