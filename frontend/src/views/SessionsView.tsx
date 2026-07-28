@@ -267,6 +267,17 @@ export function SessionsView() {
   );
 }
 
+// "2L·1S·3B" — lockups, wheelspins, bottoming, kerbs; dash when clean/unknown
+function formatEventCounts(counts?: Record<string, number>): string {
+  if (!counts) return "–";
+  const parts = (
+    [["lockup", "L"], ["wheelspin", "S"], ["bottoming", "B"], ["kerb", "K"]] as const
+  )
+    .filter(([type]) => (counts[type] ?? 0) > 0)
+    .map(([type, letter]) => `${counts[type]}${letter}`);
+  return parts.length > 0 ? parts.join("·") : "–";
+}
+
 function LapTable({
   laps,
   units,
@@ -289,7 +300,7 @@ function LapTable({
       <table className="w-full font-tabular text-xs">
         <thead>
           <tr className="text-left text-ink-dim">
-            {["Lap", "Time", "Δ best", "Fuel", "Full thr.", "Full brake", "Coast", "Spin", "Max spd", ""].map(
+            {["Lap", "Time", "Δ best", "Fuel", "Full thr.", "Full brake", "Coast", "Spin", "Events", "Max spd", ""].map(
               (h) => (
                 <th key={h} className="px-2 py-2 font-normal">{h}</th>
               ),
@@ -327,6 +338,9 @@ function LapTable({
                 <td className="px-2 py-1.5">{lap.full_brake_pct.toFixed(0)}%</td>
                 <td className="px-2 py-1.5">{lap.coasting_pct.toFixed(0)}%</td>
                 <td className="px-2 py-1.5">{lap.tire_spin_pct.toFixed(0)}%</td>
+                <td className="px-2 py-1.5 text-ink-dim" title="lockups · spins · bottoming · kerbs">
+                  {formatEventCounts(lap.event_counts)}
+                </td>
                 <td className="px-2 py-1.5">{formatSpeed(lap.max_speed, units)}</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
                   <Tip content="Compare against the session's best lap in Analysis">

@@ -35,6 +35,7 @@ export interface AnalysisRequest {
   session?: number;
   laps?: number[];
   ref?: number;
+  channels?: string[]; // stacked-chart channel keys (ch=), non-default sets only
 }
 
 export function openInAnalysis(req: AnalysisRequest): void {
@@ -52,10 +53,12 @@ export function parseAnalysisParams(params: URLSearchParams): AnalysisRequest {
     .split(",")
     .map(Number)
     .filter((n) => Number.isFinite(n) && n > 0);
+  const channels = (params.get("ch") ?? "").split(",").filter((c) => c.length > 0);
   return {
     session: Number.isFinite(session) && session > 0 ? session : undefined,
     laps: laps.length > 0 ? laps : undefined,
     ref: Number.isFinite(ref) && ref > 0 ? ref : undefined,
+    channels: channels.length > 0 ? channels : undefined,
   };
 }
 
@@ -67,5 +70,6 @@ export function reflectAnalysisSelection(req: AnalysisRequest): void {
   if (req.session != null) params.session = String(req.session);
   if (req.laps && req.laps.length > 0) params.laps = req.laps.join(",");
   if (req.ref != null) params.ref = String(req.ref);
+  if (req.channels && req.channels.length > 0) params.ch = req.channels.join(",");
   history.replaceState(null, "", routeHash("analysis", params));
 }

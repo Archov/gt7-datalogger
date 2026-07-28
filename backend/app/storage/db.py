@@ -78,6 +78,13 @@ class LapRow(Base):
     min_body_height: Mapped[float]
     total_ticks: Mapped[int]
     tod_ms: Mapped[int] = mapped_column(default=-1)  # in-game time of day at lap end
+    tcs_active_pct: Mapped[float] = mapped_column(default=0.0)
+    asm_active_pct: Mapped[float] = mapped_column(default=0.0)
+    max_water_temp: Mapped[float] = mapped_column(default=0.0)
+    max_oil_temp: Mapped[float] = mapped_column(default=0.0)
+    min_oil_pressure: Mapped[float] = mapped_column(default=-1.0)
+    events_json: Mapped[str] = mapped_column(Text, default="[]")
+    gearing_json: Mapped[str] = mapped_column(Text, default="")
     samples_json: Mapped[str] = mapped_column(Text)
 
     session: Mapped[SessionRow] = relationship(back_populates="laps")
@@ -104,6 +111,17 @@ _SQLITE_MIGRATIONS = (
         "ALTER TABLE sessions ADD COLUMN track_name VARCHAR NOT NULL DEFAULT ''",
     ),
     ("laps", "tod_ms", "ALTER TABLE laps ADD COLUMN tod_ms INTEGER NOT NULL DEFAULT -1"),
+) + tuple(
+    ("laps", column, f"ALTER TABLE laps ADD COLUMN {column} {ddl}")
+    for column, ddl in (
+        ("tcs_active_pct", "FLOAT NOT NULL DEFAULT 0"),
+        ("asm_active_pct", "FLOAT NOT NULL DEFAULT 0"),
+        ("max_water_temp", "FLOAT NOT NULL DEFAULT 0"),
+        ("max_oil_temp", "FLOAT NOT NULL DEFAULT 0"),
+        ("min_oil_pressure", "FLOAT NOT NULL DEFAULT -1"),
+        ("events_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("gearing_json", "TEXT NOT NULL DEFAULT ''"),
+    )
 )
 
 

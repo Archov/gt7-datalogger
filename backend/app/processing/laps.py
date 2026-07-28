@@ -24,6 +24,11 @@ MIN_LAP_TICKS = 600
 SAMPLE_COLUMNS = (
     "t", "dist", "speed", "throttle", "brake", "coast", "gear", "rpm",
     "boost", "tire_slip", "yaw_rate", "pos_x", "pos_z", "body_height", "fuel",
+    # Tier 1 per-corner channels (FL FR RL RR)
+    "slip_fl", "slip_fr", "slip_rl", "slip_rr",
+    "tt_fl", "tt_fr", "tt_rl", "tt_rr",
+    "sus_fl", "sus_fr", "sus_rl", "sus_rr",  # suspension compression, mm
+    "aids",  # AidsBits mask: TCS | ASM | handbrake | rev limiter
 )
 
 
@@ -50,8 +55,23 @@ class CompletedLap:
     max_speed: float = 0.0
     min_body_height: float = 0.0
     total_ticks: int = 0
+    tcs_active_pct: float = 0.0
+    asm_active_pct: float = 0.0
+    # Engine health — per-lap aggregates only (these drift over minutes, not
+    # corners), tracked by the processor rather than sampled per tick.
+    max_water_temp: float = 0.0
+    max_oil_temp: float = 0.0
+    min_oil_pressure: float = -1.0  # sampled above idle rpm only; -1 = unknown
+    # Static per lap: {"ratios": [...], "top_speed": float, "rpm_alert": float}
+    gearing: dict[str, object] | None = None
+    events: list[dict[str, object]] = field(default_factory=list)
 
     def compute_metrics(self) -> None:
+        # Imported laps from older export versions may lack the newer columns;
+        # every metric guards with .get so they degrade to 0 rather than raise.
+        from app.models import AidsBits
+        from app.processing.events import detect_events
+
         s = self.samples
         n = len(s["t"])
         self.total_ticks = n
@@ -66,6 +86,11 @@ class CompletedLap:
         ) / n
         self.max_speed = max(s["speed"])
         self.min_body_height = min(s["body_height"])
+        aids = s.get("aids") or []
+        if aids:
+            self.tcs_active_pct = 100.0 * sum(1 for v in aids if int(v) & AidsBits.TCS) / n
+            self.asm_active_pct = 100.0 * sum(1 for v in aids if int(v) & AidsBits.ASM) / n
+        self.events = detect_events(s)
 
 
 @dataclass(slots=True)
@@ -99,6 +124,10 @@ class LapProcessor:
     _ticks: int = 0
     _fuel_start: float = 0.0
     _last_packet: TelemetryPacket | None = None
+    # Engine-health aggregates for the lap in progress (not per-tick columns)
+    _max_water: float = 0.0
+    _max_oil: float = 0.0
+    _min_oil_pressure: float = -1.0
 
     @property
     def session(self) -> SessionInfo | None:
@@ -147,6 +176,7 @@ class LapProcessor:
         )
         finished_samples = self._samples
         fuel_start = self._fuel_start
+        engine = (self._max_water, self._max_oil, self._min_oil_pressure)
 
         # Commit all state BEFORE any await: packets keep arriving while the
         # lap is persisted, and a stale _current_lap would re-trigger this
@@ -156,6 +186,9 @@ class LapProcessor:
         self._distance = 0.0
         self._ticks = 0
         self._fuel_start = p.fuel_level
+        self._max_water = 0.0
+        self._max_oil = 0.0
+        self._min_oil_pressure = -1.0
 
         if completing:
             lap = CompletedLap(
@@ -168,6 +201,14 @@ class LapProcessor:
                 fuel_end=p.fuel_level,
                 tod_ms=p.day_progression_ms,
             )
+            lap.max_water_temp = round(engine[0], 1)
+            lap.max_oil_temp = round(engine[1], 1)
+            lap.min_oil_pressure = round(engine[2], 3)
+            lap.gearing = {
+                "ratios": [round(r, 4) for r in p.gear_ratios if r > 0],
+                "top_speed": round(p.transmission_top_speed, 1),
+                "rpm_alert": p.rpm_alert_max,
+            }
             lap.compute_metrics()
             assert self._session is not None
             self._session.lap_count += 1
@@ -195,4 +236,25 @@ class LapProcessor:
         s["pos_z"].append(round(p.position_z, 2))
         s["body_height"].append(round(p.body_height * 1000, 1))  # mm
         s["fuel"].append(round(p.fuel_level, 3))
+        slips = p.wheel_slips
+        for i, w in enumerate(("fl", "fr", "rl", "rr")):
+            s[f"slip_{w}"].append(round(slips[i], 4))
+        s["tt_fl"].append(round(p.tire_temp_fl, 1))
+        s["tt_fr"].append(round(p.tire_temp_fr, 1))
+        s["tt_rl"].append(round(p.tire_temp_rl, 1))
+        s["tt_rr"].append(round(p.tire_temp_rr, 1))
+        s["sus_fl"].append(round(p.suspension_fl * 1000, 1))  # mm
+        s["sus_fr"].append(round(p.suspension_fr * 1000, 1))
+        s["sus_rl"].append(round(p.suspension_rl * 1000, 1))
+        s["sus_rr"].append(round(p.suspension_rr * 1000, 1))
+        s["aids"].append(float(p.aids_bits))
+        # Engine-health aggregates (per-lap, not per-tick)
+        self._max_water = max(self._max_water, p.water_temp)
+        self._max_oil = max(self._max_oil, p.oil_temp)
+        if p.engine_rpm > 1200:  # ignore idle — pressure at idle is meaningless
+            self._min_oil_pressure = (
+                p.oil_pressure
+                if self._min_oil_pressure < 0
+                else min(self._min_oil_pressure, p.oil_pressure)
+            )
         self._ticks += 1

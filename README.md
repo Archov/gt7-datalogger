@@ -7,45 +7,91 @@ web dashboard for live driving, lap comparison, and session management.
 Functional parity with [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard),
 rebuilt with a cleaner architecture and a modern UI.
 
+![Analysis view](docs/screenshots/analysis.png)
+
 ## Features
 
-- **Live view** — large readouts for speed, gear, RPM (with limiter warning), throttle/brake,
-  boost, fuel, tire temps, race position, lap delta, and a live feed of completed laps.
-- **Analysis view** — multi-lap overlay comparison against a selectable reference lap:
-  time diff over distance, speed, throttle, brake, coasting, gear, RPM, boost,
-  tire-speed ratio, and yaw rate — all with **synced cursors** (hover one chart and the same
-  distance point is highlighted everywhere, including on the race line map).
-  Race line map with throttle/brake/coast zones and speed peaks (▲) / valleys (▼).
-  Speed-deviation consistency chart across your best laps, relative fuel-map strategy table,
-  and a tuning info panel.
-- **Sessions view** — browse historical sessions, per-lap metrics (fuel, full throttle,
-  full brake, coasting, tire spin, max speed), export/import laps as JSON, delete laps or
-  whole sessions, manual "log lap now", and a record on/off toggle.
-- **Robust capture** — Salsa20 decryption, heartbeat keep-alive, console auto-discovery via
-  UDP broadcast, automatic reconnect, and a visible connection status indicator.
-- **Sessions auto-split** on car change or race restart, so data never mixes.
-- **Simulated source** (`GT7_SOURCE=sim`) drives laps around a synthetic circuit at 60 Hz —
-  develop and demo everything without a PlayStation.
-- Configurable units (km/h / mph), persisted in the browser.
-- **Admin view** — set the PlayStation IP and telemetry source (PlayStation / simulated) at
-  runtime with no restart (persisted in the database), live log viewer with level filtering,
-  connection diagnostics (packets, decode errors, uptime, connected clients), database
-  stats with compact/clear actions, and one-click car-database updates.
-- **Customizable overlay / dashboard** — a visual builder (Admin view) with a live preview:
-  pick and reorder widgets (gear, speed, RPM, inputs, lap times, big delta, race position,
-  tires, fuel, fuel strategy, in-game clock), choose a layout (transparent OBS strip,
-  vertical stack, or phone dashboard grid), and tune scale, background opacity, and
-  alignment. The whole config is encoded in the URL, so OBS, a phone, and a pit-wall
-  tablet can each load their own setup.
-- **Webhook / Discord notifications** — new personal bests and end-of-session summaries
-  posted to any webhook URL (Discord URLs get a rich embed, others plain JSON).
-- **CSV / MoTeC-compatible lap export** — open laps in MoTeC i2, Excel, or other analysis
-  tools, alongside the existing JSON export.
+### Live
+
+- **Live view** — large readouts for speed, gear, RPM (with limiter flash), throttle/brake,
+  boost, fuel, tire temps, race position, lap delta, and a live feed of completed laps
+  (click any lap to open it in Analysis).
+- **Driver-aid indicators** — TCS / ASM / handbrake pills that light while the aid is
+  intervening, and engine temperature warning colors for long stints.
 - **Live race strategy** — fuel-to-empty countdown, pit-window lap, and race-distance fuel
   check computed from your rolling consumption, plus the in-game clock for endurance stints
   (time-of-day is also recorded per lap).
-- **Track auto-identification** — name a circuit once (Sessions view) and every future
-  session on it is tagged automatically from the lap geometry.
+
+### Analysis
+
+- **Multi-lap overlay comparison** against a selectable reference lap: time diff over
+  distance plus a **channel picker** — choose from ~20 telemetry channels grouped into
+  Driving, Tires & wheels, Chassis, and Engine (speed, throttle, brake, coasting, gear,
+  RPM, boost, yaw rate, per-wheel slip, per-corner tire temps, front/rear averages, the
+  tire-temp **F−R balance** curve, suspension travel, ride height, …). The panel set
+  persists and is encoded in the URL, so a shared link reproduces the exact view.
+- **Synced cursors** — hover one chart and the same distance point is highlighted
+  everywhere: every panel, the race line map, and the Corner Detail widget.
+- **Corner Detail widget** — a top-down car with four corner cells that replays the
+  load-transfer story as you scrub: tire temp as cell color, suspension compression bars,
+  LOCK / SPIN badges, and an F/R temp-balance readout. One focus lap at a time with the
+  reference lap as a ghost (secondary figures + hollow bars).
+- **Detected chassis events** — lockups, wheelspin, suspension bottoming, and kerb strikes
+  are detected at lap save, shaded onto the charts (on the panel that caused them), counted
+  per lap in the Sessions table (`2L·1S·4B`), and summarized in the tuning panel. TCS/ASM
+  activation shades the throttle/speed panels.
+- **Race line map** with throttle/brake/coast zones and speed peaks (▲) / valleys (▼),
+  drag-select **section zoom** synchronized across all charts and the map.
+- **Gearing panel** — per-lap gear ratios with estimated speed at redline, tune top speed,
+  and redline RPM.
+- Speed-deviation consistency chart across your best laps, relative fuel-map strategy
+  table, and a tuning panel with aid usage, engine health (max water/oil temp, min oil
+  pressure), and event counts.
+- **Deep links everywhere** — `#/analysis?session=…&laps=…&ref=…&ch=…` bookmarks an exact
+  comparison; Sessions and Live hand laps straight into Analysis.
+
+### Sessions
+
+- Browse historical sessions with lap-time **sparklines**, per-lap metrics (fuel, full
+  throttle, full brake, coasting, tire spin, events, max speed), stable per-lap colors
+  shared with every chart, and per-lap **compare / set-reference** shortcuts into Analysis.
+- Export/import laps as JSON, **CSV / MoTeC-compatible export** for MoTeC i2 or Excel,
+  delete laps or whole sessions, manual "log lap now", and a record on/off toggle.
+- **Track auto-identification** — name a circuit once and every future session on it is
+  tagged automatically from the lap geometry.
+
+### Overlay & streaming
+
+- **Customizable overlay / dashboard builder** (Admin view) with a true-to-size live
+  preview: pick, reorder, and **individually scale** widgets (gear, speed, RPM, inputs,
+  lap times, big delta, race position, tires, fuel, fuel strategy, in-game clock), choose
+  a layout (transparent OBS strip, vertical stack, or phone dashboard grid), and tune
+  global scale, edge padding, background opacity, and alignment.
+- **Canvas size presets** — 1920×1080, 1920×260 strip, 1080×1920 (TikTok / Shorts),
+  720×1280, or any custom size; the overlay renders at exactly those pixels and the
+  preview shows safe-area guides. Green-screen page mode for apps without alpha support.
+- **Named overlay presets** with JSON export/import; the whole config is encoded in the
+  URL, so OBS, a phone, and a pit-wall tablet can each load their own setup.
+
+### Capture & platform
+
+- **Robust capture** — Salsa20 decryption, heartbeat keep-alive, console auto-discovery via
+  UDP broadcast, automatic reconnect, and a visible connection status indicator.
+- **Rich per-lap recording** — 60 Hz sample series for ~28 channels including per-wheel
+  slip, per-corner tire temps, suspension travel, and a driver-aids bitmask, plus per-lap
+  aggregates (aid usage %, engine health, gearing metadata).
+- **Sessions auto-split** on car change or race restart, so data never mixes.
+- **Simulated source** (`GT7_SOURCE=sim`) drives laps around a synthetic circuit at 60 Hz —
+  including lockups, wheelspin, kerb strikes, and aid activity — so everything can be
+  developed and demoed without a PlayStation.
+- **Admin view** — set the PlayStation IP and telemetry source at runtime with no restart
+  (persisted in the database), live log viewer with level filtering, connection
+  diagnostics, database stats with compact/clear actions, and one-click car-database
+  updates.
+- **Webhook / Discord notifications** — new personal bests and end-of-session summaries
+  posted to any webhook URL (Discord URLs get a rich embed, others plain JSON).
+- Configurable units (km/h / mph), persisted in the browser; dark-themed responsive UI
+  built on accessible primitives with a colorblind-validated chart palette.
 
 ## Architecture
 
@@ -277,8 +323,10 @@ python backend/scripts/update_cars.py
 ## Lap files
 
 Laps export/import as JSON (`Sessions → export` / `Import lap…`) with a versioned format
-containing lap metadata plus full 60 Hz sample series (speed, inputs, position, fuel, …),
-so laps can be shared or backed up.
+(v2) containing lap metadata, detected events, gearing, and the full 60 Hz sample series
+(speed, inputs, position, fuel, per-wheel slip, tire temps, suspension, driver aids, …),
+so laps can be shared or backed up. v1 files from older versions import cleanly — the
+newer channels are simply absent and the charts skip them.
 
 ## Troubleshooting
 
@@ -291,4 +339,22 @@ so laps can be shared or backed up.
 
 ## Screenshots
 
-*(Add screenshots of the Live, Analysis, and Sessions views here.)*
+**Live view** — race readouts, driver-aid pills, strategy, and the clickable lap feed:
+
+![Live view](docs/screenshots/live.png)
+
+**Analysis view** — channel picker, synced cursors, event bands, race line map,
+Corner Detail widget, and the gearing panel:
+
+![Analysis view](docs/screenshots/analysis.png)
+
+**Sessions view** — lap-time sparklines and per-lap metrics with event counts
+(`2L·1S·4B` = lockups · wheelspins · bottoming):
+
+![Sessions view](docs/screenshots/sessions.png)
+
+**OBS overlay** — one of the layouts from the overlay builder, at an exact canvas size:
+
+![Overlay strip](docs/screenshots/overlay.png)
+
+*All screenshots were captured against the built-in simulated telemetry source.*

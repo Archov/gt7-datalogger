@@ -32,12 +32,17 @@ export const api = {
   sessions: () => get<SessionSummary[]>("/api/sessions"),
   sessionLaps: (id: number) => get<LapSummary[]>(`/api/sessions/${id}/laps`),
   laps: () => get<LapSummary[]>("/api/laps"),
+  lapDetail: (id: number, withSamples = true) =>
+    get<LapSummary & Record<string, unknown>>(`/api/laps/${id}${withSamples ? "" : "?samples=0"}`),
   deleteSession: (id: number) => send<{ status: string }>(`/api/sessions/${id}`, "DELETE"),
   deleteLap: (id: number) => send<{ status: string }>(`/api/laps/${id}`, "DELETE"),
   exportLap: (id: number) => get<Record<string, unknown>>(`/api/laps/${id}/export`),
   importLap: (payload: unknown) => send<{ id: number }>("/api/laps/import", "POST", payload),
-  compare: (lapIds: number[], ref: number) =>
-    get<CompareResult>(`/api/analysis/compare?laps=${lapIds.join(",")}&ref=${ref}`),
+  compare: (lapIds: number[], ref: number, channels?: string[]) =>
+    get<CompareResult>(
+      `/api/analysis/compare?laps=${lapIds.join(",")}&ref=${ref}` +
+        (channels && channels.length > 0 ? `&channels=${channels.join(",")}` : ""),
+    ),
   deviation: (sessionId: number, count = 5) =>
     get<DeviationResult>(`/api/analysis/deviation?session_id=${sessionId}&count=${count}`),
   fuelMap: (lapId: number) => get<FuelMapResult>(`/api/analysis/fuel?lap_id=${lapId}`),

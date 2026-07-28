@@ -23,6 +23,14 @@ from app.telemetry.simulator import SimTelemetrySource
 log = logging.getLogger(__name__)
 
 
+def _count_events(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for e in events:
+        kind = str(e.get("type", ""))
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
 class TelemetryService:
     def __init__(self, settings: Settings, repo: Repository, cars: CarDatabase) -> None:
         self.settings = settings
@@ -158,6 +166,9 @@ class TelemetryService:
             "tire_spin_pct": round(lap.tire_spin_pct, 1),
             "max_speed": round(lap.max_speed, 1),
             "min_body_height": round(lap.min_body_height, 1),
+            "tcs_active_pct": round(lap.tcs_active_pct, 1),
+            "asm_active_pct": round(lap.asm_active_pct, 1),
+            "event_counts": _count_events(lap.events),
         }
         await self._broadcast({"type": "lap", "data": summary})
 
@@ -215,6 +226,8 @@ class TelemetryService:
             "tire_slip": round(p.tire_slip_ratio, 3),
             "water_temp": round(p.water_temp, 1),
             "oil_temp": round(p.oil_temp, 1),
+            "oil_pressure": round(p.oil_pressure, 2),
+            "aids": p.aids_bits,
             "car_id": p.car_id,
             "car_name": self.cars.name(p.car_id),
             "session_best_ms": session.best_lap_time_ms if session else -1,

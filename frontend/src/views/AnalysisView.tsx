@@ -4,13 +4,23 @@
 // Sessions or Live views, and is mirrored back into the URL for sharing.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChannelPicker } from "@/components/analysis/ChannelPicker";
+import { CornerDetail, type CornerLap } from "@/components/analysis/CornerDetail";
 import { DeviationChart } from "@/components/analysis/DeviationChart";
 import { FuelMapPanel } from "@/components/analysis/FuelMapPanel";
+import { GearingPanel } from "@/components/analysis/GearingPanel";
 import { RaceLineMap, type MapLap } from "@/components/analysis/RaceLineMap";
 import { StackedCharts } from "@/components/analysis/StackedCharts";
 import { Select } from "@/components/ui/Select";
 import { Tip } from "@/components/ui/Tooltip";
 import { api } from "@/lib/api";
+import {
+  CHANNEL_BY_KEY,
+  columnsForChannels,
+  isDefaultChannelSet,
+  loadChannelKeys,
+  saveChannelKeys,
+} from "@/lib/channels";
 import { lapColor } from "@/lib/colors";
 import { formatLapTime, formatSpeed } from "@/lib/format";
 import { reflectAnalysisSelection, type AnalysisRequest } from "@/lib/router";
@@ -18,6 +28,15 @@ import type { CompareResult, DeviationResult, LapSummary, SessionSummary } from 
 import { useAnalysisSelection } from "@/store/analysis";
 import { useSettings } from "@/store/settings";
 import { useTelemetry } from "@/store/telemetry";
+
+// The Corner Detail widget always needs the per-corner columns, whatever the
+// chart picker says.
+const CORNER_COLUMNS = [
+  "slip_fl", "slip_fr", "slip_rl", "slip_rr",
+  "tt_fl", "tt_fr", "tt_rl", "tt_rr",
+  "sus_fl", "sus_fr", "sus_rl", "sus_rr",
+  "throttle", "brake",
+];
 
 export function AnalysisView({ request }: { request: AnalysisRequest }) {
   const units = useSettings((s) => s.units);
@@ -34,6 +53,14 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   const [deviation, setDeviation] = useState<DeviationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [channelKeys, setChannelKeys] = useState<string[]>(
+    () => request.channels?.filter((k) => k in CHANNEL_BY_KEY) ?? loadChannelKeys(),
+  );
+  useEffect(() => saveChannelKeys(channelKeys), [channelKeys]);
+  const channelDefs = useMemo(
+    () => channelKeys.map((k) => CHANNEL_BY_KEY[k]).filter(Boolean),
+    [channelKeys],
+  );
 
   // Until the user (or a deep link) picks laps, selection follows
   // "latest vs best" as new laps arrive live.
@@ -42,7 +69,7 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   );
 
   // Apply a new deep link while the view is mounted (pasted URL).
-  const requestKey = `${request.session ?? ""}|${(request.laps ?? []).join(",")}|${request.ref ?? ""}`;
+  const requestKey = `${request.session ?? ""}|${(request.laps ?? []).join(",")}|${request.ref ?? ""}|${(request.channels ?? []).join(",")}`;
   const firstRequest = useRef(true);
   useEffect(() => {
     if (firstRequest.current) {
@@ -58,6 +85,9 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
         request.ref != null && !lapIds.includes(request.ref) ? [...lapIds, request.ref] : lapIds;
       if (withRef.length > 0) setSelected(withRef);
       if (request.ref != null) setRefLap(request.ref);
+    }
+    if (request.channels != null) {
+      setChannelKeys(request.channels.filter((k) => k in CHANNEL_BY_KEY));
     }
     // Deliberately keyed on the serialized request only — re-running on every
     // object identity change would clobber in-view selection edits.
@@ -101,24 +131,35 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   useEffect(() => {
     if (sessionId == null || refLap == null || selected.length === 0) return;
     setSharedSelection({ sessionId, selectedLapIds: selected, refLapId: refLap });
-    reflectAnalysisSelection({ session: sessionId, laps: selected, ref: refLap });
-  }, [sessionId, selected, refLap, setSharedSelection]);
+    reflectAnalysisSelection({
+      session: sessionId,
+      laps: selected,
+      ref: refLap,
+      channels: isDefaultChannelSet(channelKeys) ? undefined : channelKeys,
+    });
+  }, [sessionId, selected, refLap, channelKeys, setSharedSelection]);
 
-  // Fetch comparison + deviation when the selection changes
+  // Fetch comparison + deviation when the selection or channel set changes.
+  // The request always carries the per-corner columns for the Corner Detail
+  // widget on top of whatever the picked panels need.
+  const requestColumns = useMemo(
+    () => [...new Set([...columnsForChannels(channelKeys), ...CORNER_COLUMNS])],
+    [channelKeys],
+  );
   useEffect(() => {
     if (refLap == null || selected.length === 0) {
       setCompare(null);
       return;
     }
     setLoading(true);
-    api.compare(selected, refLap)
+    api.compare(selected, refLap, requestColumns)
       .then((c) => {
         setCompare(c);
         setError(null);
       })
       .catch(() => setError("Comparison failed"))
       .finally(() => setLoading(false));
-  }, [selected, refLap]);
+  }, [selected, refLap, requestColumns]);
 
   useEffect(() => {
     if (sessionId == null) return;
@@ -169,6 +210,19 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
       color: lapColor(Number(id)),
       label: lapLabels[id] ?? `Lap ${id}`,
       isRef: id === String(refLap),
+    }));
+  }, [compare, lapLabels, refLap]);
+
+  // Same laps, shaped for the Corner Detail widget (cursor-synced with the
+  // charts and the map dot).
+  const cornerLaps = useMemo<CornerLap[]>(() => {
+    if (!compare) return [];
+    return Object.keys(compare.laps).map((id) => ({
+      id,
+      label: lapLabels[id] ?? `Lap ${id}`,
+      color: lapColor(Number(id)),
+      isRef: id === String(refLap),
+      series: compare.laps[id].series,
     }));
   }, [compare, lapLabels, refLap]);
 
@@ -261,6 +315,7 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               );
             })}
           </div>
+          <ChannelPicker selected={channelKeys} onChange={setChannelKeys} />
           {refLap != null && (
             <div className="ml-auto">
               <Select
@@ -288,6 +343,7 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               data={compare}
               lapLabels={lapLabels}
               units={units}
+              channels={channelDefs}
               onCursorDist={onCursorDist}
               zoomRange={zoomRange}
               onZoomChange={setZoomRange}
@@ -308,6 +364,16 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               step={compare!.step}
               zoomRange={zoomRange}
             />
+          </SidePanel>
+        )}
+        {cornerLaps.length > 0 && (
+          <SidePanel title="Corner detail — cursor synced">
+            <CornerDetail laps={cornerLaps} cursorDist={cursorDist} step={compare!.step} />
+          </SidePanel>
+        )}
+        {refLap != null && (
+          <SidePanel title="Gearing (reference lap)">
+            <GearingPanel lapId={refLap} units={units} />
           </SidePanel>
         )}
         {deviation && deviation.dist.length > 0 && (
@@ -331,6 +397,29 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               <Info k="Tire spin" v={`${refSummary.tire_spin_pct.toFixed(1)}%`} />
               <Info k="Fuel used" v={`${refSummary.fuel_consumed.toFixed(2)} L`} />
               <Info k="Car" v={refSummary.car_name ?? "–"} />
+              {refSummary.tcs_active_pct != null && (
+                <Info k="TCS active" v={`${refSummary.tcs_active_pct.toFixed(1)}%`} />
+              )}
+              {refSummary.asm_active_pct != null && (
+                <Info k="ASM active" v={`${refSummary.asm_active_pct.toFixed(1)}%`} />
+              )}
+              {(refSummary.max_water_temp ?? 0) > 0 && (
+                <Info k="Max water" v={`${refSummary.max_water_temp!.toFixed(0)}°C`} />
+              )}
+              {(refSummary.max_oil_temp ?? 0) > 0 && (
+                <Info k="Max oil" v={`${refSummary.max_oil_temp!.toFixed(0)}°C`} />
+              )}
+              {(refSummary.min_oil_pressure ?? -1) >= 0 && (
+                <Info k="Min oil press." v={`${refSummary.min_oil_pressure!.toFixed(1)} bar`} />
+              )}
+              {refSummary.event_counts && Object.keys(refSummary.event_counts).length > 0 && (
+                <Info
+                  k="Events"
+                  v={Object.entries(refSummary.event_counts)
+                    .map(([type, n]) => `${n} ${type}`)
+                    .join(" · ")}
+                />
+              )}
             </div>
           </SidePanel>
         )}
