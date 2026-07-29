@@ -1,5 +1,7 @@
-# Stage 1: build the frontend
-FROM node:22-alpine AS frontend
+# Stage 1: build the frontend.
+# Pinned to the *builder's* platform: the only output is static JS/CSS/HTML, so
+# on a multi-arch build this runs once natively instead of again under emulation.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-fund --no-audit
@@ -9,6 +11,10 @@ RUN npm run build
 # Stage 2: runtime
 FROM python:3.12-slim
 WORKDIR /app
+
+# Links the image to the repo on GHCR. CI overrides this via docker/metadata-action;
+# it is set here so locally built images carry it too.
+LABEL org.opencontainers.image.source="https://github.com/jbhoorasingh/gt7-datalogger"
 
 COPY backend/ backend/
 RUN pip install --no-cache-dir ./backend
