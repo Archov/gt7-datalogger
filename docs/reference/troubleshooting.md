@@ -1,0 +1,52 @@
+# Troubleshooting
+
+## "Server up, no telemetry" (amber status dot)
+
+The backend is running but no packets are arriving from the console.
+
+- Check `GT7_PS_IP` is the PlayStation's current IP (it can change after a router
+  reboot — consider a DHCP reservation).
+- Make sure the PlayStation and the server are on the **same network / subnet**.
+- Check that UDP port **33740** is not blocked by a firewall on the server.
+- If you rely on broadcast auto-discovery inside Docker, note that the default bridge
+  network cannot see LAN broadcasts — set `GT7_PS_IP` explicitly or use
+  `network_mode: host` (Linux only).
+- You must be **in a race, time trial, or replay** — GT7 only streams telemetry while
+  driving is on screen, not in menus.
+
+## Wrong or garbled data (decode errors in `/api/status`)
+
+- Another tool on the network may be consuming or interfering with the stream.
+- The packet format may have changed after a game update — check for a newer release of
+  the datalogger.
+
+## No laps recorded
+
+- Laps are only recorded while the car is **on track and not paused**; menu and replay
+  time is ignored.
+- The first (out) lap completes when you cross the start line — until then nothing is
+  saved.
+- Check that recording hasn't been toggled off in the **Sessions** view.
+
+## Dashboard loads but shows "demo" data
+
+The frontend falls back to a demo frame when it cannot reach the backend WebSocket.
+Check that the backend is running and reachable at the same host/port you loaded the
+page from.
+
+## Overlay shows a black background in OBS
+
+Use a **Browser source** in OBS and make sure the overlay layout is set to the
+transparent strip; alternatively use the green-screen page mode and add a chroma-key
+filter for apps without alpha support. See [Overlay & streaming](../guide/overlay.md).
+
+## Getting more detail
+
+- **Admin → Logs** shows the live backend log with level filtering.
+- `GET /api/status` reports connection state, packet rates, and decode errors — useful
+  when filing an issue.
+- Database growing large? **Admin → Database** shows stats and offers compact/clear
+  actions.
+
+Still stuck? [Open an issue](https://github.com/jbhoorasingh/gt7-datalogger/issues) with
+your setup (Docker/native, network layout) and the output of `/api/status`.

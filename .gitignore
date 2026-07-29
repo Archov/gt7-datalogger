@@ -20,6 +20,9 @@ data/*.db
 data/*.db-journal
 data/*.sqlite*
 
+# Docs
+site/
+
 # IDE / OS
 .idea/
 .vscode/
