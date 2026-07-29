@@ -5,6 +5,7 @@
 [![ghcr.io](https://img.shields.io/badge/ghcr.io-gt7--datalogger-2496ED?logo=docker&logoColor=white)](https://github.com/jbhoorasingh/gt7-datalogger/pkgs/container/gt7-datalogger)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-github%20pages-8B5CF6)](https://jbhoorasingh.github.io/gt7-datalogger/)
 
 A telemetry datalogger and analysis dashboard for **Gran Turismo 7**. It captures the
 PlayStation's live telemetry stream, records every lap, and serves a modern dark-themed
@@ -12,6 +13,9 @@ web dashboard for live driving, lap comparison, and session management.
 
 Functional parity with [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard),
 rebuilt with a cleaner architecture and a modern UI.
+
+**📖 Full documentation: [jbhoorasingh.github.io/gt7-datalogger](https://jbhoorasingh.github.io/gt7-datalogger/)** —
+per-feature guides, how every calculation works, and the API reference.
 
 ![Analysis view](docs/screenshots/analysis.png)
 
