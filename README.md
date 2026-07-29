@@ -138,13 +138,15 @@ GT7_SOURCE=sim docker compose up --build
 Images are published to GitHub Container Registry, so you can skip the build:
 
 ```bash
-docker pull ghcr.io/jbhoorasingh/gt7-datalogger:latest
+TAG=latest  # amd64 (use a release tag like 0.1.0 on arm64)
+
+docker pull ghcr.io/jbhoorasingh/gt7-datalogger:${TAG}
 
 docker run -d --name gt7-datalogger \
   -p 8000:8000 -p 33740:33740/udp \
   -e GT7_PS_IP=<your playstation ip> \
   -v gt7-data:/data \
-  ghcr.io/jbhoorasingh/gt7-datalogger:latest
+  ghcr.io/jbhoorasingh/gt7-datalogger:${TAG}
 ```
 
 | Tag | Built from | Architectures |
