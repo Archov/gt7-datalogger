@@ -1,0 +1,52 @@
+# VCS, CI, editor, agent tooling
+.git
+.gitignore
+.github
+.claude
+.idea
+.vscode
+.DS_Store
+
+# Docs, meta, dev-only entrypoints
+README.md
+TODO.md
+CLAUDE.md
+LICENSE
+docs
+reference-docs
+dev.sh
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Root dev harness (concurrently) — backend/ and frontend/ have their own manifests
+package.json
+package-lock.json
+node_modules
+
+# Node artifacts — stage 1 runs npm ci and npm run build itself
+frontend/node_modules
+frontend/dist
+**/*.tsbuildinfo
+
+# Python build / venv / cache artifacts
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/*.egg-info
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+backend/build
+backend/dist
+
+# Tests aren't installed (pyproject packages.find include = ["app*"])
+backend/tests
+
+# Local databases and secrets
+**/*.db
+**/*.db-journal
+**/*.sqlite*
+.env
+**/.env

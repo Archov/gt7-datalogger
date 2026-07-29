@@ -1,5 +1,11 @@
 # GT7 Datalogger
 
+[![CI](https://github.com/jbhoorasingh/gt7-datalogger/actions/workflows/ci.yml/badge.svg)](https://github.com/jbhoorasingh/gt7-datalogger/actions/workflows/ci.yml)
+[![Publish](https://github.com/jbhoorasingh/gt7-datalogger/actions/workflows/publish.yml/badge.svg)](https://github.com/jbhoorasingh/gt7-datalogger/actions/workflows/publish.yml)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-gt7--datalogger-2496ED?logo=docker&logoColor=white)](https://github.com/jbhoorasingh/gt7-datalogger/pkgs/container/gt7-datalogger)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A telemetry datalogger and analysis dashboard for **Gran Turismo 7**. It captures the
 PlayStation's live telemetry stream, records every lap, and serves a modern dark-themed
 web dashboard for live driving, lap comparison, and session management.
@@ -127,6 +133,33 @@ No PlayStation handy? Demo with the simulated source:
 GT7_SOURCE=sim docker compose up --build
 ```
 
+### Use the prebuilt image
+
+Images are published to GitHub Container Registry, so you can skip the build:
+
+```bash
+docker pull ghcr.io/jbhoorasingh/gt7-datalogger:latest
+
+docker run -d --name gt7-datalogger \
+  -p 8000:8000 -p 33740:33740/udp \
+  -e GT7_PS_IP=<your playstation ip> \
+  -v gt7-data:/data \
+  ghcr.io/jbhoorasingh/gt7-datalogger:latest
+```
+
+| Tag | Built from | Architectures |
+| --- | --- | --- |
+| `latest`, `main` | tip of `main`, every push | `amd64` |
+| `sha-<short sha>` | a specific commit | `amd64` |
+| `X.Y.Z`, `X.Y`, `X` | `vX.Y.Z` release tags | `amd64` + `arm64` |
+
+**On arm64 (Raspberry Pi 4/5, Zero 2 W) pull a release tag, not `latest`** — only tagged
+releases build the `arm64` leg, because emulating it on every push to `main` would triple
+CI time for no one's benefit.
+
+With Compose, `docker compose pull && docker compose up -d` runs the published image;
+`docker compose up --build` still builds from source.
+
 ### Ports
 
 | Port | Protocol | Purpose |
@@ -145,6 +178,13 @@ Docker is impractical on the smallest Pis — the official `python` and `node` i
 no ARMv6 build — so on a Raspberry Pi Zero W / Zero 2 W you run the backend natively and
 serve a **pre-built** frontend. The capture workload itself is light (decrypt + decode a
 ~300-byte UDP packet at 60 Hz), so even a Zero W handles it comfortably.
+
+> **Prefer Docker on a 64-bit Pi.** Tagged releases publish an `arm64` image, so on a
+> Pi Zero 2 W / 4 / 5 running 64-bit Raspberry Pi OS you can pull a release tag
+> (`ghcr.io/jbhoorasingh/gt7-datalogger:0.1.0`, **not** `:latest` — see
+> [Use the prebuilt image](#use-the-prebuilt-image)) and skip this section entirely.
+> The native route below stays the right answer for ARMv6 (Zero W) and for anyone who'd
+> rather not run Docker.
 
 > **Which Pi?** A **Pi Zero 2 W** (quad-core, runs 64-bit) is strongly recommended: on
 > arm64 every dependency has a prebuilt wheel and the steps below "just work". A **Pi Zero W**

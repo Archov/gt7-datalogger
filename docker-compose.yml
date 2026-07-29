@@ -1,5 +1,8 @@
 services:
   gt7-datalogger:
+    # `up` builds locally if this tag isn't present; `docker compose pull` fetches
+    # the published image instead. `up --build` always rebuilds from source.
+    image: ghcr.io/jbhoorasingh/gt7-datalogger:latest
     build: .
     container_name: gt7-datalogger
     restart: unless-stopped
