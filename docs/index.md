@@ -89,8 +89,17 @@ detail:
 - [Fuel & race strategy](internals/fuel-strategy.md) — the live pit-window and
   fuel-to-empty calculations
 
-## Credits
+## Credits & related projects
 
-Functional parity with [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard),
-rebuilt with a cleaner architecture and a modern UI. Licensed under the
+GT7 Datalogger has **full feature parity with
+[snipem/gt7dashboard](https://github.com/snipem/gt7dashboard)** — the original Python
+race-telemetry dashboard — plus additional features: the analysis channel picker,
+Corner Detail widget, chassis event detection, track auto-identification, the
+overlay builder, and webhook notifications, all rebuilt on a cleaner architecture with
+a modern UI.
+
+Also see [MacManley/gt7-udp](https://github.com/MacManley/gt7-udp), a GT7 UDP telemetry
+parser for ESP32 / ESP8266 boards and a great reference for the packet format.
+
+Licensed under the
 [MIT License](https://github.com/jbhoorasingh/gt7-datalogger/blob/main/LICENSE).

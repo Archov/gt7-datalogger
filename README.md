@@ -11,8 +11,10 @@ A telemetry datalogger and analysis dashboard for **Gran Turismo 7**. It capture
 PlayStation's live telemetry stream, records every lap, and serves a modern dark-themed
 web dashboard for live driving, lap comparison, and session management.
 
-Functional parity with [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard),
-rebuilt with a cleaner architecture and a modern UI.
+Full feature parity with [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard) —
+plus additional features like the analysis channel picker, Corner Detail widget, chassis
+event detection, track auto-identification, the overlay builder, and webhook
+notifications — rebuilt with a cleaner architecture and a modern UI.
 
 **📖 Full documentation: [jbhoorasingh.github.io/gt7-datalogger](https://jbhoorasingh.github.io/gt7-datalogger/)** —
 per-feature guides, how every calculation works, and the API reference.
@@ -382,6 +384,13 @@ newer channels are simply absent and the charts skip them.
   the stream, or the packet format changed after a game update.
 - **No laps recorded** — laps are only recorded while the car is on track and not paused;
   the first (out) lap completes when you cross the start line.
+
+## Related projects
+
+- [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard) — the original Python
+  race-telemetry dashboard this project reached full parity with (and then extended).
+- [MacManley/gt7-udp](https://github.com/MacManley/gt7-udp) — a GT7 UDP telemetry
+  parser for ESP32 / ESP8266 boards, and a great reference for the packet format.
 
 ## Screenshots
 

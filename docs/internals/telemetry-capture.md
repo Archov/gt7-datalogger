@@ -103,6 +103,13 @@ If the queue ever fills (slow disk), the **oldest** packet is dropped so the liv
 never lags behind reality. Received/dropped/decode-error counters are visible in
 `GET /api/status` and the Admin view.
 
+!!! info "Protocol references"
+    The GT7 telemetry format is community-reverse-engineered. Useful companion
+    projects: [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard) (Python
+    dashboard this project reached parity with) and
+    [MacManley/gt7-udp](https://github.com/MacManley/gt7-udp) (a C++ parser for
+    ESP32 / ESP8266 boards with well-documented packet offsets).
+
 ## The simulated source
 
 `GT7_SOURCE=sim` swaps the UDP listener for a synthetic source that emits the same
