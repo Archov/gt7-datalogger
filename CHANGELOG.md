@@ -5,6 +5,13 @@ Notable changes to GT7 Datalogger. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Docs: a full **widget reference** page (`guide/widgets.md`) covering every widget's
+  styles, color thresholds, alert triggers, and behavior under each track condition
+  (paused, menus, first lap, past the reference lap, race finished, unlimited
+  sessions, lost telemetry, placeholder mode).
+
 ### Changed
 
 - The delta widget (overlay, `/dash`, Live view) now updates **live during the lap**:

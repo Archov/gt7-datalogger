@@ -52,3 +52,7 @@ first. Critical banners pulse red; warnings are amber; info is blue.
 Fuel projections use the rolling 3-lap average, the same numbers as the strategy
 widget. Alerts are suppressed while off-track or paused, so menus don't scream at you.
 The engine and tire widgets color their readouts with the same thresholds.
+
+Every widget's styles, thresholds, and behavior under each track condition (paused,
+menus, first lap, race finished, lost telemetry, …) are documented in the
+[widget reference](widgets.md).

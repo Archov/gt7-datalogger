@@ -77,6 +77,9 @@ version are detected on first visit and can be imported in bulk.
 The `alerts` widget renders nothing while all is well, so it stays invisible in OBS
 until a warning actually fires.
 
+Full details for every widget — color thresholds, alert triggers, and behavior in
+each track condition — are in the [widget reference](widgets.md).
+
 ## Setting up OBS
 
 1. Build and **save** your layout, then copy the *Other devices* URL.
