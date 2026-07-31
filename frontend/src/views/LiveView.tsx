@@ -10,6 +10,7 @@ import {
   speedUnit,
   speedValue,
 } from "@/lib/format";
+import { liveDelta } from "@/components/widgets/shared";
 import { lapColor } from "@/lib/colors";
 import { openInAnalysis } from "@/lib/router";
 import { projectStrategy } from "@/lib/strategy";
@@ -61,12 +62,10 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
   const onLimiter = (aids & AIDS_REV_LIMITER) !== 0;
   const nearLimit = onLimiter || frame.rpm >= frame.rpm_alert * 0.95;
   const fuelPct = (frame.fuel_level / Math.max(1, frame.fuel_capacity)) * 100;
-  // Compare the latest lap against the best BEFORE it, so a new personal
-  // best shows its improvement instead of +0.000.
-  const lastVsBest =
-    frame.last_lap_ms > 0 && frame.prev_best_ms > 0
-      ? frame.last_lap_ms - frame.prev_best_ms
-      : null;
+  // Live gap to the session-best lap; before a reference exists this is the
+  // latest lap vs the best BEFORE it, so a new personal best shows its
+  // improvement instead of +0.000.
+  const delta = liveDelta(frame);
   const finished = frame.total_laps > 0 && frame.current_lap > frame.total_laps;
 
   return (
@@ -135,11 +134,11 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
             <div className="mt-2 space-y-1 font-tabular text-sm">
               <Row k="Last" v={formatLapTime(frame.last_lap_ms)} />
               <Row k="Best" v={formatLapTime(frame.best_lap_ms)} accent />
-              {lastVsBest !== null && (
+              {delta !== null && (
                 <Row
-                  k="Δ best"
-                  v={formatDelta(lastVsBest)}
-                  className={lastVsBest <= 0 ? "text-throttle" : "text-brake"}
+                  k={delta.live ? "Δ best" : "Δ best (last)"}
+                  v={formatDelta(delta.ms)}
+                  className={delta.ms <= 0 ? "text-throttle" : "text-brake"}
                 />
               )}
             </div>

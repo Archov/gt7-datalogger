@@ -63,7 +63,7 @@ version are detected on first visit and can be imported in bulk.
 | `rpm` | bar with `SHIFT` cue · shift-light LED strip · gauge · digits |
 | `inputs` | horizontal throttle/brake bars · vertical bars |
 | `times` | lap / best / last list · last lap (big) · best lap (big) |
-| `delta` | big Δ-to-best number · centered ± bar |
+| `delta` | live Δ vs the session-best lap (big number · centered ± bar) |
 | `position` | big `P n/total` · compact |
 | `tires` | 2×2 color-coded temps · temps + slip indicator |
 | `fuel` | percent · bar · laps remaining |

@@ -22,6 +22,11 @@ waiting), next to a **⛶ fullscreen** toggle.
 - **Race engineer** (default) — alerts banner across the top; fuel laps remaining,
   pit-window countdown, live Δ-to-best, and lap times in the middle; tire temps + slip,
   detailed engine health, position, clock, driver-aid badges, and speed below.
+
+The **delta ticks live during the lap**: once a session-best lap exists, it shows the
+gap at your current track position vs where the best lap was at the same point
+(green = gaining, red = losing). On the first lap of a session — before any reference
+exists — it falls back to the end-of-lap comparison, labeled *Δ best (last lap)*.
 - **Endurance** — fuel is the hero readout, with a wide engine-health panel, fuel
   summary, clock, position, and lap times.
 

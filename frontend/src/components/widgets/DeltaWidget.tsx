@@ -1,25 +1,26 @@
 import { formatDelta } from "@/lib/format";
 import type { WidgetRenderProps } from "@/lib/widgetMeta";
-import { Caption, lastVsPrevBest } from "./shared";
+import { Caption, liveDelta } from "./shared";
 
 // Full deflection of the bar variant, either side of zero.
 const DELTA_BAR_MS = 2000;
 
 export function DeltaWidget({ frame, variant }: WidgetRenderProps) {
-  const delta = lastVsPrevBest(frame);
+  const delta = liveDelta(frame);
+  const caption = delta == null || delta.live ? "Δ best" : "Δ best (last lap)";
 
   if (variant === "bar") {
     const frac =
-      delta == null ? 0 : Math.max(-1, Math.min(1, delta / DELTA_BAR_MS));
+      delta == null ? 0 : Math.max(-1, Math.min(1, delta.ms / DELTA_BAR_MS));
     const width = Math.abs(frac) * 50;
     return (
       <div className="flex w-full min-w-40 flex-col items-center justify-center gap-1">
         <div
           className={`text-sm font-semibold leading-none ${
-            delta == null ? "text-ink-dim" : delta <= 0 ? "text-throttle" : "text-brake"
+            delta == null ? "text-ink-dim" : delta.ms <= 0 ? "text-throttle" : "text-brake"
           }`}
         >
-          {delta == null ? "–" : formatDelta(delta)}
+          {delta == null ? "–" : formatDelta(delta.ms)}
         </div>
         <div className="relative h-3 w-full overflow-hidden rounded-full bg-white/10">
           <div className="absolute inset-y-0 left-1/2 w-px bg-white/30" />
@@ -28,7 +29,7 @@ export function DeltaWidget({ frame, variant }: WidgetRenderProps) {
             style={{ width: `${width}%` }}
           />
         </div>
-        <Caption>Δ best</Caption>
+        <Caption>{caption}</Caption>
       </div>
     );
   }
@@ -37,12 +38,12 @@ export function DeltaWidget({ frame, variant }: WidgetRenderProps) {
     <div className="flex flex-col items-center justify-center">
       <div
         className={`text-3xl font-bold leading-none ${
-          delta == null ? "text-ink-dim" : delta <= 0 ? "text-throttle" : "text-brake"
+          delta == null ? "text-ink-dim" : delta.ms <= 0 ? "text-throttle" : "text-brake"
         }`}
       >
-        {delta == null ? "–" : formatDelta(delta)}
+        {delta == null ? "–" : formatDelta(delta.ms)}
       </div>
-      <Caption>Δ best</Caption>
+      <Caption>{caption}</Caption>
     </div>
   );
 }

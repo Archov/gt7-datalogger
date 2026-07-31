@@ -22,6 +22,14 @@ export function lastVsPrevBest(frame: LiveFrame): number | null {
     : null;
 }
 
+// Live gap to the session-best lap while driving; before a reference lap
+// exists (or past its end) it falls back to the end-of-lap comparison.
+export function liveDelta(frame: LiveFrame): { ms: number; live: boolean } | null {
+  if (frame.delta_ms != null) return { ms: frame.delta_ms, live: true };
+  const last = lastVsPrevBest(frame);
+  return last != null ? { ms: last, live: false } : null;
+}
+
 export function lapLabel(frame: LiveFrame): string {
   if (frame.total_laps > 0 && frame.current_lap > frame.total_laps) return "FIN";
   return `${frame.current_lap}${frame.total_laps > 0 ? `/${frame.total_laps}` : ""}`;
