@@ -136,7 +136,7 @@ function Dashboard({ frame }: { frame: LiveFrame }) {
               <Row k="Best" v={formatLapTime(frame.best_lap_ms)} accent />
               {delta !== null && (
                 <Row
-                  k={delta.live ? "Δ best" : "Δ best (last)"}
+                  k={delta.live ? "Δ best" : "Δ best (last lap)"}
                   v={formatDelta(delta.ms)}
                   className={delta.ms <= 0 ? "text-throttle" : "text-brake"}
                 />

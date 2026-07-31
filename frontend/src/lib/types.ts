@@ -29,7 +29,9 @@ export interface LiveFrame {
   car_name: string;
   session_best_ms: number;
   prev_best_ms: number; // session best BEFORE the latest lap (-1 if none)
-  delta_ms: number | null; // live gap vs the session-best lap (null = no reference)
+  // Live gap vs the session-best lap; null whenever it's unavailable (no
+  // reference lap yet, paused/off-track, or past the reference's last sample)
+  delta_ms: number | null;
   lap_elapsed_ms: number; // time into the current lap (-1 before the first sample)
   pos_x: number;
   pos_z: number;
