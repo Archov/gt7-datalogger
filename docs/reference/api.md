@@ -32,6 +32,19 @@ script can too. All REST routes live under `/api`; responses are JSON.
 | POST | `/api/tracks` | `{name, lap_id}` — name a circuit from a lap's geometry |
 | DELETE | `/api/tracks/{id}` | remove a signature (session data untouched) |
 
+## Overlay / dashboard layouts
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/layouts` | all saved layouts with their grid configs |
+| GET | `/api/layouts/{ref}` | one layout by numeric id or name (id wins if both match) |
+| POST | `/api/layouts` | `{name, kind: "overlay"\|"dash", config}` — 409 on duplicate name |
+| PUT | `/api/layouts/{id}` | `{name?, config?}` — rename and/or replace the config |
+| DELETE | `/api/layouts/{id}` | delete the layout |
+
+Configs are v2 grid layouts (`{version: 2, grid, cells, …}`) as produced by the Admin
+builder; the server only checks the version and a 64 KB size cap.
+
 ## Analysis
 
 | Method | Path | Purpose |

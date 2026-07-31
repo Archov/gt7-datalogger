@@ -2,7 +2,7 @@
 // viewer, and data management.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OverlayBuilder } from "@/components/OverlayBuilder";
+import { LayoutBuilder } from "@/components/LayoutBuilder";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Select } from "@/components/ui/Select";
@@ -141,9 +141,9 @@ export function AdminView() {
 
       </div>
 
-      {/* Overlay builder */}
+      {/* Overlay & dashboard layout builder */}
       <Panel title="Overlay & dashboard builder">
-        <OverlayBuilder flash={flash} />
+        <LayoutBuilder flash={flash} />
       </Panel>
 
       {/* Logs */}

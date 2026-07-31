@@ -1,3 +1,4 @@
+import type { LayoutConfig, LayoutSummary } from "./layout";
 import type {
   AdminSettings,
   AdminStats,
@@ -55,6 +56,17 @@ export const api = {
     send<{ id: number; name: string }>("/api/tracks", "POST", { name, lap_id: lapId }),
   deleteTrack: (id: number) => send<{ status: string }>(`/api/tracks/${id}`, "DELETE"),
   lapCsvUrl: (lapId: number) => `/api/laps/${lapId}/export.csv`,
+
+  layouts: {
+    list: () => get<LayoutSummary[]>("/api/layouts"),
+    get: (ref: string | number) =>
+      get<LayoutSummary>(`/api/layouts/${encodeURIComponent(String(ref))}`),
+    create: (name: string, kind: "overlay" | "dash", config: LayoutConfig) =>
+      send<LayoutSummary>("/api/layouts", "POST", { name, kind, config }),
+    update: (id: number, patch: { name?: string; config?: LayoutConfig }) =>
+      send<LayoutSummary>(`/api/layouts/${id}`, "PUT", patch),
+    remove: (id: number) => send<{ status: string }>(`/api/layouts/${id}`, "DELETE"),
+  },
 
   admin: {
     settings: () => get<AdminSettings>("/api/admin/settings"),

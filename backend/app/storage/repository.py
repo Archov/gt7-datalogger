@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
 from app.processing.tracks import TrackSignature, matches
-from app.storage.db import LapRow, SessionRow, SettingRow, TrackRow
+from app.storage.db import LapRow, LayoutRow, SessionRow, SettingRow, TrackRow
 
 # v2 (Tier 1): per-corner sample columns, events, aid/engine metrics, gearing.
 # v1 files import fine — missing columns stay absent and charts skip them.
@@ -246,6 +246,80 @@ class Repository:
             if row is not None:
                 row.track_name = track_name
                 await db.commit()
+
+    # --- overlay/dashboard layouts ------------------------------------------
+
+    @staticmethod
+    def _layout_dict(row: LayoutRow) -> dict[str, Any]:
+        return {
+            "id": row.id,
+            "name": row.name,
+            "kind": row.kind,
+            "config": json.loads(row.config_json),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    async def list_layouts(self) -> list[dict[str, Any]]:
+        async with self._sf() as db:
+            rows = (await db.execute(select(LayoutRow).order_by(LayoutRow.name))).scalars()
+            return [self._layout_dict(r) for r in rows]
+
+    async def get_layout(self, ref: str) -> dict[str, Any] | None:
+        """Look up by numeric id first, falling back to name (URLs carry either)."""
+        async with self._sf() as db:
+            row = None
+            if ref.isdigit():
+                row = await db.get(LayoutRow, int(ref))
+            if row is None:
+                row = (
+                    await db.execute(select(LayoutRow).where(LayoutRow.name == ref))
+                ).scalar_one_or_none()
+            return self._layout_dict(row) if row else None
+
+    async def get_layout_by_name(self, name: str) -> dict[str, Any] | None:
+        async with self._sf() as db:
+            row = (
+                await db.execute(select(LayoutRow).where(LayoutRow.name == name))
+            ).scalar_one_or_none()
+            return self._layout_dict(row) if row else None
+
+    async def create_layout(self, name: str, kind: str, config: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(UTC).isoformat()
+        async with self._sf() as db:
+            row = LayoutRow(
+                name=name,
+                kind=kind,
+                config_json=json.dumps(config, separators=(",", ":")),
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(row)
+            await db.commit()
+            return self._layout_dict(row)
+
+    async def update_layout(
+        self,
+        layout_id: int,
+        name: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        async with self._sf() as db:
+            row = await db.get(LayoutRow, layout_id)
+            if row is None:
+                return None
+            if name is not None:
+                row.name = name
+            if config is not None:
+                row.config_json = json.dumps(config, separators=(",", ":"))
+            row.updated_at = datetime.now(UTC).isoformat()
+            await db.commit()
+            return self._layout_dict(row)
+
+    async def delete_layout(self, layout_id: int) -> None:
+        async with self._sf() as db:
+            await db.execute(delete(LayoutRow).where(LayoutRow.id == layout_id))
+            await db.commit()
 
     # --- runtime settings ---------------------------------------------------
 

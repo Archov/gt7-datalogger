@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import logbuffer
-from app.api import admin, routes, ws
+from app.api import admin, layouts, routes, ws
 from app.config import get_settings
 from app.processing.cars import CarDatabase
 from app.service import TelemetryService
@@ -80,13 +80,18 @@ def create_app() -> FastAPI:
     )
     app.include_router(routes.router)
     app.include_router(admin.router)
+    app.include_router(layouts.router)
     app.include_router(ws.router)
     if FRONTEND_DIST.exists():
-        # SPA deep link: /overlay?... must serve the app (the static mount
-        # only resolves "/"). A plain path keeps strict URL validators happy
-        # (some streaming apps reject /#overlay fragment URLs).
+        # SPA deep links: /overlay?... and /dash?... must serve the app (the
+        # static mount only resolves "/"). Plain paths keep strict URL
+        # validators happy (some streaming apps reject /#overlay fragments).
         @app.get("/overlay", include_in_schema=False)
         async def overlay_page() -> FileResponse:
+            return FileResponse(FRONTEND_DIST / "index.html")
+
+        @app.get("/dash", include_in_schema=False)
+        async def dash_page() -> FileResponse:
             return FileResponse(FRONTEND_DIST / "index.html")
 
         app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="spa")

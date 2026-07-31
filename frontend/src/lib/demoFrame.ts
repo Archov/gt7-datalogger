@@ -36,7 +36,9 @@ export function demoFrame(nowMs: number): LiveFrame {
     throttle: accelerating ? 100 : braking ? 0 : 55,
     brake: braking ? Math.min(100, (prevSpeed - speed) * 22) : 0,
     boost: 0.42,
-    fuel_level: 62.4 - (nowMs / 1000 / 60) * (0.02 % 62),
+    // Drains over a slow cycle so the strategy widget and the low-fuel /
+    // pit-window alerts all get exercised while designing a layout.
+    fuel_level: Math.max(1.5, 62.4 - (((nowMs / 1000) % 150) / 150) * 61),
     fuel_capacity: 100,
     current_lap: 3,
     total_laps: 5,
