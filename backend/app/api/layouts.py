@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -66,7 +67,12 @@ async def create_layout(request: Request, payload: LayoutPayload) -> dict[str, A
     repo = svc(request).repo
     if await repo.get_layout_by_name(name) is not None:
         raise HTTPException(409, f'a layout named "{name}" already exists')
-    return await repo.create_layout(name, payload.kind, payload.config)
+    try:
+        return await repo.create_layout(name, payload.kind, payload.config)
+    except IntegrityError as exc:
+        # Concurrent create slipped past the precheck; the unique constraint
+        # on layouts.name is the real arbiter.
+        raise HTTPException(409, f'a layout named "{name}" already exists') from exc
 
 
 @router.put("/{layout_id}")
@@ -83,7 +89,10 @@ async def update_layout(
             raise HTTPException(409, f'a layout named "{name}" already exists')
     if patch.config is not None:
         _validate_config(patch.config)
-    updated = await repo.update_layout(layout_id, name=name, config=patch.config)
+    try:
+        updated = await repo.update_layout(layout_id, name=name, config=patch.config)
+    except IntegrityError as exc:
+        raise HTTPException(409, f'a layout named "{name}" already exists') from exc
     if updated is None:
         raise HTTPException(404, "layout not found")
     return updated
