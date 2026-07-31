@@ -3,7 +3,7 @@
 Notable changes to GT7 Datalogger. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-31
 
 ### Added
 
@@ -41,3 +41,34 @@ Notable changes to GT7 Datalogger. The format follows
 
 - The GitHub Pages docs deploy job no longer runs (and fails) on pull requests.
 - Concurrent layout create/rename with a duplicate name returns 409 instead of 500.
+
+## [0.1.0] - 2026-07-23
+
+Initial release.
+
+### Added
+
+- **Telemetry capture** from a PlayStation on the same network: Salsa20 decryption,
+  heartbeat keep-alive, console auto-discovery via UDP broadcast, automatic reconnect,
+  and a built-in **simulated telemetry source** for development without a console.
+- **Per-lap recording** at 60 Hz across ~28 channels (per-wheel slip, per-corner tire
+  temps, suspension travel, driver-aids bitmask, …) with per-lap aggregates: aid usage,
+  engine health, gearing metadata, and chassis events (lockup / wheelspin / bottoming /
+  kerb detection).
+- **Live view**: real-time dashboard with race readouts, driver-aid pills, fuel
+  strategy projection, and a clickable recent-lap feed, streamed over WebSocket.
+- **Analysis view**: multi-lap comparison against a selectable reference lap with time
+  delta, synced cursors, channel picker, event bands, race line map, corner detail,
+  consistency (deviation) view, fuel map, and gearing panel.
+- **Sessions view**: lap-time sparklines, per-lap metrics with event counts, JSON
+  export/import, CSV / MoTeC-compatible export, and record on/off + log-lap-now
+  controls.
+- **Track auto-identification** from lap geometry — name a circuit once and future
+  sessions are tagged automatically.
+- **OBS overlay** at `/overlay` with a URL-encoded builder: strip / stack / grid
+  layouts, exact-pixel canvas sizes, transparent / green-screen / dark page modes,
+  per-widget scaling, browser-stored presets, and placeholder demo data.
+- **Admin view**: connection settings, runtime source switching, log viewer, webhook
+  notifications (Discord-aware), car database updater, and data management.
+- **Deployment**: single Docker image (amd64/arm64) serving API + UI on one port,
+  Raspberry Pi guide, and a MkDocs Material documentation site on GitHub Pages.
