@@ -57,6 +57,8 @@ function ServerOverlay({
 
   useEffect(() => {
     let cancelled = false;
+    setLayout(null);
+    setError(null);
     api.layouts
       .get(layoutRef)
       .then((l) => {

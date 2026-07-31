@@ -19,6 +19,8 @@ export function DashView({ params }: { params: DashParams }) {
   }, []);
 
   useEffect(() => {
+    setServerLayout(null);
+    setError(null);
     if (!params.layout) return;
     let cancelled = false;
     api.layouts
