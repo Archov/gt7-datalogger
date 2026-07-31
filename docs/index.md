@@ -69,6 +69,10 @@ Open <http://localhost:8000> and start driving. No PlayStation handy? Run
 
 ![Overlay strip](screenshots/overlay.png)
 
+**Driver dashboard** — the Race engineer preset for a second display during the race:
+
+![Driver dashboard](screenshots/dash.png)
+
 *All screenshots were captured against the built-in simulated telemetry source.*
 
 ## How it works

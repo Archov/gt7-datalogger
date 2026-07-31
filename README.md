@@ -417,4 +417,14 @@ Corner Detail widget, and the gearing panel:
 
 ![Overlay strip](docs/screenshots/overlay.png)
 
+**Overlay & dashboard builder** — drag widgets on a snapping grid, resize with the
+corner handle, pick a visual style per widget, and save named layouts to the server:
+
+![Layout builder](docs/screenshots/builder.png)
+
+**Driver dashboard** (`/dash`) — the Race engineer preset on a second display: fuel and
+pit-window projections, live delta, tires, engine health, and an alert banner row:
+
+![Driver dashboard](docs/screenshots/dash.png)
+
 *All screenshots were captured against the built-in simulated telemetry source.*

@@ -15,6 +15,8 @@ http://<host>:8000/dash?demo=1               # placeholder data for a dry run
 A tiny status dot sits top-right (green = live telemetry, amber = placeholder, red =
 waiting), next to a **⛶ fullscreen** toggle.
 
+![Driver dashboard — Race engineer preset](../screenshots/dash.png)
+
 ## Built-in presets
 
 - **Race engineer** (default) — alerts banner across the top; fuel laps remaining,

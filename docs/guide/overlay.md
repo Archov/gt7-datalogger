@@ -18,6 +18,8 @@ http://<host>:8000/overlay?layout=race-strip
 
 ## Building a layout
 
+![Layout builder](../screenshots/builder.png)
+
 Open **Admin → Overlay & dashboard builder**. One-click starting points:
 
 - **OBS strip** — transparent 1920×260 bottom strip
