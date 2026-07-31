@@ -61,6 +61,10 @@ export function demoFrame(nowMs: number): LiveFrame {
     car_name: "Placeholder GT '26",
     session_best_ms: 111_410,
     prev_best_ms: 112_050,
+    // Fake live delta: gains through the braking zones, drifts back on the
+    // straights, so both colors and bar directions show while designing.
+    delta_ms: Math.round(400 * Math.sin((t / LOOP_S) * 2 * Math.PI) - corner(t, 5, 2.2, 300)),
+    lap_elapsed_ms: Math.round(t * 1000),
     pos_x: 0,
     pos_z: 0,
     tod_ms: (14 * 3600 + Math.floor(nowMs / 1000) * 4) * 1000, // fast in-game clock

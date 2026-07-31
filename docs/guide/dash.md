@@ -22,6 +22,11 @@ waiting), next to a **⛶ fullscreen** toggle.
 - **Race engineer** (default) — alerts banner across the top; fuel laps remaining,
   pit-window countdown, live Δ-to-best, and lap times in the middle; tire temps + slip,
   detailed engine health, position, clock, driver-aid badges, and speed below.
+
+The **delta ticks live during the lap**: once a session-best lap exists, it shows the
+gap at your current track position vs where the best lap was at the same point
+(green = gaining, red = losing). On the first lap of a session — before any reference
+exists — it falls back to the end-of-lap comparison, labeled *Δ best (last lap)*.
 - **Endurance** — fuel is the hero readout, with a wide engine-health panel, fuel
   summary, clock, position, and lap times.
 
@@ -47,3 +52,7 @@ first. Critical banners pulse red; warnings are amber; info is blue.
 Fuel projections use the rolling 3-lap average, the same numbers as the strategy
 widget. Alerts are suppressed while off-track or paused, so menus don't scream at you.
 The engine and tire widgets color their readouts with the same thresholds.
+
+Every widget's styles, thresholds, and behavior under each track condition (paused,
+menus, first lap, race finished, lost telemetry, …) are documented in the
+[widget reference](widgets.md).

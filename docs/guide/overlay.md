@@ -63,7 +63,7 @@ version are detected on first visit and can be imported in bulk.
 | `rpm` | bar with `SHIFT` cue · shift-light LED strip · gauge · digits |
 | `inputs` | horizontal throttle/brake bars · vertical bars |
 | `times` | lap / best / last list · last lap (big) · best lap (big) |
-| `delta` | big Δ-to-best number · centered ± bar |
+| `delta` | live Δ vs the session-best lap (big number · centered ± bar) |
 | `position` | big `P n/total` · compact |
 | `tires` | 2×2 color-coded temps · temps + slip indicator |
 | `fuel` | percent · bar · laps remaining |
@@ -76,6 +76,9 @@ version are detected on first visit and can be imported in bulk.
 
 The `alerts` widget renders nothing while all is well, so it stays invisible in OBS
 until a warning actually fires.
+
+Full details for every widget — color thresholds, alert triggers, and behavior in
+each track condition — are in the [widget reference](widgets.md).
 
 ## Setting up OBS
 

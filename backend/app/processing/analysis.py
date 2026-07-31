@@ -47,6 +47,18 @@ def resample_by_distance(
     return out
 
 
+def time_delta_at(dist_m: float, t_s: float, ref: Samples) -> float | None:
+    """Live gap vs a reference lap at the same distance (ms; positive = slower).
+
+    None when the reference is empty or dist_m runs past its final sample —
+    edge clamping would otherwise inflate the gap at 1 ms per ms once the
+    reference lap "finishes".
+    """
+    if not ref["dist"] or dist_m > ref["dist"][-1]:
+        return None
+    return (t_s - _interp(ref["dist"], ref["t"], dist_m)) * 1000
+
+
 def time_delta_series(
     lap: Samples, reference: Samples, step: float = DEFAULT_STEP_M
 ) -> dict[str, list[float]]:

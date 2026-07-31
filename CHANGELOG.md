@@ -3,6 +3,23 @@
 Notable changes to GT7 Datalogger. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Docs: a full **widget reference** page (`guide/widgets.md`) covering every widget's
+  styles, color thresholds, alert triggers, and behavior under each track condition
+  (paused, menus, first lap, past the reference lap, race finished, unlimited
+  sessions, lost telemetry, placeholder mode).
+
+### Changed
+
+- The delta widget (overlay, `/dash`, Live view) now updates **live during the lap**:
+  it compares your current track position against the session-best lap's trace
+  (positive = slower). Before a reference lap exists it falls back to the end-of-lap
+  comparison, labeled *Δ best (last lap)*. Live frames gain `delta_ms` and
+  `lap_elapsed_ms` fields.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added

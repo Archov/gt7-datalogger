@@ -13,6 +13,7 @@ from fastapi import WebSocket
 from app.config import Settings
 from app.models import TelemetryPacket
 from app.notify import Notifier
+from app.processing.analysis import Samples, time_delta_at
 from app.processing.cars import CarDatabase
 from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
 from app.processing.tracks import signature_from_samples
@@ -52,6 +53,10 @@ class TelemetryService:
         self.notifier.url = settings.webhook_url
         self._session_best_ms: int | None = None
         self._prev_best_ms: int | None = None
+        # (dist, t) trace of the session-best lap — the reference for the
+        # live delta. Safe to hold by reference: the processor allocates a
+        # fresh sample store at every lap boundary.
+        self._best_ref: Samples | None = None
         self._clients: set[WebSocket] = set()
         self._last_ws_send = 0.0
         self._ws_interval = 1.0 / settings.ws_rate
@@ -101,6 +106,7 @@ class TelemetryService:
         self.track_name = ""
         self._session_best_ms = None
         self._prev_best_ms = None
+        self._best_ref = None
         log.info("new session %s (car %s)", self.session_id, self.cars.name(info.car_id))
         await self._broadcast({"type": "session", "data": await self.status()})
 
@@ -149,6 +155,7 @@ class TelemetryService:
             )
         if self._session_best_ms is None or lap.time_ms < self._session_best_ms:
             self._session_best_ms = lap.time_ms
+            self._best_ref = {"dist": lap.samples["dist"], "t": lap.samples["t"]}
 
         # Track auto-identification from the first completed lap's geometry
         if not self.track_name:
@@ -200,6 +207,13 @@ class TelemetryService:
     def _live_frame(self, p: TelemetryPacket) -> dict[str, Any]:
         """Compact frame for the live view (~30 Hz)."""
         session = self.processor.session
+        live = self.processor.live_lap_samples
+        elapsed_ms = round(live["t"][-1] * 1000) if live["t"] else -1
+        delta_ms: float | None = None
+        if self._best_ref is not None and live["t"] and p.is_on_track and not p.is_paused:
+            delta_ms = time_delta_at(live["dist"][-1], live["t"][-1], self._best_ref)
+            if delta_ms is not None:
+                delta_ms = round(delta_ms)
         return {
             "on_track": p.is_on_track,
             "paused": p.is_paused,
@@ -232,6 +246,8 @@ class TelemetryService:
             "car_name": self.cars.name(p.car_id),
             "session_best_ms": session.best_lap_time_ms if session else -1,
             "prev_best_ms": self._prev_best_ms if self._prev_best_ms is not None else -1,
+            "delta_ms": delta_ms,
+            "lap_elapsed_ms": elapsed_ms,
             "pos_x": round(p.position_x, 2),
             "pos_z": round(p.position_z, 2),
             "tod_ms": p.day_progression_ms,
