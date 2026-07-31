@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { StatusBar } from "@/components/StatusBar";
 import { Toasts } from "@/components/ui/Toasts";
 import { TooltipProvider } from "@/components/ui/Tooltip";
-import { isOverlayLocation, parseOverlayLocation } from "@/lib/overlay";
+import { isDashLocation, parseDashParams } from "@/lib/dash";
+import { isOverlayLocation, parseOverlayRoute } from "@/lib/overlay";
 import { parseAnalysisParams, parseHash, type Route } from "@/lib/router";
 import { AdminView } from "@/views/AdminView";
 import { AnalysisView } from "@/views/AnalysisView";
+import { DashView } from "@/views/DashView";
 import { LiveView } from "@/views/LiveView";
 import { OverlayView } from "@/views/OverlayView";
 import { SessionsView } from "@/views/SessionsView";
@@ -36,7 +38,10 @@ export default function App() {
   );
 
   if (isOverlayLocation(window.location)) {
-    return <OverlayView config={parseOverlayLocation(window.location)} />;
+    return <OverlayView route={parseOverlayRoute(window.location)} />;
+  }
+  if (isDashLocation(window.location)) {
+    return <DashView params={parseDashParams(window.location)} />;
   }
 
   return (

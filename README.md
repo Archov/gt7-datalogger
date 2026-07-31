@@ -74,16 +74,21 @@ per-feature guides, how every calculation works, and the API reference.
 
 ### Overlay & streaming
 
-- **Customizable overlay / dashboard builder** (Admin view) with a true-to-size live
-  preview: pick, reorder, and **individually scale** widgets (gear, speed, RPM, inputs,
-  lap times, big delta, race position, tires, fuel, fuel strategy, in-game clock), choose
-  a layout (transparent OBS strip, vertical stack, or phone dashboard grid), and tune
-  global scale, edge padding, background opacity, and alignment.
+- **Drag-and-drop overlay builder** (Admin view) with a live canvas: place 15 widgets
+  (gear, speed, RPM, inputs, lap times, big delta, race position, tires, fuel, fuel
+  strategy, in-game clock, engine temps, driver aids, boost, race alerts) freely on a
+  snapping grid, size each from 1×1 to 4×4 cells, and pick a **visual style per widget**
+  — digits, bar, arc gauge, or shift-light LED strip for the same metric.
+- **Server-saved named layouts** with short stable URLs (`/overlay?layout=race-strip`):
+  edit a layout in the builder and every OBS source updates without touching OBS. JSON
+  export/import included; legacy URL-param overlays keep working unchanged.
+- **Driver dashboard / race engineer screen** at `/dash` for a second display: built-in
+  *Race engineer* and *Endurance* presets with fuel & pit-window projections, live
+  delta, tire/engine health, and **flashing alert banners** (low fuel, pit window,
+  overheating, oil pressure).
 - **Canvas size presets** — 1920×1080, 1920×260 strip, 1080×1920 (TikTok / Shorts),
-  720×1280, or any custom size; the overlay renders at exactly those pixels and the
-  preview shows safe-area guides. Green-screen page mode for apps without alpha support.
-- **Named overlay presets** with JSON export/import; the whole config is encoded in the
-  URL, so OBS, a phone, and a pit-wall tablet can each load their own setup.
+  720×1280, or any custom size; the overlay renders at exactly those pixels.
+  Green-screen page mode for apps without alpha support.
 
 ### Capture & platform
 
@@ -411,5 +416,15 @@ Corner Detail widget, and the gearing panel:
 **OBS overlay** — one of the layouts from the overlay builder, at an exact canvas size:
 
 ![Overlay strip](docs/screenshots/overlay.png)
+
+**Overlay & dashboard builder** — drag widgets on a snapping grid, resize with the
+corner handle, pick a visual style per widget, and save named layouts to the server:
+
+![Layout builder](docs/screenshots/builder.png)
+
+**Driver dashboard** (`/dash`) — the Race engineer preset on a second display: fuel and
+pit-window projections, live delta, tires, engine health, and an alert banner row:
+
+![Driver dashboard](docs/screenshots/dash.png)
 
 *All screenshots were captured against the built-in simulated telemetry source.*

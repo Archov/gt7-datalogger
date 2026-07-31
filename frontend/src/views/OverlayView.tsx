@@ -1,63 +1,111 @@
-// Configurable overlay / dashboard. Widgets, layout, and appearance come from
-// the URL hash (see lib/overlay.ts). Used as an OBS browser source (strip or
-// stack on a transparent page) or as a phone dashboard (grid on a dark page).
+// Configurable overlay / dashboard. Two modes:
+//  - legacy: the whole config is in the URL params (/overlay?w=gear,speed&…),
+//    rendered with the original strip/stack/grid flow so existing OBS browser
+//    sources are pixel-identical;
+//  - server: /overlay?layout=<name-or-id> fetches a saved v2 layout and
+//    renders it on the free-placement grid (GridRenderer).
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { DEMO_LAPS, demoFrame } from "@/lib/demoFrame";
-import {
-  formatDelta,
-  formatLapTime,
-  formatTimeOfDay,
-  speedUnit,
-  speedValue,
-} from "@/lib/format";
-import type { OverlayConfig, WidgetId } from "@/lib/overlay";
-import { projectStrategy } from "@/lib/strategy";
+import { useEffect, useState, type CSSProperties } from "react";
+import { GridRenderer } from "@/components/GridRenderer";
+import { api } from "@/lib/api";
+import { normalizeLayout, type LayoutConfig } from "@/lib/layout";
+import type { OverlayConfig, OverlayPage, OverlayRoute, WidgetId } from "@/lib/overlay";
+import { useLiveFrame } from "@/lib/useLiveFrame";
 import type { LapSummary, LiveFrame } from "@/lib/types";
-import { useSettings } from "@/store/settings";
-import { liveFrameRef, useTelemetry } from "@/store/telemetry";
+import { WIDGET_META } from "@/lib/widgetMeta";
+import { WIDGET_COMPONENTS } from "@/lib/widgetRegistry";
 
-const STALE_AFTER_MS = 3000;
+function pageBodyClass(page: OverlayPage): string {
+  return page === "green" ? "overlay-green" : page === "dark" ? "overlay-page" : "overlay";
+}
 
-export function OverlayView({ config }: { config: OverlayConfig }) {
-  const [frame, setFrame] = useState<LiveFrame | null>(null);
-  const [placeholder, setPlaceholder] = useState(false);
-  const recentLaps = useTelemetry((s) => s.recentLaps);
-  const raf = useRef(0);
-  const pageClass =
-    config.page === "green"
-      ? "overlay-green"
-      : config.page === "dark"
-        ? "overlay-page"
-        : "overlay";
-  const gridPage = config.layout === "grid";
-
+function usePageClass(pageClass: string) {
   useEffect(() => {
     document.body.classList.add(pageClass);
-    const tick = () => {
-      const now = performance.now();
-      const live =
-        liveFrameRef.current && now - liveFrameRef.at < STALE_AFTER_MS
-          ? liveFrameRef.current
-          : null;
-      if (live) {
-        setFrame(live);
-        setPlaceholder(false);
-      } else if (config.demo) {
-        setFrame(demoFrame(now));
-        setPlaceholder(true);
-      } else {
-        setFrame(liveFrameRef.current);
-        setPlaceholder(false);
-      }
-      raf.current = requestAnimationFrame(tick);
-    };
-    raf.current = requestAnimationFrame(tick);
     return () => {
       document.body.classList.remove("overlay", "overlay-page", "overlay-green");
-      cancelAnimationFrame(raf.current);
     };
-  }, [pageClass, config.demo]);
+  }, [pageClass]);
+}
+
+function PlaceholderBadge() {
+  return (
+    <div className="pointer-events-none fixed right-2 top-2 rounded border border-warn/40 bg-black/60 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-warn">
+      placeholder
+    </div>
+  );
+}
+
+export function OverlayView({ route }: { route: OverlayRoute }) {
+  if (route.kind === "server") {
+    return <ServerOverlay layoutRef={route.ref} demoOverride={route.demo} />;
+  }
+  return <LegacyOverlay config={route.config} />;
+}
+
+// --- server-saved layouts ---------------------------------------------------
+
+function ServerOverlay({
+  layoutRef,
+  demoOverride,
+}: {
+  layoutRef: string;
+  demoOverride: boolean;
+}) {
+  const [layout, setLayout] = useState<LayoutConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLayout(null);
+    setError(null);
+    api.layouts
+      .get(layoutRef)
+      .then((l) => {
+        if (!cancelled) setLayout(normalizeLayout(l.config));
+      })
+      .catch(() => {
+        if (!cancelled) setError(`Layout "${layoutRef}" not found`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [layoutRef]);
+
+  const demo = demoOverride || (layout?.demo ?? false);
+  const { frame, laps, placeholder } = useLiveFrame(demo);
+  usePageClass(pageBodyClass(layout?.page ?? "transparent"));
+
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-ink-dim">
+        {error} — save it in the Admin builder first.
+      </div>
+    );
+  }
+  if (!layout) return null;
+  if (!frame) {
+    return layout.page === "dark" ? (
+      <div className="flex h-full items-center justify-center text-sm text-ink-dim">
+        Waiting for telemetry…
+      </div>
+    ) : null;
+  }
+
+  return (
+    <>
+      <GridRenderer layout={layout} frame={frame} laps={laps} />
+      {placeholder && <PlaceholderBadge />}
+    </>
+  );
+}
+
+// --- legacy URL-param overlays ----------------------------------------------
+
+function LegacyOverlay({ config }: { config: OverlayConfig }) {
+  const { frame, laps, placeholder } = useLiveFrame(config.demo);
+  const gridPage = config.layout === "grid";
+  usePageClass(pageBodyClass(config.page));
 
   if (!frame) {
     return gridPage ? (
@@ -74,7 +122,6 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
   const card: CSSProperties = bare
     ? {}
     : { backgroundColor: `rgba(8, 10, 14, ${cardAlpha})` };
-  const laps = placeholder ? DEMO_LAPS : recentLaps;
   // Explicit canvas: render at exactly size.width x size.height so the page
   // matches the OBS browser-source dimensions. The global zoom scales content,
   // so the un-zoomed box is size/scale to land on the exact pixel size.
@@ -102,11 +149,7 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
     />
   ));
 
-  const badge = placeholder ? (
-    <div className="pointer-events-none fixed right-2 top-2 rounded border border-warn/40 bg-black/60 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-warn">
-      placeholder
-    </div>
-  ) : null;
+  const badge = placeholder ? <PlaceholderBadge /> : null;
 
   if (config.layout === "grid") {
     return (
@@ -159,8 +202,6 @@ export function OverlayView({ config }: { config: OverlayConfig }) {
   );
 }
 
-// --- widgets ----------------------------------------------------------------
-
 interface WidgetProps {
   id: WidgetId;
   frame: LiveFrame;
@@ -173,9 +214,18 @@ interface WidgetProps {
 
 function Widget({ id, frame, laps, card, layout, bare, scale }: WidgetProps) {
   const inStrip = layout === "strip";
-  const body = pickWidget(id, frame, laps, inStrip);
-  if (body === null) return null;
-  if (inStrip) {
+  const Comp = WIDGET_COMPONENTS[id];
+  const body = (
+    <Comp
+      frame={frame}
+      laps={laps}
+      variant={WIDGET_META[id].defaultVariant}
+      w={1}
+      h={1}
+      options={{ big: !inStrip }}
+    />
+  );
+  if (inStrip || WIDGET_META[id].frameless) {
     return scale !== 1 ? (
       <div className="flex items-center" style={{ zoom: scale }}>
         {body}
@@ -190,234 +240,6 @@ function Widget({ id, frame, laps, card, layout, bare, scale }: WidgetProps) {
       style={{ ...card, ...(scale !== 1 ? { zoom: scale } : {}) }}
     >
       {body}
-    </div>
-  );
-}
-
-function pickWidget(
-  id: WidgetId,
-  frame: LiveFrame,
-  laps: LapSummary[],
-  inStrip: boolean,
-): React.ReactNode {
-  switch (id) {
-    case "gear":
-      return <GearWidget frame={frame} big={!inStrip} />;
-    case "speed":
-      return <SpeedWidget frame={frame} big={!inStrip} />;
-    case "rpm":
-      return <RpmWidget frame={frame} />;
-    case "inputs":
-      return <InputsWidget frame={frame} />;
-    case "times":
-      return <TimesWidget frame={frame} />;
-    case "delta":
-      return <DeltaWidget frame={frame} />;
-    case "position":
-      return <PositionWidget frame={frame} />;
-    case "tires":
-      return <TiresWidget frame={frame} />;
-    case "fuel":
-      return <FuelWidget frame={frame} />;
-    case "strategy":
-      return <StrategyWidget frame={frame} laps={laps} />;
-    case "clock":
-      return <ClockWidget frame={frame} />;
-  }
-}
-
-function Caption({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[9px] uppercase tracking-widest text-ink-dim">{children}</div>
-  );
-}
-
-function GearWidget({ frame, big }: { frame: LiveFrame; big: boolean }) {
-  return (
-    <div className="flex flex-col items-center justify-center">
-      <span className={`${big ? "text-7xl" : "text-6xl"} font-bold leading-none text-accent`}>
-        {frame.gear === 0 ? "R" : frame.gear === 15 ? "N" : frame.gear}
-      </span>
-      <Caption>
-        gear{frame.suggested_gear !== 15 ? ` → ${frame.suggested_gear}` : ""}
-      </Caption>
-    </div>
-  );
-}
-
-function SpeedWidget({ frame, big }: { frame: LiveFrame; big: boolean }) {
-  const units = useSettings((s) => s.units);
-  return (
-    <div className="flex flex-col items-center justify-center">
-      <div className={`${big ? "text-6xl" : "text-4xl"} font-bold leading-none`}>
-        {Math.round(speedValue(frame.speed_kmh, units))}
-      </div>
-      <Caption>{speedUnit(units)}</Caption>
-    </div>
-  );
-}
-
-function RpmWidget({ frame }: { frame: LiveFrame }) {
-  const pct = Math.min(100, (frame.rpm / Math.max(1, frame.rpm_alert)) * 100);
-  const nearLimit = frame.rpm >= frame.rpm_alert * 0.95;
-  return (
-    <div className="flex w-full min-w-40 flex-col justify-center gap-1">
-      <div className="h-2.5 overflow-hidden rounded-full bg-white/10">
-        <div
-          className={`h-full ${nearLimit ? "bg-brake" : "bg-accent"}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="flex justify-between text-[10px] text-ink-dim">
-        <span>{frame.rpm.toLocaleString()} rpm</span>
-        {nearLimit && <span className="text-brake">SHIFT</span>}
-      </div>
-    </div>
-  );
-}
-
-function InputsWidget({ frame }: { frame: LiveFrame }) {
-  return (
-    <div className="flex w-full min-w-36 flex-col justify-center gap-1.5">
-      <div className="h-2 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full bg-throttle" style={{ width: `${frame.throttle}%` }} />
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full bg-brake" style={{ width: `${frame.brake}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function lastVsPrevBest(frame: LiveFrame): number | null {
-  return frame.last_lap_ms > 0 && frame.prev_best_ms > 0
-    ? frame.last_lap_ms - frame.prev_best_ms
-    : null;
-}
-
-function lapLabel(frame: LiveFrame): string {
-  if (frame.total_laps > 0 && frame.current_lap > frame.total_laps) return "FIN";
-  return `${frame.current_lap}${frame.total_laps > 0 ? `/${frame.total_laps}` : ""}`;
-}
-
-function TimesWidget({ frame }: { frame: LiveFrame }) {
-  const delta = lastVsPrevBest(frame);
-  return (
-    <div className="flex flex-col justify-center text-xs leading-5">
-      <div>
-        <span className="text-ink-dim">LAP </span>
-        {lapLabel(frame)}
-      </div>
-      <div>
-        <span className="text-ink-dim">BEST </span>
-        <span className="text-accent">{formatLapTime(frame.best_lap_ms)}</span>
-      </div>
-      <div>
-        <span className="text-ink-dim">LAST </span>
-        {formatLapTime(frame.last_lap_ms)}
-        {delta !== null && (
-          <span className={delta <= 0 ? "text-throttle" : "text-brake"}> {formatDelta(delta)}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DeltaWidget({ frame }: { frame: LiveFrame }) {
-  const delta = lastVsPrevBest(frame);
-  return (
-    <div className="flex flex-col items-center justify-center">
-      <div
-        className={`text-3xl font-bold leading-none ${
-          delta == null ? "text-ink-dim" : delta <= 0 ? "text-throttle" : "text-brake"
-        }`}
-      >
-        {delta == null ? "–" : formatDelta(delta)}
-      </div>
-      <Caption>Δ best</Caption>
-    </div>
-  );
-}
-
-function PositionWidget({ frame }: { frame: LiveFrame }) {
-  return (
-    <div className="flex flex-col items-center justify-center">
-      <div className="text-3xl font-bold leading-none">
-        P{frame.position}
-        <span className="text-lg text-ink-dim">/{frame.total_positions}</span>
-      </div>
-      <Caption>position</Caption>
-    </div>
-  );
-}
-
-function TiresWidget({ frame }: { frame: LiveFrame }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-1">
-      <div className="grid grid-cols-2 gap-1">
-        {frame.tire_temps.map((t, i) => (
-          <div
-            key={i}
-            className={`h-4 w-8 rounded-sm text-center text-[9px] leading-4 ${
-              t < 55 ? "bg-coast/40" : t < 95 ? "bg-throttle/40" : "bg-brake/50"
-            }`}
-          >
-            {Math.round(t)}
-          </div>
-        ))}
-      </div>
-      <Caption>tires °C</Caption>
-    </div>
-  );
-}
-
-function FuelWidget({ frame }: { frame: LiveFrame }) {
-  const pct = (frame.fuel_level / Math.max(1, frame.fuel_capacity)) * 100;
-  return (
-    <div className="flex flex-col items-center justify-center">
-      <div className={`text-2xl font-semibold leading-none ${pct < 15 ? "text-brake" : ""}`}>
-        {pct.toFixed(0)}%
-      </div>
-      <div className="mt-1 h-1.5 w-14 overflow-hidden rounded-full bg-white/10">
-        <div
-          className={`h-full ${pct < 15 ? "bg-brake" : "bg-warn"}`}
-          style={{ width: `${Math.min(100, pct)}%` }}
-        />
-      </div>
-      <Caption>fuel</Caption>
-    </div>
-  );
-}
-
-function StrategyWidget({ frame, laps }: { frame: LiveFrame; laps: LapSummary[] }) {
-  const proj = projectStrategy(frame, laps);
-  return (
-    <div className="flex flex-col justify-center text-xs leading-5">
-      {proj == null ? (
-        <span className="text-ink-dim">fuel: need a lap</span>
-      ) : (
-        <>
-          <div>
-            <span className="text-ink-dim">FUEL </span>
-            <span className={proj.lapsToEmpty < 2 ? "text-brake" : proj.lapsToEmpty < 4 ? "text-warn" : ""}>
-              {proj.lapsToEmpty.toFixed(1)} laps
-            </span>
-          </div>
-          <div>
-            <span className="text-ink-dim">PIT ≤ L</span>
-            {proj.pitBeforeLap}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function ClockWidget({ frame }: { frame: LiveFrame }) {
-  return (
-    <div className="flex flex-col items-center justify-center">
-      <div className="text-2xl font-semibold leading-none">{formatTimeOfDay(frame.tod_ms)}</div>
-      <Caption>in-game</Caption>
     </div>
   );
 }

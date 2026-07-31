@@ -14,6 +14,10 @@ export const WIDGET_IDS = [
   "fuel",
   "strategy",
   "clock",
+  "engine",
+  "aids",
+  "boost",
+  "alerts",
 ] as const;
 
 export type WidgetId = (typeof WIDGET_IDS)[number];
@@ -21,7 +25,7 @@ export type WidgetId = (typeof WIDGET_IDS)[number];
 export const WIDGET_LABELS: Record<WidgetId, string> = {
   gear: "Gear",
   speed: "Speed",
-  rpm: "RPM bar",
+  rpm: "RPM",
   inputs: "Throttle / brake",
   times: "Lap times",
   delta: "Delta (big)",
@@ -30,6 +34,10 @@ export const WIDGET_LABELS: Record<WidgetId, string> = {
   fuel: "Fuel",
   strategy: "Fuel strategy",
   clock: "In-game clock",
+  engine: "Engine temps",
+  aids: "Driver aids",
+  boost: "Boost",
+  alerts: "Race alerts",
 };
 
 export type OverlayLayout = "strip" | "stack" | "grid";
@@ -124,11 +132,35 @@ function clampWidgetScale(n: number): number | null {
   return isFinite(n) && n >= 0.5 && n <= 3 ? n : null;
 }
 
-export function parseOverlayLocation(loc: { search: string; hash: string }): OverlayConfig {
+// An overlay URL either carries the whole config in its params (legacy) or
+// references a server-saved layout by name/id: /overlay?layout=race-strip.
+// The bare word after "layout=" is a server ref unless it's one of the three
+// legacy flow-layout keywords, which legacy URLs used for the same param.
+export type OverlayRoute =
+  | { kind: "legacy"; config: OverlayConfig }
+  | { kind: "server"; ref: string; demo: boolean };
+
+const LEGACY_LAYOUTS = ["strip", "stack", "grid"];
+
+function overlayQuery(loc: { search: string; hash: string }): URLSearchParams {
   const query = loc.hash.includes("?")
     ? loc.hash.slice(loc.hash.indexOf("?") + 1)
     : loc.search.replace(/^\?/, "");
-  const params = new URLSearchParams(query);
+  return new URLSearchParams(query);
+}
+
+export function parseOverlayRoute(loc: { search: string; hash: string }): OverlayRoute {
+  const params = overlayQuery(loc);
+  const ref = params.get("layout");
+  if (ref && !params.has("w") && !LEGACY_LAYOUTS.includes(ref)) {
+    const demo = params.get("demo");
+    return { kind: "server", ref, demo: demo === "1" || demo === "true" };
+  }
+  return { kind: "legacy", config: parseOverlayLocation(loc) };
+}
+
+export function parseOverlayLocation(loc: { search: string; hash: string }): OverlayConfig {
+  const params = overlayQuery(loc);
   // Widget entries are "id" or "id:scale" (e.g. gear:1.5).
   const ids: WidgetId[] = [];
   const widgetScales: Partial<Record<WidgetId, number>> = {};

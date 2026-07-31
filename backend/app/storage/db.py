@@ -57,6 +57,19 @@ class SettingRow(Base):
     value: Mapped[str]
 
 
+class LayoutRow(Base):
+    """Named overlay/dashboard layouts (v2 grid configs, stored as JSON)."""
+
+    __tablename__ = "layouts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(unique=True)
+    kind: Mapped[str] = mapped_column(default="overlay")  # "overlay" | "dash"
+    config_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str]
+    updated_at: Mapped[str]
+
+
 class LapRow(Base):
     __tablename__ = "laps"
     __table_args__ = (Index("ix_laps_session", "session_id"),)

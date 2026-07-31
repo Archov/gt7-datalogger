@@ -65,6 +65,7 @@ nav:
       - Analysis view: guide/analysis-view.md
       - Sessions view: guide/sessions-view.md
       - Overlay & streaming: guide/overlay.md
+      - Driver dashboard: guide/dash.md
       - Admin view: guide/admin.md
   - How it works:
       - Architecture: internals/architecture.md
