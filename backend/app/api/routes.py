@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.processing import analysis
 from app.processing.laps import SAMPLE_COLUMNS
@@ -207,19 +208,79 @@ class ImportPayload(BaseModel):
     lap: dict[str, Any]
 
 
+# Columns every consumer indexes unconditionally (metrics, event detection,
+# distance resampling, peak/valley detection). Everything else in
+# SAMPLE_COLUMNS is optional and degrades gracefully via .get.
+REQUIRED_IMPORT_COLUMNS = frozenset(
+    {"t", "dist", "speed", "throttle", "brake", "coast", "tire_slip",
+     "body_height", "pos_x", "pos_z"}
+)
+# ~33 min at 60 Hz — roughly twice the slowest plausible GT7 lap; also caps
+# the samples_json blob at a size SQLite handles comfortably.
+MAX_IMPORT_SAMPLES = 120_000
+
+
+class LapImportModel(BaseModel):
+    """Validated shape of an exported lap file's `lap` object."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    number: int = Field(ge=0)
+    time_ms: int = Field(gt=0)
+    finished_at: str = ""
+    car_id: int = 0
+    fuel_start: float = 0.0
+    fuel_end: float = 0.0
+    max_water_temp: float = 0.0
+    max_oil_temp: float = 0.0
+    min_oil_pressure: float = -1.0
+    gearing: dict[str, Any] | None = None
+    samples: dict[str, list[float]]
+
+
+def _validate_import_samples(samples: dict[str, list[float]]) -> dict[str, list[float]]:
+    samples = {k: v for k, v in samples.items() if k in SAMPLE_COLUMNS}
+    missing = REQUIRED_IMPORT_COLUMNS - samples.keys()
+    if missing:
+        raise ValueError(f"missing sample columns: {', '.join(sorted(missing))}")
+    lengths = {len(v) for v in samples.values()}
+    if len(lengths) > 1:
+        raise ValueError("sample columns have unequal lengths")
+    n = lengths.pop()
+    if not 0 < n <= MAX_IMPORT_SAMPLES:
+        raise ValueError(f"sample count must be 1..{MAX_IMPORT_SAMPLES}, got {n}")
+    # json.loads happily parses NaN/Infinity literals; they poison metrics
+    # and can't be re-serialized as strict JSON.
+    if any(not math.isfinite(v) for col in samples.values() for v in col):
+        raise ValueError("samples contain non-finite values")
+    return samples
+
+
 @router.post("/laps/import")
 async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]:
     service = svc(request)
+    if payload.format != "gt7-datalogger-lap":
+        raise HTTPException(400, "unrecognized lap export format")
+    try:
+        lap = LapImportModel.model_validate(payload.lap)
+        lap.samples = _validate_import_samples(lap.samples)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(400, f"invalid lap file: {exc}") from exc
+
+    # Create the fallback session only after validation, so a rejected file
+    # doesn't leak an empty "imported" session.
     if service.session_id is None:
         from app.processing.laps import SessionInfo
 
-        info = SessionInfo(car_id=payload.lap.get("car_id", 0), started_at="imported")
+        info = SessionInfo(car_id=lap.car_id, started_at="imported")
         service.session_id = await service.repo.create_session(
             info, service.cars.name(info.car_id)
         )
+    clean = payload.model_dump()
+    clean["lap"] = lap.model_dump()
     try:
-        lap_id = await service.repo.import_lap(payload.model_dump(), service.session_id)
-    except (ValueError, KeyError) as exc:
+        lap_id = await service.repo.import_lap(clean, service.session_id)
+    except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(400, f"invalid lap file: {exc}") from exc
     return {"id": lap_id}
 
