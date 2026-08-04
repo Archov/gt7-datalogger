@@ -3,18 +3,24 @@
 Notable changes to GT7 Datalogger. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-04
 
 ### Added
 
+- **Extended telemetry packet support (B / `~` / C)**: the listener can request any
+  of GT7's four packet formats via the heartbeat character, decrypts each format's
+  distinct Salsa20 IV constant, and parses the extra fields — steering wheel
+  rotation, sway/heave/surge, filtered inputs, per-wheel torque vectors, energy
+  recovery, per-wheel surface type, the live lap timer, front-wheel steering angles,
+  wheelbase, and car category. Default is now packet **C** (GT7 v1.68+);
+  configurable via `GT7_PACKET_FORMAT` or live in the Admin view. The simulated
+  source emits packet C.
 - **Race-event webhooks**: in addition to personal bests and session summaries, the
   webhook can now announce **overtakes**, **positions lost**, and **off-road
   excursions** (3+ wheels on a loose surface — requires packet format C). Position
   changes must hold ~1 s before firing so side-by-side battles don't spam. Every
   event type has a toggle in Admin → Notifications (`GT7_WEBHOOK_EVENTS` for
   env-based setups).
-- Admin view polish: per-event notification toggles with plain-language hints, and
-  descriptive subtitles on every panel.
 - **Opt-in admin auth**: set `GT7_ADMIN_TOKEN` to require a token (`X-API-Key`
   header) for the Admin API and every destructive/mutating endpoint; overlay, dash,
   and read endpoints stay open. The UI stores the token per browser and prompts on
@@ -22,6 +28,8 @@ Notable changes to GT7 Datalogger. The format follows
 - `GT7_CORS_ORIGINS` for cross-origin API consumers (see Breaking below).
 - `frames_dropped` counter in `/api/status` and the Admin diagnostics — 60 Hz frames
   the console numbered but the network lost.
+- Admin view polish: per-event notification toggles with plain-language hints, and
+  descriptive subtitles on every panel.
 
 ### Changed
 
@@ -34,9 +42,15 @@ Notable changes to GT7 Datalogger. The format follows
 - Lap CSV export is written with a proper CSV writer and neutralizes spreadsheet
   formula injection in text cells.
 - The sessions list is a single aggregate query (was one query per session).
+- `dev.sh` rebuilds the frontend on every start, so `:8000` always serves the
+  current UI instead of a stale `dist`.
 
 ### Fixed
 
+- **Fuel strategy widgets no longer mix sessions**: on a car change or race restart
+  the lap feed is pruned to the new session, so "laps of fuel" / "pit before" no
+  longer average fuel consumption from the previous car or track for the first laps
+  of a session.
 - Lap imports are validated (required columns, equal lengths, finite numbers, size
   cap) and return a clear 400 instead of storing a file that breaks analysis with a
   500 later; a rejected import no longer creates an empty session.
@@ -53,22 +67,6 @@ Notable changes to GT7 Datalogger. The format follows
 - The API no longer sends wildcard CORS headers. The bundled UI is unaffected
   (same-origin in both dev and prod). Separate cross-origin consumers must set
   `GT7_CORS_ORIGINS`.
-
-- **Extended telemetry packet support (B / `~` / C)**: the listener can request any
-  of GT7's four packet formats via the heartbeat character, decrypts each format's
-  distinct Salsa20 IV constant, and parses the extra fields — steering wheel
-  rotation, sway/heave/surge, filtered inputs, per-wheel torque vectors, energy
-  recovery, per-wheel surface type, the live lap timer, front-wheel steering angles,
-  wheelbase, and car category. Default is now packet **C** (GT7 v1.68+);
-  configurable via `GT7_PACKET_FORMAT` or live in the Admin view. The simulated
-  source emits packet C.
-
-### Fixed
-
-- **Fuel strategy widgets no longer mix sessions**: on a car change or race restart
-  the lap feed is pruned to the new session, so "laps of fuel" / "pit before" no
-  longer average fuel consumption from the previous car or track for the first laps
-  of a session.
 
 ## [0.2.1] - 2026-07-31
 
