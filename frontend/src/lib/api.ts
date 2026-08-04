@@ -71,7 +71,12 @@ export const api = {
   admin: {
     settings: () => get<AdminSettings>("/api/admin/settings"),
     updateSettings: (
-      patch: Partial<Pick<AdminSettings, "ps_ip" | "source" | "log_level" | "webhook_url">>,
+      patch: Partial<
+        Pick<
+          AdminSettings,
+          "ps_ip" | "source" | "log_level" | "webhook_url" | "webhook_events" | "packet_format"
+        >
+      >,
     ) => send<AdminSettings>("/api/admin/settings", "PUT", patch),
     testWebhook: () => send<{ status: string }>("/api/admin/test-webhook", "POST"),
     logs: (limit = 300, level?: string) =>

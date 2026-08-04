@@ -16,6 +16,7 @@ from app.notify import Notifier
 from app.processing.analysis import Samples, time_delta_at
 from app.processing.cars import CarDatabase
 from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
+from app.processing.live_events import LiveEvent, LiveEventWatcher
 from app.processing.tracks import signature_from_samples
 from app.storage.repository import Repository, lap_summary  # noqa: F401  (re-export)
 from app.telemetry.listener import UdpTelemetrySource
@@ -51,6 +52,8 @@ class TelemetryService:
         self.latest_packet: TelemetryPacket | None = None
         self.notifier = Notifier()
         self.notifier.url = settings.webhook_url
+        self.notifier.enabled = settings.enabled_webhook_events()
+        self.event_watcher = LiveEventWatcher()
         self._session_best_ms: int | None = None
         self._prev_best_ms: int | None = None
         # (dist, t) trace of the session-best lap — the reference for the
@@ -95,12 +98,30 @@ class TelemetryService:
         self.latest_packet = p
         if self.recording:
             await self.processor.feed(p)
+        for event in self.event_watcher.feed(p):
+            self._notify_live_event(event, p)
         now = time.monotonic()
         if now - self._last_ws_send >= self._ws_interval:
             self._last_ws_send = now
             await self._broadcast({"type": "telemetry", "data": self._live_frame(p)})
 
+    def _notify_live_event(self, event: LiveEvent, p: TelemetryPacket) -> None:
+        car = self.cars.name(p.car_id)
+        if event.kind == "overtake":
+            self.notifier.overtake(
+                event.position, event.previous_position, event.total_positions,
+                car, self.track_name,
+            )
+        elif event.kind == "position_lost":
+            self.notifier.position_lost(
+                event.position, event.previous_position, event.total_positions,
+                car, self.track_name,
+            )
+        elif event.kind == "off_road":
+            self.notifier.off_road(p.current_lap, car, self.track_name)
+
     async def _on_session(self, info: SessionInfo) -> None:
+        self.event_watcher.reset()
         await self._close_previous_session()
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
         self.track_name = ""

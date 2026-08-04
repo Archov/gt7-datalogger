@@ -105,8 +105,9 @@ per-feature guides, how every calculation works, and the API reference.
   (persisted in the database), live log viewer with level filtering, connection
   diagnostics, database stats with compact/clear actions, and one-click car-database
   updates.
-- **Webhook / Discord notifications** — new personal bests and end-of-session summaries
-  posted to any webhook URL (Discord URLs get a rich embed, others plain JSON).
+- **Webhook / Discord notifications** — personal bests, session summaries, overtakes,
+  positions lost, and off-road excursions posted to any webhook URL (Discord URLs get
+  a rich embed, others plain JSON), each event individually toggleable.
 - Configurable units (km/h / mph), persisted in the browser; dark-themed responsive UI
   built on accessible primitives with a colorblind-validated chart palette.
 

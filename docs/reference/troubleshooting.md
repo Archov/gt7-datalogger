@@ -13,6 +13,9 @@ The backend is running but no packets are arriving from the console.
   `network_mode: host` (Linux only).
 - You must be **in a race, time trial, or replay** — GT7 only streams telemetry while
   driving is on screen, not in menus.
+- The default **packet format C** needs GT7 **v1.68+** (and the `~` format doesn't
+  stream during replays). On an older game version, set **Packet format** to `A` in
+  the Admin view.
 
 ## Wrong or garbled data (decode errors in `/api/status`)
 
@@ -39,6 +42,16 @@ page from.
 Use a **Browser source** in OBS and make sure the overlay layout is set to the
 transparent strip; alternatively use the green-screen page mode and add a chroma-key
 filter for apps without alpha support. See [Overlay & streaming](../guide/overlay.md).
+
+## Webhook notifications not arriving
+
+- Check the URL with the **Test** button in Admin → Notifications (the test ignores
+  the per-event toggles).
+- Each event type has its own toggle — make sure the one you expect is enabled.
+- **Overtake / position lost** need GT7 to report a live race position; it only does
+  so in some race types (the field reads −1 elsewhere, and nothing fires). Changes
+  also must hold for ~1 s before they count.
+- **Off-road** needs **packet format C** — check Admin → Connection.
 
 ## Getting more detail
 

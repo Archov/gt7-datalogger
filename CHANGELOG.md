@@ -3,6 +3,35 @@
 Notable changes to GT7 Datalogger. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Race-event webhooks**: in addition to personal bests and session summaries, the
+  webhook can now announce **overtakes**, **positions lost**, and **off-road
+  excursions** (3+ wheels on a loose surface — requires packet format C). Position
+  changes must hold ~1 s before firing so side-by-side battles don't spam. Every
+  event type has a toggle in Admin → Notifications (`GT7_WEBHOOK_EVENTS` for
+  env-based setups).
+- Admin view polish: per-event notification toggles with plain-language hints, and
+  descriptive subtitles on every panel.
+
+- **Extended telemetry packet support (B / `~` / C)**: the listener can request any
+  of GT7's four packet formats via the heartbeat character, decrypts each format's
+  distinct Salsa20 IV constant, and parses the extra fields — steering wheel
+  rotation, sway/heave/surge, filtered inputs, per-wheel torque vectors, energy
+  recovery, per-wheel surface type, the live lap timer, front-wheel steering angles,
+  wheelbase, and car category. Default is now packet **C** (GT7 v1.68+);
+  configurable via `GT7_PACKET_FORMAT` or live in the Admin view. The simulated
+  source emits packet C.
+
+### Fixed
+
+- **Fuel strategy widgets no longer mix sessions**: on a car change or race restart
+  the lap feed is pruned to the new session, so "laps of fuel" / "pit before" no
+  longer average fuel consumption from the previous car or track for the first laps
+  of a session.
+
 ## [0.2.1] - 2026-07-31
 
 ### Added
