@@ -66,6 +66,8 @@ class SimTelemetrySource:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
 
     async def _run(self) -> None:
         rng = random.Random(42)

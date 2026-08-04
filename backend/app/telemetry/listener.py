@@ -98,8 +98,17 @@ class UdpTelemetrySource:
         self._running = False
         for t in self._tasks:
             t.cancel()
+        # Wait for the heartbeat/consume tasks to actually finish before the
+        # socket goes away — a restart rebinds the same port immediately, and
+        # a half-dead consumer racing the new bind corrupts the swap.
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._transport:
             self._transport.close()
+            self._transport = None
+            # close() only schedules the socket teardown; yield so the loop
+            # actually releases the port before a restart rebinds it.
+            await asyncio.sleep(0)
 
     def _handle_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if self._console_addr is None or self._console_addr[0] != addr[0]:
