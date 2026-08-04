@@ -44,6 +44,14 @@ class _ClientStream:
     task: asyncio.Task[None] | None = None
 
 
+async def _close_ws(ws: WebSocket) -> None:
+    """Best-effort close; the socket may already be half-dead."""
+    try:
+        await ws.close(code=1013)  # 1013 = try again later (server overloaded)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _count_events(events: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for e in events:
@@ -358,6 +366,9 @@ class TelemetryService:
         self._clients.pop(client.ws, None)
         if client.task:
             client.task.cancel()
+        # Close the socket too, or the /ws/live receive loop keeps an open,
+        # no-longer-tracked connection alive indefinitely.
+        asyncio.get_running_loop().create_task(_close_ws(client.ws))
 
     async def _client_sender(self, client: _ClientStream) -> None:
         """Drain one client's lanes; events always go out before frames."""
@@ -374,8 +385,10 @@ class TelemetryService:
             raise
         except Exception:
             # Send failed — the WS endpoint's finally-unregister cleans up;
-            # also remove eagerly in case the receive side is still alive.
+            # also remove eagerly and close in case the receive side is
+            # still alive on a half-broken connection.
             self._clients.pop(client.ws, None)
+            await _close_ws(client.ws)
 
     # --- controls -----------------------------------------------------------
 

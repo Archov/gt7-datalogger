@@ -22,11 +22,15 @@ class FakeWS:
     def __init__(self, block: asyncio.Event | None = None) -> None:
         self.sent: list[str] = []
         self.block = block
+        self.closed = False
 
     async def send_text(self, text: str) -> None:
         if self.block is not None:
             await self.block.wait()
         self.sent.append(text)
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed = True
 
     def messages(self, kind: str) -> list[dict]:
         return [m for m in map(json.loads, self.sent) if m["type"] == kind]
@@ -129,3 +133,7 @@ async def test_event_queue_overflow_disconnects_client(service) -> None:
         service._publish({"type": "status", "data": {}})
     assert service.client_count == 0
     release.set()
+    await asyncio.sleep(0.01)
+    # The socket itself must be closed too, or /ws/live keeps an open,
+    # untracked connection alive.
+    assert slow.closed
