@@ -7,10 +7,11 @@ import time
 from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app import logbuffer
+from app.api.auth import require_admin
 from app.notify import ALL_EVENTS
 
 if TYPE_CHECKING:
@@ -18,7 +19,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/admin")
+# The whole router is token-gated (when a token is configured): even the
+# GETs leak secrets — /settings returns the webhook URL, which for Discord
+# is itself a write credential; /stats and /logs expose LAN details.
+router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
 
 CARS_URL = "https://raw.githubusercontent.com/ddm999/gt7info/web-new/_data/db/cars.csv"
 

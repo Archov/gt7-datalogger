@@ -6,7 +6,7 @@ import { LayoutBuilder } from "@/components/LayoutBuilder";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Select } from "@/components/ui/Select";
-import { api } from "@/lib/api";
+import { api, getAdminToken, setAdminToken } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import type { AdminSettings, AdminStats, LogRecord, WebhookEvent } from "@/lib/types";
 import { useTelemetry } from "@/store/telemetry";
@@ -34,6 +34,7 @@ const LEVEL_COLORS: Record<string, string> = {
 export function AdminView() {
   const setStatus = useTelemetry((s) => s.setStatus);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -50,7 +51,16 @@ export function AdminView() {
   }, [setStatus]);
 
   useEffect(() => {
-    api.admin.settings().then(setSettings).catch(() => flash("Could not load settings", true));
+    api.admin
+      .settings()
+      .then((s) => {
+        setSettings(s);
+        setSettingsError(null);
+      })
+      .catch((e) => {
+        setSettingsError(e instanceof Error ? e.message : "Could not load settings");
+        flash("Could not load settings", true);
+      });
     refreshStats();
     const t = window.setInterval(refreshStats, 5000);
     return () => window.clearInterval(t);
@@ -91,6 +101,8 @@ export function AdminView() {
         <Panel title="Connection" subtitle="how telemetry reaches the datalogger">
           {settings ? (
             <ConnectionForm settings={settings} busy={busy} onApply={apply} />
+          ) : settingsError ? (
+            <TokenForm error={settingsError} />
           ) : (
             <div className="p-4 text-sm text-ink-dim">Loading…</div>
           )}
@@ -205,6 +217,39 @@ export function AdminView() {
   );
 }
 
+function TokenForm({ error }: { error: string }) {
+  const [token, setToken] = useState(getAdminToken());
+  return (
+    <div className="space-y-2 p-4">
+      <p className="text-sm text-warn">{error}</p>
+      <label className="block text-xs text-ink-dim" htmlFor="admin-token">
+        Admin token (the server&apos;s GT7_ADMIN_TOKEN)
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="admin-token"
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm focus:border-accent focus:outline-none"
+        />
+        <button
+          className="btn shrink-0"
+          onClick={() => {
+            setAdminToken(token.trim());
+            window.location.reload();
+          }}
+        >
+          Save
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-dim">
+        Stored in this browser only. Live/overlay pages work without it.
+      </p>
+    </div>
+  );
+}
+
 function ConnectionForm({
   settings,
   busy,
@@ -215,6 +260,7 @@ function ConnectionForm({
   onApply: (patch: Parameters<typeof api.admin.updateSettings>[0], label: string) => void;
 }) {
   const [ip, setIp] = useState(settings.ps_ip);
+  const [token, setToken] = useState(getAdminToken());
   useEffect(() => setIp(settings.ps_ip), [settings.ps_ip]);
 
   return (
@@ -295,6 +341,35 @@ function ConnectionForm({
             className="px-2 py-1.5 text-xs"
           />
         </div>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs text-ink-dim" htmlFor="admin-token-field">
+          Admin token — only needed if the server sets GT7_ADMIN_TOKEN
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="admin-token-field"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="empty = server is open"
+            className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm placeholder:text-ink-dim/60 focus:border-accent focus:outline-none"
+          />
+          <button
+            className="btn shrink-0"
+            disabled={busy !== null || token === getAdminToken()}
+            onClick={() => {
+              setAdminToken(token.trim());
+              window.location.reload();
+            }}
+          >
+            Save
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-ink-dim">
+          Stored in this browser only; sent as X-API-Key. Live/overlay pages never need it.
+        </p>
       </div>
     </div>
   );

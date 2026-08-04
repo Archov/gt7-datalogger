@@ -76,12 +76,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="GT7 Datalogger", lifespan=lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # No CORS middleware by default: both serving modes are same-origin (the
+    # SPA is mounted below; the dev server proxies /api and /ws). Cross-origin
+    # consumers must opt in via GT7_CORS_ORIGINS.
+    origins = [o.strip() for o in get_settings().cors_origins.split(",") if o.strip()]
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["*"],
+            allow_headers=["*"],  # includes X-API-Key
+        )
     app.include_router(routes.router)
     app.include_router(admin.router)
     app.include_router(layouts.router)

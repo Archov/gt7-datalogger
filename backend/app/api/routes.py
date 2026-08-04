@@ -8,10 +8,11 @@ import math
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.api.auth import require_admin
 from app.processing import analysis
 from app.processing.laps import SAMPLE_COLUMNS
 from app.processing.tracks import signature_from_samples
@@ -45,7 +46,7 @@ async def sessions(request: Request) -> list[dict[str, Any]]:
     return await svc(request).repo.list_sessions()
 
 
-@router.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}", dependencies=[Depends(require_admin)])
 async def delete_session(request: Request, session_id: int) -> dict[str, str]:
     await svc(request).repo.delete_session(session_id)
     return {"status": "deleted"}
@@ -82,7 +83,7 @@ async def lap_detail(
     return lap
 
 
-@router.delete("/laps/{lap_id}")
+@router.delete("/laps/{lap_id}", dependencies=[Depends(require_admin)])
 async def delete_lap(request: Request, lap_id: int) -> dict[str, str]:
     await svc(request).repo.delete_lap(lap_id)
     return {"status": "deleted"}
@@ -189,7 +190,7 @@ class TrackPayload(BaseModel):
     lap_id: int
 
 
-@router.post("/tracks")
+@router.post("/tracks", dependencies=[Depends(require_admin)])
 async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any]:
     """Name the circuit a lap was driven on; future sessions auto-match it."""
     service = svc(request)
@@ -207,7 +208,7 @@ async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any
     return {"id": track_id, "name": name}
 
 
-@router.delete("/tracks/{track_id}")
+@router.delete("/tracks/{track_id}", dependencies=[Depends(require_admin)])
 async def delete_track(request: Request, track_id: int) -> dict[str, str]:
     await svc(request).repo.delete_track(track_id)
     return {"status": "deleted"}
@@ -267,7 +268,7 @@ def _validate_import_samples(samples: dict[str, list[float]]) -> dict[str, list[
     return samples
 
 
-@router.post("/laps/import")
+@router.post("/laps/import", dependencies=[Depends(require_admin)])
 async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]:
     service = svc(request)
     if payload.format != "gt7-datalogger-lap":
@@ -403,13 +404,13 @@ class RecordingPayload(BaseModel):
     recording: bool
 
 
-@router.post("/control/recording")
+@router.post("/control/recording", dependencies=[Depends(require_admin)])
 async def set_recording(request: Request, payload: RecordingPayload) -> dict[str, Any]:
     svc(request).recording = payload.recording
     return await svc(request).status()
 
 
-@router.post("/control/log-lap-now")
+@router.post("/control/log-lap-now", dependencies=[Depends(require_admin)])
 async def log_lap_now(request: Request) -> dict[str, Any]:
     result = await svc(request).log_lap_now()
     if result is None:

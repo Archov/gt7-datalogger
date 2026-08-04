@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     http_host: str = "0.0.0.0"
     http_port: int = 8000
 
+    # When set, the Admin API and all mutating endpoints require this token
+    # (X-API-Key header). Empty = fully open (LAN-trusted, the old behavior).
+    admin_token: str = ""
+    # Comma-separated origins allowed for cross-origin API use. Empty = no
+    # CORS headers at all — the bundled UI is same-origin and needs none.
+    cors_origins: str = ""
+
     # Client stream rate (Hz). Raw capture is ~60 Hz; the UI does not need all of it.
     ws_rate: int = 30
 

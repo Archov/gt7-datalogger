@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
+
+from app.api.auth import require_admin
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -58,7 +60,7 @@ async def get_layout(request: Request, ref: str) -> dict[str, Any]:
     return layout
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_admin)])
 async def create_layout(request: Request, payload: LayoutPayload) -> dict[str, Any]:
     _validate_config(payload.config)
     name = payload.name.strip()
@@ -75,7 +77,7 @@ async def create_layout(request: Request, payload: LayoutPayload) -> dict[str, A
         raise HTTPException(409, f'a layout named "{name}" already exists') from exc
 
 
-@router.put("/{layout_id}")
+@router.put("/{layout_id}", dependencies=[Depends(require_admin)])
 async def update_layout(
     request: Request, layout_id: int, patch: LayoutPatch
 ) -> dict[str, Any]:
@@ -98,7 +100,7 @@ async def update_layout(
     return updated
 
 
-@router.delete("/{layout_id}")
+@router.delete("/{layout_id}", dependencies=[Depends(require_admin)])
 async def delete_layout(request: Request, layout_id: int) -> dict[str, str]:
     await svc(request).repo.delete_layout(layout_id)
     return {"status": "deleted"}
