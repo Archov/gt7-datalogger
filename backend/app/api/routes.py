@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import math
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
@@ -126,9 +128,18 @@ CSV_CHANNELS = (
 )
 
 
+def _csv_text(value: str) -> str:
+    """Neutralize spreadsheet formula injection in text cells."""
+    return f"'{value}" if value[:1] in ("=", "+", "-", "@") else value
+
+
 @router.get("/laps/{lap_id}/export.csv")
 async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
-    """MoTeC-compatible CSV export (i2 'CSV file' import, Excel, etc.)."""
+    """MoTeC-compatible CSV export (i2 'CSV file' import, Excel, etc.).
+
+    The "Sample Rate" header is nominal — the `t` column is authoritative
+    (it integrates packet-id deltas, so dropped frames widen its steps).
+    """
     lap = await svc(request).repo.get_lap(lap_id, with_samples=True)
     if lap is None:
         raise HTTPException(404, "lap not found")
@@ -138,28 +149,28 @@ async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
     duration = f"{time_ms // 60000}:{(time_ms % 60000) / 1000:06.3f}"
     car = svc(request).cars.name(lap["car_id"])
 
-    lines = [
-        '"Format","MoTeC CSV File"',
-        '"Device","GT7 Datalogger"',
-        f'"Vehicle","{car}"',
-        f'"Comment","Lap {lap["number"]} - {duration}"',
-        f'"Log Date","{lap.get("finished_at", "")}"',
-        '"Sample Rate","60.000"',
-        "",
-        ",".join(f'"{name}"' for _, name, _ in cols),
-        ",".join(f'"{unit}"' for _, _, unit in cols),
-    ]
+    buf = io.StringIO()
+    meta = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
+    data = csv.writer(buf, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    meta.writerow(["Format", "MoTeC CSV File"])
+    meta.writerow(["Device", "GT7 Datalogger"])
+    meta.writerow(["Vehicle", _csv_text(car)])
+    meta.writerow(["Comment", _csv_text(f"Lap {lap['number']} - {duration}")])
+    meta.writerow(["Log Date", _csv_text(str(lap.get("finished_at", "")))])
+    meta.writerow(["Sample Rate", "60.000"])
+    buf.write("\n")  # blank separator line between metadata and channels
+    meta.writerow([name for _, name, _ in cols])
+    meta.writerow([unit for _, _, unit in cols])
     n = len(samples["t"])
     for i in range(n):
-        lines.append(
-            ",".join(
-                str(samples[key][i]) if i < len(samples[key]) else ""
-                for key, _, _ in cols
-            )
+        # Guard against ragged legacy rows; values are numeric so
+        # QUOTE_MINIMAL leaves them unquoted.
+        data.writerow(
+            [samples[key][i] if i < len(samples[key]) else "" for key, _, _ in cols]
         )
 
     return PlainTextResponse(
-        "\n".join(lines) + "\n",
+        buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="gt7-lap-{lap_id}.csv"'},
     )

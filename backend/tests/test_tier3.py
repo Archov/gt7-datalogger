@@ -208,3 +208,26 @@ async def test_session_summary_on_new_session(client, monkeypatch) -> None:
         parse_packet(build_packet(current_lap=1, flags=ON_TRACK, car_id=99))
     )
     assert "session_summary" in events
+
+
+async def test_csv_export_escapes_hostile_metadata(client) -> None:
+    """Imported text (finished_at) must not corrupt the CSV or reach a
+    spreadsheet as a live formula."""
+    import csv as csv_mod
+    import io
+
+    c, service = client
+    await drive_laps(service, laps=1)
+    lap_id = (await c.get("/api/laps")).json()[0]["id"]
+    exported = (await c.get(f"/api/laps/{lap_id}/export")).json()
+    exported["lap"]["finished_at"] = '=cmd(),"x'
+    imported = (await c.post("/api/laps/import", json=exported)).json()
+
+    resp = await c.get(f"/api/laps/{imported['id']}/export.csv")
+    assert resp.status_code == 200
+    date_line = next(
+        line for line in resp.text.splitlines() if line.startswith('"Log Date"')
+    )
+    row = next(csv_mod.reader(io.StringIO(date_line)))
+    assert len(row) == 2  # embedded comma/quote didn't split the row
+    assert row[1].startswith("'=")  # formula neutralized
