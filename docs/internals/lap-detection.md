@@ -17,13 +17,22 @@ hold**:
 
 Packets with the `LOADING` flag set are dropped entirely before any processing.
 
-**Time and distance** are synthesized, not taken from packet timestamps:
+**Time and distance** are synthesized from the console's own **packet counter**, not
+from wall clocks or a fixed tick assumption:
 
-- `t = tick_index × 1/60` seconds
-- `dist += speed_mps × 1/60` meters, accumulated per recorded tick
+- each sample covers `Δpacket_id` frames (clamped to 1–60; a pid reset,
+  non-monotonic value, or a gap over 1 s falls back to a single frame);
+- `t += Δframes × 1/60` seconds, `dist += speed_mps × Δframes × 1/60` meters.
 
-Because distance only accumulates on recorded ticks, paused or off-track time adds no
-distance and the distance axis stays clean.
+Dropped datagrams therefore widen the time/distance steps instead of silently
+compressing the axes. The pid tracker also advances on paused/off-track packets, so
+unpausing sees a ~1-frame gap — pauses still add no lap time or distance. Frames
+lost in transit are counted and reported as `frames_dropped` in `/api/status` and
+the Admin diagnostics.
+
+Input metrics (full-throttle %, braking %, coasting %, tire spin, TCS/ASM activity)
+are **time-weighted** using the `t` deltas, so a sample recorded after a gap counts
+for the whole gap it covers.
 
 ## When a lap completes
 
@@ -33,7 +42,7 @@ conditions hold:
 1. the previous lap number was `> 0` (a real lap, not the out-lap);
 2. the counter moved **exactly +1** (monotonic step);
 3. the game reported a positive `last_lap_time_ms`;
-4. the lap collected at least **600 samples** (~10 s at 60 Hz).
+4. the lap collected at least **600 samples** (~10 s of received packets at 60 Hz).
 
 Condition 4 is the **phantom-lap guard**: in menus and replays GT7's lap counter
 flickers through stale values and re-reports an old `last_lap_time`. Requiring 10

@@ -19,6 +19,11 @@ database, and override environment variables on the next start.
   default). Applied on the next heartbeat, within ~2 s. Use **A** if an older game
   version stops sending data.
 - **Log level** — DEBUG / INFO / WARNING / ERROR, applied server-side immediately.
+- **Admin token** — only relevant when the server sets `GT7_ADMIN_TOKEN`. Enter the
+  token here once per browser (it's stored in that browser's localStorage and sent as
+  `X-API-Key`). Without it, the Admin pages, the recording toggle, session/lap
+  deletes, imports, and layout saves return 401; the Live view, overlays, and the
+  driver dash never need it.
 
 ## Diagnostics
 
@@ -60,6 +65,10 @@ Notes on the race events:
 automations work out of the box. The **Test** button sends a test event so you can
 verify delivery — it ignores the toggles. Notifications are fire-and-forget — a
 failed delivery logs a warning and never blocks capture.
+
+Trust model: the webhook URL may deliberately point at LAN services (Home
+Assistant, n8n) — private addresses are not blocked. Redirects are never followed,
+and setting `GT7_ADMIN_TOKEN` ensures only you can change the URL.
 
 ## Overlay & dashboard builder
 

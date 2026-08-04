@@ -53,6 +53,18 @@ filter for apps without alpha support. See [Overlay & streaming](../guide/overla
   also must hold for ~1 s before they count.
 - **Off-road** needs **packet format C** — check Admin → Connection.
 
+## 401 / 403 "admin token" errors
+
+The server has `GT7_ADMIN_TOKEN` set. Enter the same token under **Admin →
+Connection → Admin token** (once per browser). 403 means the entered token doesn't
+match the server's. Read-only pages (Live, overlays, `/dash`) never need the token.
+
+## Cross-origin (CORS) errors after upgrading
+
+Wildcard CORS was removed — the bundled UI is same-origin and unaffected, but if you
+built a separate app that calls this API from another origin, set
+`GT7_CORS_ORIGINS=http://your-app-host:port` (comma-separated for several).
+
 ## Getting more detail
 
 - **Admin → Logs** shows the live backend log with level filtering.

@@ -20,6 +20,8 @@ working directory.
 | `GT7_WEBHOOK_URL` | *(empty)* | Webhook for race notifications (also settable in Admin) |
 | `GT7_WEBHOOK_EVENTS` | *(all)* | Comma-separated events to send: `personal_best`, `session_summary`, `overtake`, `position_lost`, `off_road` (toggles in Admin) |
 | `GT7_LOG_LEVEL` | `INFO` | Root log level (also settable in Admin) |
+| `GT7_ADMIN_TOKEN` | *(empty)* | When set, the Admin pages and all destructive/mutating API calls require this token via the `X-API-Key` header; overlay/dash/read endpoints stay open. Empty = fully open (LAN-trusted) |
+| `GT7_CORS_ORIGINS` | *(empty)* | Comma-separated origins allowed for cross-origin API use. Empty (default) sends no CORS headers — the bundled UI is same-origin and needs none |
 | `GT7_HTTP_HOST` | `0.0.0.0` | HTTP bind host |
 | `GT7_HTTP_PORT` | `8000` | HTTP port |
 | `GT7_TELEMETRY_PORT` | `33740` | Inbound telemetry UDP port |

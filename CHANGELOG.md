@@ -15,6 +15,44 @@ Notable changes to GT7 Datalogger. The format follows
   env-based setups).
 - Admin view polish: per-event notification toggles with plain-language hints, and
   descriptive subtitles on every panel.
+- **Opt-in admin auth**: set `GT7_ADMIN_TOKEN` to require a token (`X-API-Key`
+  header) for the Admin API and every destructive/mutating endpoint; overlay, dash,
+  and read endpoints stay open. The UI stores the token per browser and prompts on
+  401. Unset = fully open, as before.
+- `GT7_CORS_ORIGINS` for cross-origin API consumers (see Breaking below).
+- `frames_dropped` counter in `/api/status` and the Admin diagnostics — 60 Hz frames
+  the console numbered but the network lost.
+
+### Changed
+
+- **Lap timing is robust to packet loss**: the time/distance axes integrate the
+  console's packet counter (gaps clamped to 1 s) instead of assuming a perfect
+  60 Hz stream, and input percentages are time-weighted accordingly.
+- **Per-client WebSocket queues**: a slow or stalled viewer (browser, OBS) can no
+  longer stall telemetry capture — it just misses intermediate frames; lap and
+  session events are never dropped.
+- Lap CSV export is written with a proper CSV writer and neutralizes spreadsheet
+  formula injection in text cells.
+- The sessions list is a single aggregate query (was one query per session).
+
+### Fixed
+
+- Lap imports are validated (required columns, equal lengths, finite numbers, size
+  cap) and return a clear 400 instead of storing a file that breaks analysis with a
+  500 later; a rejected import no longer creates an empty session.
+- Restarting or switching the telemetry source fully awaits task shutdown and port
+  release — no more races when rebinding UDP 33740.
+
+### Security
+
+- Webhook requests never follow redirects, and the webhook trust model is
+  documented (LAN targets are intentional; the admin token guards configuration).
+
+### Breaking
+
+- The API no longer sends wildcard CORS headers. The bundled UI is unaffected
+  (same-origin in both dev and prod). Separate cross-origin consumers must set
+  `GT7_CORS_ORIGINS`.
 
 - **Extended telemetry packet support (B / `~` / C)**: the listener can request any
   of GT7's four packet formats via the heartbeat character, decrypts each format's
