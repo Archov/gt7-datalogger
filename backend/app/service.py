@@ -305,6 +305,9 @@ class TelemetryService:
             "recording": self.recording,
             "session_id": self.session_id,
             "track_name": self.track_name,
+            # 60 Hz frames the console numbered but we never received
+            # (distinct from packets_dropped: queue overflow on our side).
+            "frames_dropped": self.processor.dropped_frames,
             **self.source.stats,
         }
 

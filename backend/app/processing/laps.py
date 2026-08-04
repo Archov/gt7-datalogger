@@ -16,8 +16,13 @@ FULL_INPUT = 250  # of 255; GT7 rarely reports exactly 255 with analog triggers
 TIRE_SPIN_THRESHOLD = 1.1
 # A "completed lap" with almost no samples is a phantom: GT7's lap counter
 # flickers through old values in menus/replays and re-reports a stale
-# last_lap_time. No real lap is shorter than this many ticks (~10 s).
+# last_lap_time. No real lap is shorter than this many samples (~10 s).
 MIN_LAP_TICKS = 600
+# Time/distance integrate packet_id deltas so dropped datagrams don't shrink
+# the axes. Gaps beyond this (>1 s) are a discontinuity (source restart, pid
+# reset, long outage) — extrapolating a minute of distance at current speed
+# would corrupt the lap worse than under-counting one frame does.
+MAX_FRAME_GAP = 60
 
 # Columnar per-tick series kept for each lap. Column order matters for the
 # frontend; keep in sync with frontend/src/lib/types.ts.
@@ -34,6 +39,19 @@ SAMPLE_COLUMNS = (
 
 def new_sample_store() -> dict[str, list[float]]:
     return {c: [] for c in SAMPLE_COLUMNS}
+
+
+def _time_weights(t: list[float]) -> list[float]:
+    """Per-sample durations from t deltas; uniform when too short to tell.
+
+    Metrics weight samples by how much time each one covered, so a sample
+    recorded after a dropped-frame gap counts for the whole gap instead of
+    skewing percentages toward whatever happened while packets flowed.
+    """
+    if len(t) < 2:
+        return [1.0] * len(t)
+    w = [max(t[i] - t[i - 1], 0.0) for i in range(1, len(t))]
+    return [w[0], *w]  # first sample inherits the first interval
 
 
 @dataclass(slots=True)
@@ -77,19 +95,25 @@ class CompletedLap:
         self.total_ticks = n
         if n == 0:
             return
+        # Percentages are time-weighted: after a dropped-frame gap a sample
+        # covers the whole gap, so drops don't skew the input metrics.
+        w = _time_weights(s["t"])
+        total_w = sum(w) or 1.0
+
+        def pct(flags: list[bool]) -> float:
+            return 100.0 * sum(wi for wi, f in zip(w, flags, strict=True) if f) / total_w
+
         self.fuel_consumed = max(0.0, self.fuel_start - self.fuel_end)
-        self.full_throttle_pct = 100.0 * sum(1 for v in s["throttle"] if v >= 98.0) / n
-        self.full_brake_pct = 100.0 * sum(1 for v in s["brake"] if v >= 98.0) / n
-        self.coasting_pct = 100.0 * sum(1 for v in s["coast"] if v > 0) / n
-        self.tire_spin_pct = 100.0 * sum(
-            1 for v in s["tire_slip"] if v >= TIRE_SPIN_THRESHOLD
-        ) / n
+        self.full_throttle_pct = pct([v >= 98.0 for v in s["throttle"]])
+        self.full_brake_pct = pct([v >= 98.0 for v in s["brake"]])
+        self.coasting_pct = pct([v > 0 for v in s["coast"]])
+        self.tire_spin_pct = pct([v >= TIRE_SPIN_THRESHOLD for v in s["tire_slip"]])
         self.max_speed = max(s["speed"])
         self.min_body_height = min(s["body_height"])
         aids = s.get("aids") or []
-        if aids:
-            self.tcs_active_pct = 100.0 * sum(1 for v in aids if int(v) & AidsBits.TCS) / n
-            self.asm_active_pct = 100.0 * sum(1 for v in aids if int(v) & AidsBits.ASM) / n
+        if len(aids) == n:
+            self.tcs_active_pct = pct([bool(int(v) & AidsBits.TCS) for v in aids])
+            self.asm_active_pct = pct([bool(int(v) & AidsBits.ASM) for v in aids])
         self.events = detect_events(s)
 
 
@@ -121,7 +145,10 @@ class LapProcessor:
     _current_lap: int = -1
     _samples: dict[str, list[float]] = field(default_factory=new_sample_store)
     _distance: float = 0.0
-    _ticks: int = 0
+    _elapsed_s: float = 0.0
+    _last_pid: int = -1
+    _pending_dt: int = 1  # frames covered by the next sample (1 = no drops)
+    _dropped_frames: int = 0
     _fuel_start: float = 0.0
     _last_packet: TelemetryPacket | None = None
     # Engine-health aggregates for the lap in progress (not per-tick columns)
@@ -137,9 +164,24 @@ class LapProcessor:
     def live_lap_samples(self) -> dict[str, list[float]]:
         return self._samples
 
+    @property
+    def dropped_frames(self) -> int:
+        return self._dropped_frames
+
     async def feed(self, p: TelemetryPacket) -> None:
         if p.is_loading:
             return
+
+        # Frames covered since the previous packet, from the console's own
+        # packet counter. Tracked for EVERY non-loading packet (paused ones
+        # too) so unpausing sees a ~1-frame gap and pauses add no lap time.
+        gap = p.packet_id - self._last_pid if self._last_pid >= 0 else 1
+        self._last_pid = p.packet_id
+        if 1 <= gap <= MAX_FRAME_GAP:
+            self._pending_dt = gap
+            self._dropped_frames += gap - 1
+        else:
+            self._pending_dt = 1  # first packet, pid reset, or discontinuity
 
         if self._session is not None and p.car_id != self._session.car_id:
             log.info("car changed (%d -> %d): starting new session", self._session.car_id, p.car_id)
@@ -184,7 +226,7 @@ class LapProcessor:
         self._current_lap = p.current_lap
         self._samples = new_sample_store()
         self._distance = 0.0
-        self._ticks = 0
+        self._elapsed_s = 0.0
         self._fuel_start = p.fuel_level
         self._max_water = 0.0
         self._max_oil = 0.0
@@ -217,11 +259,14 @@ class LapProcessor:
             await self.on_lap(lap)
 
     def _append_sample(self, p: TelemetryPacket) -> None:
-        self._distance += p.speed_mps * TICK_SECONDS
         s = self._samples
+        dt_s = self._pending_dt * TICK_SECONDS
+        if s["t"]:  # the lap's first sample anchors at t=0
+            self._elapsed_s += dt_s
+        self._distance += p.speed_mps * dt_s
         throttle = round(p.throttle_pct, 1)
         brake = round(p.brake_pct, 1)
-        s["t"].append(round(self._ticks * TICK_SECONDS, 4))
+        s["t"].append(round(self._elapsed_s, 4))
         s["dist"].append(round(self._distance, 2))
         s["speed"].append(round(p.speed_kmh, 2))
         s["throttle"].append(throttle)
@@ -257,4 +302,3 @@ class LapProcessor:
                 if self._min_oil_pressure < 0
                 else min(self._min_oil_pressure, p.oil_pressure)
             )
-        self._ticks += 1

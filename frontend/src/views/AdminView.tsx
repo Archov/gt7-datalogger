@@ -107,6 +107,8 @@ export function AdminView() {
               <Stat k="Decode errors" v={String(stats.source.decode_errors)}
                 cls={stats.source.decode_errors > 0 ? "text-warn" : undefined} />
               <Stat k="Packet format" v={stats.source.packet_format ?? "A"} />
+              <Stat k="Frames dropped" v={String(stats.source.frames_dropped ?? 0)}
+                cls={(stats.source.frames_dropped ?? 0) > 0 ? "text-warn" : undefined} />
               <Stat k="Server uptime" v={formatDuration(stats.uptime_s * 1000)} />
               <Stat k="Live clients" v={String(stats.clients)} />
               <Stat k="Sessions / laps" v={`${stats.db.sessions} / ${stats.db.laps}`} />

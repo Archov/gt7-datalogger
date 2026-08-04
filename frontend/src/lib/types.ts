@@ -49,6 +49,7 @@ export interface ConnectionStatus {
   packets_received: number;
   decode_errors: number;
   packet_format?: string;
+  frames_dropped?: number; // console frames lost in transit (packet-id gaps)
 }
 
 export interface LapSummary {
