@@ -47,10 +47,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.ps_ip = stored["ps_ip"]
     if stored.get("source") in ("udp", "sim"):
         settings.source = stored["source"]
+    if stored.get("packet_format") in ("A", "B", "~", "C"):
+        settings.packet_format = stored["packet_format"]
     if "log_level" in stored:
         logging.getLogger().setLevel(stored["log_level"])
     if "webhook_url" in stored:
         settings.webhook_url = stored["webhook_url"]
+    if "webhook_events" in stored:
+        settings.webhook_events = stored["webhook_events"]
 
     cars = CarDatabase()
     cars.load(settings.cars_csv)

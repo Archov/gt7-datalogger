@@ -1,8 +1,17 @@
 """Packet building, encryption round-trip, and field decoding."""
 
+import pytest
+
 from app.models import SimulatorFlags
 from app.telemetry.crypto import decrypt_packet, encrypt_packet
-from app.telemetry.packet import PACKET_SIZE, build_packet, parse_packet
+from app.telemetry.packet import (
+    PACKET_SIZE,
+    PACKET_SIZE_B,
+    PACKET_SIZE_C,
+    PACKET_SIZE_TILDE,
+    build_packet,
+    parse_packet,
+)
 
 
 def make_plain(**kwargs) -> bytes:
@@ -11,6 +20,9 @@ def make_plain(**kwargs) -> bytes:
 
 def test_packet_size() -> None:
     assert len(make_plain()) == PACKET_SIZE
+    assert len(make_plain(fmt="B")) == PACKET_SIZE_B
+    assert len(make_plain(fmt="~")) == PACKET_SIZE_TILDE
+    assert len(make_plain(fmt="C")) == PACKET_SIZE_C
 
 
 def test_encrypt_decrypt_roundtrip() -> None:
@@ -83,3 +95,67 @@ def test_tire_slip_ratio() -> None:
 def test_tire_slip_ratio_at_standstill() -> None:
     p = parse_packet(make_plain(speed_mps=0.0))
     assert p.tire_slip_ratio == 1.0
+
+
+def test_packet_a_has_no_extended_fields() -> None:
+    p = parse_packet(make_plain())
+    assert p.wheel_rotation is None
+    assert p.torque_vectors is None
+    assert p.surface_types is None
+    assert p.lap_time_ms is None
+
+
+def test_parse_packet_b_extension() -> None:
+    p = parse_packet(make_plain(fmt="B", wheel_rotation=0.5, sway=1.5, heave=-0.2, surge=2.0))
+    assert p.wheel_rotation is not None and abs(p.wheel_rotation - 0.5) < 1e-6
+    assert p.sway is not None and abs(p.sway - 1.5) < 1e-6
+    assert p.heave is not None and abs(p.heave - -0.2) < 1e-6
+    assert p.surge is not None and abs(p.surge - 2.0) < 1e-6
+    assert p.surface_types is None  # tilde/C fields absent in B
+
+
+def test_parse_packet_tilde_extension() -> None:
+    p = parse_packet(
+        make_plain(
+            fmt="~",
+            throttle_filtered=200,
+            brake_filtered=10,
+            torque_vectors=(0.1, 0.2, -0.3, -0.4),
+            energy_recovery=5.5,
+        )
+    )
+    assert p.throttle_filtered == 200
+    assert p.brake_filtered == 10
+    assert p.torque_vectors is not None
+    assert abs(p.torque_vectors[2] - -0.3) < 1e-6
+    assert p.energy_recovery is not None and abs(p.energy_recovery - 5.5) < 1e-6
+    assert p.lap_time_ms is None  # C fields absent in ~
+
+
+def test_parse_packet_c_extension() -> None:
+    p = parse_packet(
+        make_plain(
+            fmt="C",
+            surface_types="CTDG",
+            lap_time_ms=42_123,
+            wheel_steering_rad=(0.12, 0.11),
+            wheelbase_m=2.65,
+            car_category="GR3",
+        )
+    )
+    assert p.surface_types == "CTDG"
+    assert p.lap_time_ms == 42_123
+    assert p.wheel_steering_rad is not None
+    assert abs(p.wheel_steering_rad[0] - 0.12) < 1e-6
+    assert p.wheelbase_m is not None and abs(p.wheelbase_m - 2.65) < 1e-6
+    assert p.car_category == "GR3"
+
+
+@pytest.mark.parametrize("fmt", ["A", "B", "~", "C"])
+def test_encrypt_decrypt_roundtrip_all_formats(fmt: str) -> None:
+    plain = make_plain(fmt=fmt, packet_id=99, speed_mps=33.3)
+    recovered = decrypt_packet(encrypt_packet(plain))
+    assert recovered is not None
+    assert recovered[:0x40] == plain[:0x40]
+    assert recovered[0x44:] == plain[0x44:]
+    assert parse_packet(recovered).packet_id == 99

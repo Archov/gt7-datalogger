@@ -7,9 +7,11 @@ screen. This page describes exactly how the datalogger captures and decodes it.
 
 The console only streams to a client that keeps asking for data:
 
-1. The datalogger binds UDP port **33740** and sends a **heartbeat** — a single byte
-   `A` — to the console's port **33739** every **1.6 s**. (GT7 stops sending after
-   ~100 packets without a heartbeat.)
+1. The datalogger binds UDP port **33740** and sends a **heartbeat** — a single
+   character — to the console's port **33739** every **1.6 s**. (GT7 stops sending
+   after ~100 packets without a heartbeat.) The character selects the packet format:
+   `A`, `B`, `~`, or `C` (see [packet formats](#packet-formats) below); the
+   datalogger sends `C` by default (`GT7_PACKET_FORMAT`, changeable live in Admin).
 2. The heartbeat is addressed to `GT7_PS_IP` if configured. If not, it is
    **broadcast** (`255.255.255.255`), and the console's address is learned from the
    source address of the first telemetry packet that arrives — that's the
@@ -17,23 +19,37 @@ The console only streams to a client that keeps asking for data:
 3. If no packet arrives for **5 s** the connection is considered stale and the status
    indicator drops to "waiting for telemetry" while heartbeats continue.
 
+## Packet formats
+
+Four packet formats exist, each a strict superset of the previous. Parsing keys off
+the datagram length, so whatever the console answers is decoded correctly:
+
+| Heartbeat | Size | Adds |
+| --- | --- | --- |
+| `A` | 296 B | base telemetry (everything in the table below) |
+| `B` | 316 B | steering wheel rotation, sway / heave / surge accelerations |
+| `~` | 344 B | filtered throttle & brake, per-wheel torque vectors, energy recovery |
+| `C` | 368 B | per-wheel surface type, live lap timer, front-wheel steering angles, wheelbase, car category (needs GT7 **v1.68+**) |
+
+The extended fields are parsed into the typed packet model (as `None` when the
+console sends a smaller format). Older game versions only answer the `A` heartbeat —
+set **Packet format** to `A` in the Admin view if no data arrives.
+
 ## Decryption
 
-Each 296-byte datagram is encrypted with **Salsa20**:
+Each datagram is encrypted with **Salsa20**:
 
 - **Key** — the first 32 bytes of the ASCII string
   `Simulator Interface Packet GT7 ver 0.0` (i.e. `Simulator Interface Packet GT7 v`).
 - **Nonce** — a 4-byte little-endian seed `iv1` is read *unencrypted* at offset `0x40`
-  of the datagram. A second value is derived as `iv2 = iv1 XOR 0xDEADBEAF` (yes,
-  `BEAF` — that is the real GT7 constant), and the 8-byte Salsa20 nonce is `iv2`
-  followed by `iv1` (both little-endian).
+  of the datagram. A second value is derived as `iv2 = iv1 XOR <constant>`, and the
+  8-byte Salsa20 nonce is `iv2` followed by `iv1` (both little-endian). The XOR
+  constant depends on the packet format: `0xDEADBEAF` for `A` (yes, `BEAF` — that is
+  the real GT7 constant), `0xDEADBEEF` for `B` and `C`, `0x55FABB4F` for `~`. The
+  decoder picks the constant matching the datagram size and falls back to trying the
+  others.
 - **Validation** — after decryption, the first four bytes must equal the magic
   `0x47375330` (`"G7S0"`). Anything else is counted as a decode error and dropped.
-
-!!! note "Packet format support"
-    The datalogger implements the classic **296-byte format-A packet** with the `A`
-    heartbeat. The extended formats introduced in later GT7 patches (the "B" / `~`
-    variants) are not used — format A carries everything the dashboard needs.
 
 ## Decoded fields
 

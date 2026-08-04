@@ -56,6 +56,7 @@ class SimTelemetrySource:
             "console_ip": "simulated",
             "packets_received": self._packet_count,
             "decode_errors": 0,
+            "packet_format": "C",
         }
 
     async def start(self) -> None:
@@ -188,6 +189,18 @@ class SimTelemetrySource:
                 gear_ratios=(3.2, 2.3, 1.8, 1.4, 1.15, 0.95),
                 transmission_top_speed=290.0,
                 car_id=CAR_ID,
+                # Packet C extension: exercises the full parse path in dev.
+                fmt="C",
+                wheel_rotation=lat * 1.2,
+                sway=lat * 6.0,
+                surge=(throttle - brake) / 255 * 5.0,
+                throttle_filtered=throttle,
+                brake_filtered=brake,
+                surface_types="CTTT" if kerb else "TTTT",
+                lap_time_ms=int((tick - lap_start_tick) * TICK * 1000),
+                wheel_steering_rad=(lat * 0.3, lat * 0.3),
+                wheelbase_m=2.7,
+                car_category="GRX",
             )
             self._packet_count += 1
             await self._on_packet(parse_packet(plain))
