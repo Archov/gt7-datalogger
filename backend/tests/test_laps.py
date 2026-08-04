@@ -108,9 +108,10 @@ async def test_coasting_and_metrics(setup) -> None:
     await feed_lap(proc, 1, 20, throttle=0, brake=0)
     await proc.feed(make_packet(current_lap=2, last_lap_time_ms=30_000))
     lap = c.laps[0]
-    assert lap.full_throttle_pct == pytest.approx(50.0)
-    assert lap.full_brake_pct == pytest.approx(30.0)
-    assert lap.coasting_pct == pytest.approx(20.0)
+    # abs tolerance: t is stored at 4 decimals, so time weights carry ~0.01%
+    assert lap.full_throttle_pct == pytest.approx(50.0, abs=0.1)
+    assert lap.full_brake_pct == pytest.approx(30.0, abs=0.1)
+    assert lap.coasting_pct == pytest.approx(20.0, abs=0.1)
 
 
 async def test_distance_integration(setup) -> None:
@@ -173,3 +174,64 @@ async def test_no_samples_recorded_after_race_finish(setup) -> None:
     assert len(c.laps) == 1  # final lap still completes
     await feed_lap(proc, 6, 20, total_laps=5, speed_mps=30.0)
     assert len(proc.live_lap_samples["t"]) == 0
+
+
+# --- packet-loss-robust timing ----------------------------------------------
+
+
+async def test_packet_gap_extends_time_axis(setup) -> None:
+    proc, _ = setup
+    for i in range(10):
+        await proc.feed(make_packet(current_lap=1, packet_id=i, speed_mps=60.0))
+    await proc.feed(make_packet(current_lap=1, packet_id=15, speed_mps=60.0))
+    t = proc.live_lap_samples["t"]
+    d = proc.live_lap_samples["dist"]
+    assert t[-1] - t[-2] == pytest.approx(6 / 60)
+    assert d[-1] - d[-2] == pytest.approx(60.0 * 6 / 60)
+    assert proc.dropped_frames == 5
+
+
+async def test_huge_gap_falls_back_to_one_frame(setup) -> None:
+    proc, _ = setup
+    for i in range(10):
+        await proc.feed(make_packet(current_lap=1, packet_id=i, speed_mps=60.0))
+    await proc.feed(make_packet(current_lap=1, packet_id=500, speed_mps=60.0))
+    t = proc.live_lap_samples["t"]
+    assert t[-1] - t[-2] == pytest.approx(1 / 60, abs=1e-3)
+
+
+async def test_non_monotonic_pid_falls_back(setup) -> None:
+    proc, _ = setup
+    await proc.feed(make_packet(current_lap=1, packet_id=100, speed_mps=60.0))
+    await proc.feed(make_packet(current_lap=1, packet_id=40, speed_mps=60.0))
+    t = proc.live_lap_samples["t"]
+    assert t == [0.0, pytest.approx(1 / 60, abs=1e-4)]
+
+
+async def test_pause_does_not_inflate_time(setup) -> None:
+    proc, _ = setup
+    for i in range(10):
+        await proc.feed(make_packet(current_lap=1, packet_id=i, speed_mps=60.0))
+    paused = int(SimulatorFlags.CAR_ON_TRACK | SimulatorFlags.PAUSED)
+    for i in range(10, 30):
+        await proc.feed(make_packet(current_lap=1, packet_id=i, flags=paused))
+    await proc.feed(make_packet(current_lap=1, packet_id=30, speed_mps=60.0))
+    t = proc.live_lap_samples["t"]
+    assert len(t) == 11  # paused packets are not sampled
+    assert t[-1] - t[-2] == pytest.approx(1 / 60, abs=1e-3)  # pause added no time
+
+
+async def test_metrics_time_weighted_under_drops(setup) -> None:
+    proc, c = setup
+    # 10 full-throttle frames (pids 0..9), then 10 coast samples every 3rd
+    # frame (pids 12,15,...,39) -> throttle time 10 frames, coast 30 frames.
+    for pid in range(10):
+        await proc.feed(make_packet(current_lap=1, packet_id=pid, throttle=255, speed_mps=50.0))
+    for pid in range(12, 40, 3):
+        await proc.feed(make_packet(current_lap=1, packet_id=pid, throttle=0, speed_mps=50.0))
+    await proc.feed(
+        make_packet(current_lap=2, packet_id=40, last_lap_time_ms=60_000, speed_mps=50.0)
+    )
+    lap = c.laps[0]
+    assert lap.full_throttle_pct == pytest.approx(100.0 * 10 / 40, abs=0.5)
+    assert lap.coasting_pct == pytest.approx(100.0 * 30 / 40, abs=0.5)

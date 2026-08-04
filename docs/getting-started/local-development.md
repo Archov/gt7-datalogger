@@ -4,7 +4,8 @@
 
 From the repo root, one command starts everything — backend with auto-reload on `:8000`,
 frontend with hot reload on `:5173` — and bootstraps the virtualenv and `node_modules`
-on first run. ++ctrl+c++ stops both:
+on first run. It also rebuilds `frontend/dist` on every start, so `:8000` always serves
+the current UI (not a stale build). ++ctrl+c++ stops both:
 
 ```bash
 ./dev.sh

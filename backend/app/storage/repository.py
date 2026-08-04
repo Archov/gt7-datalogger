@@ -100,26 +100,30 @@ class Repository:
             return row.id
 
     async def list_sessions(self) -> list[dict[str, Any]]:
+        # One aggregate query for all sessions; the outer join keeps lap-less
+        # sessions and only touches LapRow ids/times (never samples_json).
         async with self._sf() as db:
-            rows = (await db.execute(select(SessionRow).order_by(SessionRow.id.desc()))).scalars()
-            out = []
-            for s in rows:
-                laps = (
-                    await db.execute(select(LapRow.time_ms).where(LapRow.session_id == s.id))
-                ).scalars().all()
-                out.append(
-                    {
-                        "id": s.id,
-                        "started_at": s.started_at,
-                        "car_id": s.car_id,
-                        "car_name": s.car_name,
-                        "note": s.note,
-                        "track_name": s.track_name,
-                        "lap_count": len(laps),
-                        "best_lap_time_ms": min(laps) if laps else None,
-                    }
+            rows = (
+                await db.execute(
+                    select(SessionRow, func.count(LapRow.id), func.min(LapRow.time_ms))
+                    .outerjoin(LapRow, LapRow.session_id == SessionRow.id)
+                    .group_by(SessionRow.id)
+                    .order_by(SessionRow.id.desc())
                 )
-            return out
+            ).all()
+            return [
+                {
+                    "id": s.id,
+                    "started_at": s.started_at,
+                    "car_id": s.car_id,
+                    "car_name": s.car_name,
+                    "note": s.note,
+                    "track_name": s.track_name,
+                    "lap_count": count,
+                    "best_lap_time_ms": best,
+                }
+                for s, count, best in rows
+            ]
 
     async def session_lap_stats(self, session_id: int) -> dict[str, Any]:
         """Aggregates for a session without materializing lap rows.

@@ -13,7 +13,17 @@ database, and override environment variables on the next start.
   (the built-in synthetic 60 Hz source) live. This is the in-app equivalent of
   `GT7_SOURCE=sim` — everything (live view, recording, analysis, overlay) works against
   the simulator.
+- **Packet format** — which telemetry format to request from the console: **A**
+  (base, 296 B), **B** (adds steering/motion), **~** (adds filtered inputs, torque
+  vectors), or **C** (adds surface type, live lap timer — needs GT7 v1.68+, the
+  default). Applied on the next heartbeat, within ~2 s. Use **A** if an older game
+  version stops sending data.
 - **Log level** — DEBUG / INFO / WARNING / ERROR, applied server-side immediately.
+- **Admin token** — only relevant when the server sets `GT7_ADMIN_TOKEN`. Enter the
+  token here once per browser (it's stored in that browser's localStorage and sent as
+  `X-API-Key`). Without it, the Admin pages, the recording toggle, session/lap
+  deletes, imports, and layout saves return 401; the Live view, overlays, and the
+  driver dash never need it.
 
 ## Diagnostics
 
@@ -30,17 +40,35 @@ session/lap counts, database size, and loaded car names. Two actions:
 
 ## Notifications
 
-Set a **webhook URL** to get notified about:
+Set a **webhook URL** and pick which events to be notified about — each has its own
+toggle in the panel:
 
-- **New personal bests** — fired the moment a session best is beaten (never on the
-  first lap of a session), with lap, improvement, car, and track.
-- **Session summaries** — when a session ends, with car, track, lap count, best lap,
-  and fuel used.
+| Event | Fires when | JSON `event` |
+| --- | --- | --- |
+| **Personal bests** | a session best is beaten (never on the first lap), with lap, improvement, car, track | `personal_best` |
+| **Session summaries** | a session ends, with car, track, lap count, best lap, fuel used | `session_summary` |
+| **Overtakes** | your race position improves (e.g. P3 → P2) | `overtake` |
+| **Positions lost** | your race position drops | `position_lost` |
+| **Off-road excursions** | 3+ wheels are on grass/dirt/sand/snow at speed | `off_road` |
+
+Notes on the race events:
+
+- **Position events** need GT7 to report a live race position — it only does in some
+  race types (elsewhere the field reads −1 and nothing fires). A change must **hold
+  for ~1 s** before it counts, so side-by-side battles don't spam your channel.
+- **Off-road** needs **packet format C** (the default), the only format carrying
+  per-wheel surface data. Kerbs and two-wheels-over-the-line don't count; one
+  excursion sends one event, re-arming after ~2 s back on tarmac.
 
 **Discord** webhook URLs get a rich embed; **any other URL** receives plain JSON
-(snake-cased fields), so n8n / Home Assistant–style automations work out of the box.
-The **Test** button sends a test event so you can verify delivery. Notifications are
-fire-and-forget — a failed delivery logs a warning and never blocks capture.
+(snake-cased fields plus the `event` name above), so n8n / Home Assistant–style
+automations work out of the box. The **Test** button sends a test event so you can
+verify delivery — it ignores the toggles. Notifications are fire-and-forget — a
+failed delivery logs a warning and never blocks capture.
+
+Trust model: the webhook URL may deliberately point at LAN services (Home
+Assistant, n8n) — private addresses are not blocked. Redirects are never followed,
+and setting `GT7_ADMIN_TOKEN` ensures only you can change the URL.
 
 ## Overlay & dashboard builder
 

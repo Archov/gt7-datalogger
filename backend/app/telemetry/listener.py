@@ -1,9 +1,11 @@
 """UDP telemetry capture from a PlayStation running GT7.
 
-Sends a heartbeat ("A") to the console every ~1.6 s (GT7 stops sending after
-100 packets without one) and receives ~60 Hz encrypted packets. If no console
-IP is configured, the heartbeat is broadcast so the console is auto-discovered
-from the first packet's source address.
+Sends a heartbeat to the console every ~1.6 s (GT7 stops sending after
+100 packets without one) and receives ~60 Hz encrypted packets. The
+heartbeat character selects the packet format ("A", "B", "~", or "C" —
+richer formats add steering, motion, surface, and lap-timer data). If no
+console IP is configured, the heartbeat is broadcast so the console is
+auto-discovered from the first packet's source address.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from app.config import Settings
 from app.models import TelemetryPacket
 from app.telemetry.crypto import decrypt_packet
-from app.telemetry.packet import parse_packet
+from app.telemetry.packet import HEARTBEAT_FORMATS, parse_packet
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +52,11 @@ class UdpTelemetrySource:
         return self._last_packet_at > 0 and (time.monotonic() - self._last_packet_at) < STALE_AFTER
 
     @property
+    def heartbeat_char(self) -> str:
+        fmt = self._settings.packet_format
+        return fmt if fmt in HEARTBEAT_FORMATS else "A"
+
+    @property
     def stats(self) -> dict[str, object]:
         return {
             "connected": self.connected,
@@ -57,6 +64,7 @@ class UdpTelemetrySource:
             "packets_received": self._packet_count,
             "decode_errors": self._decode_errors,
             "packets_dropped": self._dropped,
+            "packet_format": self.heartbeat_char,
         }
 
     def reset_discovery(self) -> None:
@@ -90,8 +98,17 @@ class UdpTelemetrySource:
         self._running = False
         for t in self._tasks:
             t.cancel()
+        # Wait for the heartbeat/consume tasks to actually finish before the
+        # socket goes away — a restart rebinds the same port immediately, and
+        # a half-dead consumer racing the new bind corrupts the swap.
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._transport:
             self._transport.close()
+            self._transport = None
+            # close() only schedules the socket teardown; yield so the loop
+            # actually releases the port before a restart rebinds it.
+            await asyncio.sleep(0)
 
     def _handle_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if self._console_addr is None or self._console_addr[0] != addr[0]:
@@ -151,4 +168,4 @@ class UdpTelemetrySource:
             target = (self._console_addr[0], self._settings.heartbeat_port)
         else:
             target = ("255.255.255.255", self._settings.heartbeat_port)
-        self._transport.sendto(b"A", target)
+        self._transport.sendto(self.heartbeat_char.encode("ascii"), target)

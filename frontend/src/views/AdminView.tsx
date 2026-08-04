@@ -6,13 +6,22 @@ import { LayoutBuilder } from "@/components/LayoutBuilder";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Select } from "@/components/ui/Select";
-import { api } from "@/lib/api";
+import { api, getAdminToken, setAdminToken } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
-import type { AdminSettings, AdminStats, LogRecord } from "@/lib/types";
+import type { AdminSettings, AdminStats, LogRecord, WebhookEvent } from "@/lib/types";
 import { useTelemetry } from "@/store/telemetry";
 import { toast } from "@/store/toasts";
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
+
+// Order matches the backend's ALL_EVENTS.
+const WEBHOOK_EVENTS: { value: WebhookEvent; label: string; hint: string }[] = [
+  { value: "personal_best", label: "Personal bests", hint: "a lap beats your session best" },
+  { value: "session_summary", label: "Session summaries", hint: "car, laps, best time, fuel used" },
+  { value: "overtake", label: "Overtakes", hint: "you gain a race position" },
+  { value: "position_lost", label: "Positions lost", hint: "you drop a race position" },
+  { value: "off_road", label: "Off-road excursions", hint: "3+ wheels on grass/dirt — needs packet format C" },
+];
 
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: "text-ink-dim",
@@ -25,6 +34,7 @@ const LEVEL_COLORS: Record<string, string> = {
 export function AdminView() {
   const setStatus = useTelemetry((s) => s.setStatus);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -41,7 +51,16 @@ export function AdminView() {
   }, [setStatus]);
 
   useEffect(() => {
-    api.admin.settings().then(setSettings).catch(() => flash("Could not load settings", true));
+    api.admin
+      .settings()
+      .then((s) => {
+        setSettings(s);
+        setSettingsError(null);
+      })
+      .catch((e) => {
+        setSettingsError(e instanceof Error ? e.message : "Could not load settings");
+        flash("Could not load settings", true);
+      });
     refreshStats();
     const t = window.setInterval(refreshStats, 5000);
     return () => window.clearInterval(t);
@@ -79,16 +98,18 @@ export function AdminView() {
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* Connection settings */}
-        <Panel title="Connection">
+        <Panel title="Connection" subtitle="how telemetry reaches the datalogger">
           {settings ? (
             <ConnectionForm settings={settings} busy={busy} onApply={apply} />
+          ) : settingsError ? (
+            <TokenForm error={settingsError} />
           ) : (
             <div className="p-4 text-sm text-ink-dim">Loading…</div>
           )}
         </Panel>
 
         {/* Diagnostics */}
-        <Panel title="Diagnostics">
+        <Panel title="Diagnostics" subtitle="live health — refreshes every 5 s">
           {stats ? (
             <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 p-4 font-tabular text-sm">
               <Stat k="Telemetry" v={stats.source.connected ? "connected" : "no data"}
@@ -97,6 +118,9 @@ export function AdminView() {
               <Stat k="Packets received" v={stats.source.packets_received.toLocaleString()} />
               <Stat k="Decode errors" v={String(stats.source.decode_errors)}
                 cls={stats.source.decode_errors > 0 ? "text-warn" : undefined} />
+              <Stat k="Packet format" v={stats.source.packet_format ?? "A"} />
+              <Stat k="Frames dropped" v={String(stats.source.frames_dropped ?? 0)}
+                cls={(stats.source.frames_dropped ?? 0) > 0 ? "text-warn" : undefined} />
               <Stat k="Server uptime" v={formatDuration(stats.uptime_s * 1000)} />
               <Stat k="Live clients" v={String(stats.clients)} />
               <Stat k="Sessions / laps" v={`${stats.db.sessions} / ${stats.db.laps}`} />
@@ -131,7 +155,7 @@ export function AdminView() {
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* Webhook notifications */}
-        <Panel title="Notifications">
+        <Panel title="Notifications" subtitle="webhook pings for race events">
           {settings ? (
             <WebhookForm settings={settings} busy={busy} onApply={apply} flash={flash} setBusy={setBusy} />
           ) : (
@@ -142,17 +166,20 @@ export function AdminView() {
       </div>
 
       {/* Overlay & dashboard layout builder */}
-      <Panel title="Overlay & dashboard builder">
+      <Panel
+        title="Overlay & dashboard builder"
+        subtitle="design OBS overlays and driver dashboards"
+      >
         <LayoutBuilder flash={flash} />
       </Panel>
 
       {/* Logs */}
-      <Panel title="Logs">
+      <Panel title="Logs" subtitle="live server log">
         <LogViewer />
       </Panel>
 
       {/* Data management */}
-      <Panel title="Data management">
+      <Panel title="Data management" subtitle="recorded sessions and laps">
         <div className="flex flex-wrap items-center gap-2 p-3">
           <button
             className="btn"
@@ -190,6 +217,39 @@ export function AdminView() {
   );
 }
 
+function TokenForm({ error }: { error: string }) {
+  const [token, setToken] = useState(getAdminToken());
+  return (
+    <div className="space-y-2 p-4">
+      <p className="text-sm text-warn">{error}</p>
+      <label className="block text-xs text-ink-dim" htmlFor="admin-token">
+        Admin token (the server&apos;s GT7_ADMIN_TOKEN)
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="admin-token"
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm focus:border-accent focus:outline-none"
+        />
+        <button
+          className="btn shrink-0"
+          onClick={() => {
+            setAdminToken(token.trim());
+            window.location.reload();
+          }}
+        >
+          Save
+        </button>
+      </div>
+      <p className="text-[11px] text-ink-dim">
+        Stored in this browser only. Live/overlay pages work without it.
+      </p>
+    </div>
+  );
+}
+
 function ConnectionForm({
   settings,
   busy,
@@ -200,6 +260,7 @@ function ConnectionForm({
   onApply: (patch: Parameters<typeof api.admin.updateSettings>[0], label: string) => void;
 }) {
   const [ip, setIp] = useState(settings.ps_ip);
+  const [token, setToken] = useState(getAdminToken());
   useEffect(() => setIp(settings.ps_ip), [settings.ps_ip]);
 
   return (
@@ -248,6 +309,27 @@ function ConnectionForm({
           />
         </div>
         <div>
+          <span className="mb-1 block text-xs text-ink-dim">Packet format</span>
+          <SegmentedControl
+            ariaLabel="Packet format"
+            value={settings.packet_format}
+            disabled={busy !== null}
+            onValueChange={(f) =>
+              f !== settings.packet_format &&
+              onApply({ packet_format: f as AdminSettings["packet_format"] }, "Packet format")
+            }
+            options={[
+              { value: "A", label: "A" },
+              { value: "B", label: "B" },
+              { value: "~", label: "~" },
+              { value: "C", label: "C" },
+            ]}
+          />
+          <p className="mt-1 text-[11px] text-ink-dim">
+            C is richest (needs GT7 v1.68+); use A for older game versions.
+          </p>
+        </div>
+        <div>
           <span className="mb-1 block text-xs text-ink-dim">Log level</span>
           <Select
             ariaLabel="Log level"
@@ -259,6 +341,35 @@ function ConnectionForm({
             className="px-2 py-1.5 text-xs"
           />
         </div>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs text-ink-dim" htmlFor="admin-token-field">
+          Admin token — only needed if the server sets GT7_ADMIN_TOKEN
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="admin-token-field"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="empty = server is open"
+            className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm placeholder:text-ink-dim/60 focus:border-accent focus:outline-none"
+          />
+          <button
+            className="btn shrink-0"
+            disabled={busy !== null || token === getAdminToken()}
+            onClick={() => {
+              setAdminToken(token.trim());
+              window.location.reload();
+            }}
+          >
+            Save
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-ink-dim">
+          Stored in this browser only; sent as X-API-Key. Live/overlay pages never need it.
+        </p>
       </div>
     </div>
   );
@@ -280,48 +391,83 @@ function WebhookForm({
   const [url, setUrl] = useState(settings.webhook_url);
   useEffect(() => setUrl(settings.webhook_url), [settings.webhook_url]);
 
+  function toggleEvent(ev: WebhookEvent, on: boolean) {
+    const next = WEBHOOK_EVENTS.map((e) => e.value).filter((e) =>
+      e === ev ? on : settings.webhook_events.includes(e),
+    );
+    onApply({ webhook_events: next }, "Notification events");
+  }
+
   return (
-    <div className="space-y-2 p-4">
-      <label className="block text-xs text-ink-dim" htmlFor="webhook-url">
-        Webhook URL — notified on new personal bests and session summaries
-      </label>
-      <div className="flex gap-2">
-        <input
-          id="webhook-url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://discord.com/api/webhooks/… (or any HTTP endpoint)"
-          className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm placeholder:text-ink-dim/60 focus:border-accent focus:outline-none"
-        />
-        <button
-          className="btn shrink-0"
-          disabled={busy !== null || url === settings.webhook_url}
-          onClick={() => onApply({ webhook_url: url }, "Webhook")}
-        >
-          Apply
-        </button>
-        <button
-          className="btn shrink-0"
-          disabled={busy !== null || !settings.webhook_url}
-          onClick={async () => {
-            setBusy("test-webhook");
-            try {
-              await api.admin.testWebhook();
-              flash("Test notification sent");
-            } catch (e) {
-              flash(e instanceof Error ? e.message : "Webhook test failed", true);
-            } finally {
-              setBusy(null);
-            }
-          }}
-        >
-          Test
-        </button>
+    <div className="space-y-3 p-4">
+      <div>
+        <label className="mb-1 block text-xs text-ink-dim" htmlFor="webhook-url">
+          Webhook URL — where notifications are sent
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="webhook-url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://discord.com/api/webhooks/… (or any HTTP endpoint)"
+            className="w-full rounded-md border border-edge bg-panel-2 px-3 py-1.5 font-tabular text-sm placeholder:text-ink-dim/60 focus:border-accent focus:outline-none"
+          />
+          <button
+            className="btn shrink-0"
+            disabled={busy !== null || url === settings.webhook_url}
+            onClick={() => onApply({ webhook_url: url }, "Webhook")}
+          >
+            Apply
+          </button>
+          <button
+            className="btn shrink-0"
+            disabled={busy !== null || !settings.webhook_url}
+            onClick={async () => {
+              setBusy("test-webhook");
+              try {
+                await api.admin.testWebhook();
+                flash("Test notification sent");
+              } catch (e) {
+                flash(e instanceof Error ? e.message : "Webhook test failed", true);
+              } finally {
+                setBusy(null);
+              }
+            }}
+          >
+            Test
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-ink-dim">
+          Discord webhook URLs get a rich embed; any other URL receives plain JSON. Leave
+          empty to disable all notifications.
+        </p>
       </div>
-      <p className="text-[11px] text-ink-dim">
-        Discord webhook URLs get a rich embed; any other URL receives plain JSON. Leave empty
-        to disable.
-      </p>
+
+      <div>
+        <span className="mb-1 block text-xs text-ink-dim">Notify me when…</span>
+        <div className="space-y-1">
+          {WEBHOOK_EVENTS.map((ev) => (
+            <label
+              key={ev.value}
+              className="flex cursor-pointer items-baseline gap-2 text-sm"
+            >
+              <input
+                type="checkbox"
+                className="translate-y-px accent-sky-400"
+                checked={settings.webhook_events.includes(ev.value)}
+                disabled={busy !== null || !settings.webhook_url}
+                onChange={(e) => toggleEvent(ev.value, e.target.checked)}
+              />
+              <span>{ev.label}</span>
+              <span className="text-[11px] text-ink-dim">— {ev.hint}</span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-1.5 text-[11px] text-ink-dim">
+          Overtake / position events only fire in races where GT7 reports live positions;
+          changes must hold for ~1 s so side-by-side battles don't spam.
+        </p>
+      </div>
     </div>
   );
 }
@@ -394,11 +540,26 @@ function LogViewer() {
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl bg-panel">
-      <div className="border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-ink-dim">
-        {title}
+      <div className="flex items-baseline gap-2 border-b border-edge px-3 py-2">
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-ink-dim">
+          {title}
+        </span>
+        {subtitle && (
+          <span className="text-[11px] normal-case tracking-normal text-ink-dim/80">
+            {subtitle}
+          </span>
+        )}
       </div>
       {children}
     </div>

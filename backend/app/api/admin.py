@@ -7,17 +7,22 @@ import time
 from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app import logbuffer
+from app.api.auth import require_admin
+from app.notify import ALL_EVENTS
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/admin")
+# The whole router is token-gated (when a token is configured): even the
+# GETs leak secrets — /settings returns the webhook URL, which for Discord
+# is itself a write credential; /stats and /logs expose LAN details.
+router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
 
 CARS_URL = "https://raw.githubusercontent.com/ddm999/gt7info/web-new/_data/db/cars.csv"
 
@@ -41,6 +46,8 @@ async def get_settings(request: Request) -> dict[str, Any]:
         "heartbeat_port": s.heartbeat_port,
         "telemetry_port": s.telemetry_port,
         "webhook_url": s.webhook_url,
+        "webhook_events": [e for e in ALL_EVENTS if e in s.enabled_webhook_events()],
+        "packet_format": s.packet_format,
     }
 
 
@@ -49,6 +56,11 @@ class SettingsPayload(BaseModel):
     source: Literal["udp", "sim"] | None = None
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None
     webhook_url: str | None = Field(default=None, max_length=500)
+    webhook_events: (
+        list[Literal["personal_best", "session_summary", "overtake", "position_lost", "off_road"]]
+        | None
+    ) = None
+    packet_format: Literal["A", "B", "~", "C"] | None = None
 
 
 @router.put("/settings")
@@ -67,6 +79,14 @@ async def put_settings(request: Request, payload: SettingsPayload) -> dict[str, 
         logging.getLogger().setLevel(payload.log_level)
         await service.repo.set_setting("log_level", payload.log_level)
         log.info("log level set to %s", payload.log_level)
+    if (
+        payload.packet_format is not None
+        and payload.packet_format != service.settings.packet_format
+    ):
+        # The listener reads this on every heartbeat, so it applies live.
+        service.settings.packet_format = payload.packet_format
+        await service.repo.set_setting("packet_format", payload.packet_format)
+        log.info("packet format set to %s", payload.packet_format)
     if payload.webhook_url is not None:
         url = payload.webhook_url.strip()
         if url and not url.startswith(("http://", "https://")):
@@ -75,6 +95,12 @@ async def put_settings(request: Request, payload: SettingsPayload) -> dict[str, 
         service.notifier.url = url
         await service.repo.set_setting("webhook_url", url)
         log.info("webhook %s", "configured" if url else "disabled")
+    if payload.webhook_events is not None:
+        spec = ",".join(dict.fromkeys(payload.webhook_events))  # dedupe, keep order
+        service.settings.webhook_events = spec
+        service.notifier.enabled = service.settings.enabled_webhook_events()
+        await service.repo.set_setting("webhook_events", spec)
+        log.info("webhook events: %s", spec or "none")
     return await get_settings(request)
 
 

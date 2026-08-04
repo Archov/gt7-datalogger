@@ -19,6 +19,11 @@ if [[ ! -d node_modules ]]; then
   npm install --no-fund --no-audit
 fi
 
+# Refresh the built frontend so :8000 serves current code, not a stale dist
+# (dist/ is gitignored and only updated by this build).
+echo "building frontend..."
+npm --prefix frontend run build
+
 echo
 echo "  backend  → http://localhost:8000  (API + built frontend)"
 echo "  frontend → http://localhost:5173  (hot reload — use this one)"

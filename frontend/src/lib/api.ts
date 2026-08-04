@@ -12,19 +12,51 @@ import type {
   Track,
 } from "./types";
 
+// Admin token (only needed when the server sets GT7_ADMIN_TOKEN). Stored per
+// device; sent on every request — open endpoints simply ignore it.
+const TOKEN_KEY = "gt7.adminToken";
+
+export function getAdminToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export function setAdminToken(token: string): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const t = getAdminToken();
+  return t ? { "X-API-Key": t } : {};
+}
+
+async function fail(url: string, resp: Response): Promise<never> {
+  if (resp.status === 401 || resp.status === 403) {
+    throw new Error(
+      resp.status === 401
+        ? "admin token required — set it in Admin → Connection"
+        : "admin token rejected — check it in Admin → Connection",
+    );
+  }
+  throw new Error(`${url}: ${resp.status} ${await resp.text()}`);
+}
+
 async function get<T>(url: string): Promise<T> {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`${url}: ${resp.status} ${await resp.text()}`);
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (!resp.ok) await fail(url, resp);
   return resp.json() as Promise<T>;
 }
 
 async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
   const resp = await fetch(url, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: {
+      ...authHeaders(),
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!resp.ok) throw new Error(`${url}: ${resp.status} ${await resp.text()}`);
+  if (!resp.ok) await fail(url, resp);
   return resp.json() as Promise<T>;
 }
 
@@ -71,7 +103,12 @@ export const api = {
   admin: {
     settings: () => get<AdminSettings>("/api/admin/settings"),
     updateSettings: (
-      patch: Partial<Pick<AdminSettings, "ps_ip" | "source" | "log_level" | "webhook_url">>,
+      patch: Partial<
+        Pick<
+          AdminSettings,
+          "ps_ip" | "source" | "log_level" | "webhook_url" | "webhook_events" | "packet_format"
+        >
+      >,
     ) => send<AdminSettings>("/api/admin/settings", "PUT", patch),
     testWebhook: () => send<{ status: string }>("/api/admin/test-webhook", "POST"),
     logs: (limit = 300, level?: string) =>

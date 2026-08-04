@@ -114,6 +114,24 @@ class TelemetryPacket:
 
     car_id: int
 
+    # --- Extended formats (None when the console sends plain packet A) ------
+    # Packet B (heartbeat "B") and up:
+    wheel_rotation: float | None = None  # steering wheel angle, radians
+    sway: float | None = None  # lateral acceleration
+    heave: float | None = None  # vertical acceleration
+    surge: float | None = None  # longitudinal acceleration
+    # Packet "~" and up:
+    throttle_filtered: int | None = None  # 0..255, after assists
+    brake_filtered: int | None = None  # 0..255, after assists
+    torque_vectors: tuple[float, ...] | None = None  # per wheel; + drive, - brake/regen
+    energy_recovery: float | None = None
+    # Packet C only:
+    surface_types: str | None = None  # per wheel FL FR RL RR: T/C/D/G/S/s
+    lap_time_ms: int | None = None  # live current-lap timer
+    wheel_steering_rad: tuple[float, float] | None = None  # front wheels, left/right
+    wheelbase_m: float | None = None
+    car_category: str | None = None  # e.g. "Gr3", "Gr4"
+
     @property
     def speed_kmh(self) -> float:
         return self.speed_mps * 3.6

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import math
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.api.auth import require_admin
 from app.processing import analysis
 from app.processing.laps import SAMPLE_COLUMNS
 from app.processing.tracks import signature_from_samples
@@ -42,7 +46,7 @@ async def sessions(request: Request) -> list[dict[str, Any]]:
     return await svc(request).repo.list_sessions()
 
 
-@router.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}", dependencies=[Depends(require_admin)])
 async def delete_session(request: Request, session_id: int) -> dict[str, str]:
     await svc(request).repo.delete_session(session_id)
     return {"status": "deleted"}
@@ -79,7 +83,7 @@ async def lap_detail(
     return lap
 
 
-@router.delete("/laps/{lap_id}")
+@router.delete("/laps/{lap_id}", dependencies=[Depends(require_admin)])
 async def delete_lap(request: Request, lap_id: int) -> dict[str, str]:
     await svc(request).repo.delete_lap(lap_id)
     return {"status": "deleted"}
@@ -125,9 +129,18 @@ CSV_CHANNELS = (
 )
 
 
+def _csv_text(value: str) -> str:
+    """Neutralize spreadsheet formula injection in text cells."""
+    return f"'{value}" if value[:1] in ("=", "+", "-", "@") else value
+
+
 @router.get("/laps/{lap_id}/export.csv")
 async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
-    """MoTeC-compatible CSV export (i2 'CSV file' import, Excel, etc.)."""
+    """MoTeC-compatible CSV export (i2 'CSV file' import, Excel, etc.).
+
+    The "Sample Rate" header is nominal — the `t` column is authoritative
+    (it integrates packet-id deltas, so dropped frames widen its steps).
+    """
     lap = await svc(request).repo.get_lap(lap_id, with_samples=True)
     if lap is None:
         raise HTTPException(404, "lap not found")
@@ -137,28 +150,28 @@ async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
     duration = f"{time_ms // 60000}:{(time_ms % 60000) / 1000:06.3f}"
     car = svc(request).cars.name(lap["car_id"])
 
-    lines = [
-        '"Format","MoTeC CSV File"',
-        '"Device","GT7 Datalogger"',
-        f'"Vehicle","{car}"',
-        f'"Comment","Lap {lap["number"]} - {duration}"',
-        f'"Log Date","{lap.get("finished_at", "")}"',
-        '"Sample Rate","60.000"',
-        "",
-        ",".join(f'"{name}"' for _, name, _ in cols),
-        ",".join(f'"{unit}"' for _, _, unit in cols),
-    ]
+    buf = io.StringIO()
+    meta = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
+    data = csv.writer(buf, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    meta.writerow(["Format", "MoTeC CSV File"])
+    meta.writerow(["Device", "GT7 Datalogger"])
+    meta.writerow(["Vehicle", _csv_text(car)])
+    meta.writerow(["Comment", _csv_text(f"Lap {lap['number']} - {duration}")])
+    meta.writerow(["Log Date", _csv_text(str(lap.get("finished_at", "")))])
+    meta.writerow(["Sample Rate", "60.000"])
+    buf.write("\n")  # blank separator line between metadata and channels
+    meta.writerow([name for _, name, _ in cols])
+    meta.writerow([unit for _, _, unit in cols])
     n = len(samples["t"])
     for i in range(n):
-        lines.append(
-            ",".join(
-                str(samples[key][i]) if i < len(samples[key]) else ""
-                for key, _, _ in cols
-            )
+        # Guard against ragged legacy rows; values are numeric so
+        # QUOTE_MINIMAL leaves them unquoted.
+        data.writerow(
+            [samples[key][i] if i < len(samples[key]) else "" for key, _, _ in cols]
         )
 
     return PlainTextResponse(
-        "\n".join(lines) + "\n",
+        buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="gt7-lap-{lap_id}.csv"'},
     )
@@ -177,7 +190,7 @@ class TrackPayload(BaseModel):
     lap_id: int
 
 
-@router.post("/tracks")
+@router.post("/tracks", dependencies=[Depends(require_admin)])
 async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any]:
     """Name the circuit a lap was driven on; future sessions auto-match it."""
     service = svc(request)
@@ -195,7 +208,7 @@ async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any
     return {"id": track_id, "name": name}
 
 
-@router.delete("/tracks/{track_id}")
+@router.delete("/tracks/{track_id}", dependencies=[Depends(require_admin)])
 async def delete_track(request: Request, track_id: int) -> dict[str, str]:
     await svc(request).repo.delete_track(track_id)
     return {"status": "deleted"}
@@ -207,19 +220,79 @@ class ImportPayload(BaseModel):
     lap: dict[str, Any]
 
 
-@router.post("/laps/import")
+# Columns every consumer indexes unconditionally (metrics, event detection,
+# distance resampling, peak/valley detection). Everything else in
+# SAMPLE_COLUMNS is optional and degrades gracefully via .get.
+REQUIRED_IMPORT_COLUMNS = frozenset(
+    {"t", "dist", "speed", "throttle", "brake", "coast", "tire_slip",
+     "body_height", "pos_x", "pos_z"}
+)
+# ~33 min at 60 Hz — roughly twice the slowest plausible GT7 lap; also caps
+# the samples_json blob at a size SQLite handles comfortably.
+MAX_IMPORT_SAMPLES = 120_000
+
+
+class LapImportModel(BaseModel):
+    """Validated shape of an exported lap file's `lap` object."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    number: int = Field(ge=0)
+    time_ms: int = Field(gt=0)
+    finished_at: str = ""
+    car_id: int = 0
+    fuel_start: float = 0.0
+    fuel_end: float = 0.0
+    max_water_temp: float = 0.0
+    max_oil_temp: float = 0.0
+    min_oil_pressure: float = -1.0
+    gearing: dict[str, Any] | None = None
+    samples: dict[str, list[float]]
+
+
+def _validate_import_samples(samples: dict[str, list[float]]) -> dict[str, list[float]]:
+    samples = {k: v for k, v in samples.items() if k in SAMPLE_COLUMNS}
+    missing = REQUIRED_IMPORT_COLUMNS - samples.keys()
+    if missing:
+        raise ValueError(f"missing sample columns: {', '.join(sorted(missing))}")
+    lengths = {len(v) for v in samples.values()}
+    if len(lengths) > 1:
+        raise ValueError("sample columns have unequal lengths")
+    n = lengths.pop()
+    if not 0 < n <= MAX_IMPORT_SAMPLES:
+        raise ValueError(f"sample count must be 1..{MAX_IMPORT_SAMPLES}, got {n}")
+    # json.loads happily parses NaN/Infinity literals; they poison metrics
+    # and can't be re-serialized as strict JSON.
+    if any(not math.isfinite(v) for col in samples.values() for v in col):
+        raise ValueError("samples contain non-finite values")
+    return samples
+
+
+@router.post("/laps/import", dependencies=[Depends(require_admin)])
 async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]:
     service = svc(request)
+    if payload.format != "gt7-datalogger-lap":
+        raise HTTPException(400, "unrecognized lap export format")
+    try:
+        lap = LapImportModel.model_validate(payload.lap)
+        lap.samples = _validate_import_samples(lap.samples)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(400, f"invalid lap file: {exc}") from exc
+
+    # Create the fallback session only after validation, so a rejected file
+    # doesn't leak an empty "imported" session.
     if service.session_id is None:
         from app.processing.laps import SessionInfo
 
-        info = SessionInfo(car_id=payload.lap.get("car_id", 0), started_at="imported")
+        info = SessionInfo(car_id=lap.car_id, started_at="imported")
         service.session_id = await service.repo.create_session(
             info, service.cars.name(info.car_id)
         )
+    clean = payload.model_dump()
+    clean["lap"] = lap.model_dump()
     try:
-        lap_id = await service.repo.import_lap(payload.model_dump(), service.session_id)
-    except (ValueError, KeyError) as exc:
+        lap_id = await service.repo.import_lap(clean, service.session_id)
+    except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(400, f"invalid lap file: {exc}") from exc
     return {"id": lap_id}
 
@@ -331,13 +404,13 @@ class RecordingPayload(BaseModel):
     recording: bool
 
 
-@router.post("/control/recording")
+@router.post("/control/recording", dependencies=[Depends(require_admin)])
 async def set_recording(request: Request, payload: RecordingPayload) -> dict[str, Any]:
     svc(request).recording = payload.recording
     return await svc(request).status()
 
 
-@router.post("/control/log-lap-now")
+@router.post("/control/log-lap-now", dependencies=[Depends(require_admin)])
 async def log_lap_now(request: Request) -> dict[str, Any]:
     result = await svc(request).log_lap_now()
     if result is None:

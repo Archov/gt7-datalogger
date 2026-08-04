@@ -48,6 +48,8 @@ export interface ConnectionStatus {
   console_ip: string;
   packets_received: number;
   decode_errors: number;
+  packet_format?: string;
+  frames_dropped?: number; // console frames lost in transit (packet-id gaps)
 }
 
 export interface LapSummary {
@@ -169,7 +171,16 @@ export interface AdminSettings {
   heartbeat_port: number;
   telemetry_port: number;
   webhook_url: string;
+  webhook_events: WebhookEvent[];
+  packet_format: "A" | "B" | "~" | "C";
 }
+
+export type WebhookEvent =
+  | "personal_best"
+  | "session_summary"
+  | "overtake"
+  | "position_lost"
+  | "off_road";
 
 export interface LogRecord {
   ts: string;

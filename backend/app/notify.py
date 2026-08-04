@@ -1,4 +1,4 @@
-"""Outbound webhook notifications (personal bests, session summaries).
+"""Outbound webhook notifications (personal bests, race events, summaries).
 
 Discord webhook URLs get a rich embed; any other URL receives plain JSON with
 an `event` field, so generic automations (n8n, Home Assistant, ...) work too.
@@ -14,23 +14,49 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+# Every webhook event type, in display order. Kept in sync with the Admin UI
+# toggle list (frontend AdminView) and the docs.
+ALL_EVENTS = (
+    "personal_best",
+    "session_summary",
+    "overtake",
+    "position_lost",
+    "off_road",
+)
+
+
+def parse_events(spec: str) -> set[str]:
+    """Parse a comma-separated event list, dropping unknown names."""
+    return {e.strip() for e in spec.split(",") if e.strip() in ALL_EVENTS}
+
 
 def format_lap_time(ms: int) -> str:
     return f"{ms // 60000}:{(ms % 60000) // 1000:02d}.{ms % 1000:03d}"
 
 
 class Notifier:
-    """Sends webhook events fire-and-forget; failures only log."""
+    """Sends webhook events fire-and-forget; failures only log.
+
+    Only events in `enabled` are sent (the admin "test" event always goes
+    through so the Test button works regardless of toggles).
+
+    Trust model: the webhook URL is admin-configured and deliberately may
+    point at LAN services (Home Assistant, n8n) — private ranges are NOT
+    blocked. The guard against untrusted configuration is the admin token
+    (GT7_ADMIN_TOKEN), not network filtering, and redirects are never
+    followed so a response can't re-aim the request.
+    """
 
     def __init__(self) -> None:
         self.url: str = ""
+        self.enabled: set[str] = set(ALL_EVENTS)
 
     @property
     def _is_discord(self) -> bool:
         return "discord.com/api/webhooks" in self.url or "discordapp.com/api/webhooks" in self.url
 
     def notify(self, event: str, title: str, fields: list[tuple[str, str]]) -> None:
-        if not self.url:
+        if not self.url or (event in ALL_EVENTS and event not in self.enabled):
             return
         asyncio.get_running_loop().create_task(self._send(event, title, fields))
 
@@ -63,7 +89,9 @@ class Notifier:
             extra = {k.lower().replace(" ", "_"): v for k, v in fields}
             payload = {"event": event, "title": title, **extra}
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            # follow_redirects pinned off: a redirecting response must not
+            # re-aim the webhook POST at a URL the admin never configured.
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
                 resp = await client.post(self.url, json=payload)
                 resp.raise_for_status()
             log.info("webhook sent: %s", event)
@@ -84,6 +112,39 @@ class Notifier:
             [
                 ("Lap", str(lap_number)),
                 ("Improvement", f"-{gain:.3f}s"),
+                ("Car", car),
+                ("Track", track or "unknown"),
+            ],
+        )
+
+    def overtake(self, new_pos: int, old_pos: int, total: int, car: str, track: str) -> None:
+        self.notify(
+            "overtake",
+            f"🟢 Overtake! P{old_pos} → P{new_pos}",
+            [
+                ("Position", f"P{new_pos} of {total}"),
+                ("Car", car),
+                ("Track", track or "unknown"),
+            ],
+        )
+
+    def position_lost(self, new_pos: int, old_pos: int, total: int, car: str, track: str) -> None:
+        self.notify(
+            "position_lost",
+            f"🔻 Position lost: P{old_pos} → P{new_pos}",
+            [
+                ("Position", f"P{new_pos} of {total}"),
+                ("Car", car),
+                ("Track", track or "unknown"),
+            ],
+        )
+
+    def off_road(self, lap: int, car: str, track: str) -> None:
+        self.notify(
+            "off_road",
+            "🌿 Off-road excursion",
+            [
+                ("Lap", str(lap) if lap > 0 else "–"),
                 ("Car", car),
                 ("Track", track or "unknown"),
             ],
