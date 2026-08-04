@@ -39,6 +39,12 @@ class Notifier:
 
     Only events in `enabled` are sent (the admin "test" event always goes
     through so the Test button works regardless of toggles).
+
+    Trust model: the webhook URL is admin-configured and deliberately may
+    point at LAN services (Home Assistant, n8n) — private ranges are NOT
+    blocked. The guard against untrusted configuration is the admin token
+    (GT7_ADMIN_TOKEN), not network filtering, and redirects are never
+    followed so a response can't re-aim the request.
     """
 
     def __init__(self) -> None:
@@ -83,7 +89,9 @@ class Notifier:
             extra = {k.lower().replace(" ", "_"): v for k, v in fields}
             payload = {"event": event, "title": title, **extra}
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            # follow_redirects pinned off: a redirecting response must not
+            # re-aim the webhook POST at a URL the admin never configured.
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
                 resp = await client.post(self.url, json=payload)
                 resp.raise_for_status()
             log.info("webhook sent: %s", event)
