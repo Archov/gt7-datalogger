@@ -19,4 +19,4 @@ async def live(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        service.unregister(ws)
+        await service.unregister(ws)

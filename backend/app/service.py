@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +25,23 @@ from app.telemetry.listener import UdpTelemetrySource
 from app.telemetry.simulator import SimTelemetrySource
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ClientStream:
+    """Per-client outbound state: a slow reader must never stall capture.
+
+    Two lanes: telemetry frames land in a 1-slot latest-wins mailbox (missing
+    intermediate frames is fine — each is a full state snapshot), while
+    lap/session/status events queue up and are never dropped. A client whose
+    event queue overflows has been unreadable for minutes and is disconnected.
+    """
+
+    ws: WebSocket
+    events: asyncio.Queue[str] = field(default_factory=lambda: asyncio.Queue(maxsize=256))
+    frame: str | None = None
+    wakeup: asyncio.Event = field(default_factory=asyncio.Event)
+    task: asyncio.Task[None] | None = None
 
 
 def _count_events(events: list[dict[str, Any]]) -> dict[str, int]:
@@ -60,7 +79,7 @@ class TelemetryService:
         # live delta. Safe to hold by reference: the processor allocates a
         # fresh sample store at every lap boundary.
         self._best_ref: Samples | None = None
-        self._clients: set[WebSocket] = set()
+        self._clients: dict[WebSocket, _ClientStream] = {}
         self._last_ws_send = 0.0
         self._ws_interval = 1.0 / settings.ws_rate
 
@@ -69,6 +88,11 @@ class TelemetryService:
 
     async def stop(self) -> None:
         await self.source.stop()
+        tasks = [c.task for c in self._clients.values() if c.task]
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._clients.clear()
 
     async def switch_source(self, kind: str) -> None:
         """Swap between the UDP and simulated source at runtime."""
@@ -80,14 +104,14 @@ class TelemetryService:
             self.source = UdpTelemetrySource(self.settings, self._on_packet)
         await self.source.start()
         log.info("telemetry source switched to %s", kind)
-        await self._broadcast({"type": "status", "data": await self.status()})
+        self._publish({"type": "status", "data": await self.status()})
 
     async def set_ps_ip(self, ip: str) -> None:
         self.settings.ps_ip = ip
         if isinstance(self.source, UdpTelemetrySource):
             self.source.reset_discovery()
         log.info("console IP set to %s", ip or "<auto-discover>")
-        await self._broadcast({"type": "status", "data": await self.status()})
+        self._publish({"type": "status", "data": await self.status()})
 
     async def restart_source(self) -> None:
         await self.switch_source(self.settings.source)
@@ -103,7 +127,7 @@ class TelemetryService:
         now = time.monotonic()
         if now - self._last_ws_send >= self._ws_interval:
             self._last_ws_send = now
-            await self._broadcast({"type": "telemetry", "data": self._live_frame(p)})
+            self._publish({"type": "telemetry", "data": self._live_frame(p)})
 
     def _notify_live_event(self, event: LiveEvent, p: TelemetryPacket) -> None:
         car = self.cars.name(p.car_id)
@@ -129,7 +153,7 @@ class TelemetryService:
         self._prev_best_ms = None
         self._best_ref = None
         log.info("new session %s (car %s)", self.session_id, self.cars.name(info.car_id))
-        await self._broadcast({"type": "session", "data": await self.status()})
+        self._publish({"type": "session", "data": await self.status()})
 
     async def _close_previous_session(self) -> None:
         """Summarize a finished session, or drop it if it never got a lap.
@@ -198,7 +222,7 @@ class TelemetryService:
             "asm_active_pct": round(lap.asm_active_pct, 1),
             "event_counts": _count_events(lap.events),
         }
-        await self._broadcast({"type": "lap", "data": summary})
+        self._publish({"type": "lap", "data": summary})
 
     async def _identify_track(self, lap: CompletedLap) -> None:
         sig = signature_from_samples(lap.samples)
@@ -209,7 +233,7 @@ class TelemetryService:
             self.track_name = name
             await self.repo.set_session_track(self.session_id, name)
             log.info("track identified: %s", name)
-            await self._broadcast({"type": "session", "data": await self.status()})
+            self._publish({"type": "session", "data": await self.status()})
 
     async def name_current_track(self, name: str, lap_samples: dict[str, list[float]]) -> None:
         """Save the current circuit under a name and tag the session with it."""
@@ -221,7 +245,7 @@ class TelemetryService:
         if self.session_id is not None:
             await self.repo.set_session_track(self.session_id, name)
         log.info("track saved: %s (%.0f m)", name, sig.length_m)
-        await self._broadcast({"type": "session", "data": await self.status()})
+        self._publish({"type": "session", "data": await self.status()})
 
     # --- live stream --------------------------------------------------------
 
@@ -289,24 +313,66 @@ class TelemetryService:
         return len(self._clients)
 
     async def register(self, ws: WebSocket) -> None:
-        self._clients.add(ws)
-        await ws.send_text(json.dumps({"type": "status", "data": await self.status()}))
+        client = _ClientStream(ws=ws)
+        self._clients[ws] = client
+        # Start the sender before enqueueing so the initial status can't be
+        # orphaned in a task-less queue.
+        client.task = asyncio.create_task(self._client_sender(client))
+        client.events.put_nowait(json.dumps({"type": "status", "data": await self.status()}))
+        client.wakeup.set()
 
-    def unregister(self, ws: WebSocket) -> None:
-        self._clients.discard(ws)
+    async def unregister(self, ws: WebSocket) -> None:
+        client = self._clients.pop(ws, None)
+        if client and client.task:
+            client.task.cancel()
+            await asyncio.gather(client.task, return_exceptions=True)
 
-    async def _broadcast(self, message: dict[str, Any]) -> None:
+    def _publish(self, message: dict[str, Any]) -> None:
+        """Queue a message for every client without awaiting any client I/O.
+
+        The capture pipeline calls this at 60 Hz; a browser that stops reading
+        only loses its own telemetry frames (latest wins) — it can never
+        backpressure lap detection or the other clients.
+        """
         if not self._clients:
             return
         text = json.dumps(message)
-        dead: list[WebSocket] = []
-        for ws in self._clients:
-            try:
-                await ws.send_text(text)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self._clients.discard(ws)
+        droppable = message["type"] == "telemetry"
+        for client in list(self._clients.values()):
+            if droppable:
+                client.frame = text
+            else:
+                try:
+                    client.events.put_nowait(text)
+                except asyncio.QueueFull:
+                    # Unreadable for minutes — disconnect rather than lose
+                    # a lap/session event silently.
+                    self._drop_client(client)
+                    continue
+            client.wakeup.set()
+
+    def _drop_client(self, client: _ClientStream) -> None:
+        self._clients.pop(client.ws, None)
+        if client.task:
+            client.task.cancel()
+
+    async def _client_sender(self, client: _ClientStream) -> None:
+        """Drain one client's lanes; events always go out before frames."""
+        try:
+            while True:
+                await client.wakeup.wait()
+                client.wakeup.clear()
+                while not client.events.empty():
+                    await client.ws.send_text(client.events.get_nowait())
+                if client.frame is not None:
+                    frame, client.frame = client.frame, None
+                    await client.ws.send_text(frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Send failed — the WS endpoint's finally-unregister cleans up;
+            # also remove eagerly in case the receive side is still alive.
+            self._clients.pop(client.ws, None)
 
     # --- controls -----------------------------------------------------------
 
