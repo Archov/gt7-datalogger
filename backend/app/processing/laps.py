@@ -23,6 +23,13 @@ MIN_LAP_TICKS = 600
 # reset, long outage) — extrapolating a minute of distance at current speed
 # would corrupt the lap worse than under-counting one frame does.
 MAX_FRAME_GAP = 60
+# Partial-lap guard: an out-lap from the pits covers only part of the track
+# (and its distance axis starts at the pit exit, not the line), so it must
+# never become the session best or the live-delta reference. A lap "counts"
+# only when its distance span is within this fraction of the longest counted
+# lap; a lap longer than the counted span by the inverse margin proves the
+# earlier "best" was partial and invalidates it.
+FULL_LAP_SPAN_RATIO = 0.85
 
 # Columnar per-tick series kept for each lap. Column order matters for the
 # frontend; keep in sync with frontend/src/lib/types.ts.
@@ -83,6 +90,10 @@ class CompletedLap:
     # Static per lap: {"ratios": [...], "top_speed": float, "rpm_alert": float}
     gearing: dict[str, object] | None = None
     events: list[dict[str, object]] = field(default_factory=list)
+    # Partial-lap flags (see FULL_LAP_SPAN_RATIO): whether this lap may set
+    # the session best, and whether it proved the previous best was partial.
+    counts_for_best: bool = True
+    invalidated_best: bool = False
 
     def compute_metrics(self) -> None:
         # Imported laps from older export versions may lack the newer columns;
@@ -149,6 +160,7 @@ class LapProcessor:
     _last_pid: int = -1
     _pending_dt: int = 1  # frames covered by the next sample (1 = no drops)
     _dropped_frames: int = 0
+    _best_span: float = 0.0  # distance span of the longest counted lap
     _fuel_start: float = 0.0
     _last_packet: TelemetryPacket | None = None
     # Engine-health aggregates for the lap in progress (not per-tick columns)
@@ -196,6 +208,7 @@ class LapProcessor:
                 started_at=datetime.now(UTC).isoformat(),
             )
             self._current_lap = -1
+            self._best_span = 0.0
             await self.on_session(self._session)
 
         if p.current_lap != self._current_lap:
@@ -254,8 +267,25 @@ class LapProcessor:
             lap.compute_metrics()
             assert self._session is not None
             self._session.lap_count += 1
-            if self._session.best_lap_time_ms < 0 or lap.time_ms < self._session.best_lap_time_ms:
-                self._session.best_lap_time_ms = lap.time_ms
+
+            # Partial-lap guard: only laps spanning (roughly) the full track
+            # may set the session best; a clearly longer lap proves earlier
+            # "bests" were partial out-laps and voids them.
+            span = finished_samples["dist"][-1] if finished_samples["dist"] else 0.0
+            if self._best_span > 0 and span * FULL_LAP_SPAN_RATIO > self._best_span:
+                lap.invalidated_best = True
+                self._session.best_lap_time_ms = -1
+                self._best_span = 0.0
+            lap.counts_for_best = (
+                self._best_span == 0.0 or span >= self._best_span * FULL_LAP_SPAN_RATIO
+            )
+            if lap.counts_for_best:
+                self._best_span = max(self._best_span, span)
+                if (
+                    self._session.best_lap_time_ms < 0
+                    or lap.time_ms < self._session.best_lap_time_ms
+                ):
+                    self._session.best_lap_time_ms = lap.time_ms
             await self.on_lap(lap)
 
     def _append_sample(self, p: TelemetryPacket) -> None:

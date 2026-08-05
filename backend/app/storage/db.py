@@ -96,6 +96,8 @@ class LapRow(Base):
     max_water_temp: Mapped[float] = mapped_column(default=0.0)
     max_oil_temp: Mapped[float] = mapped_column(default=0.0)
     min_oil_pressure: Mapped[float] = mapped_column(default=-1.0)
+    # False for partial laps (pit out-laps): excluded from best-lap aggregates
+    counts_for_best: Mapped[bool] = mapped_column(default=True)
     events_json: Mapped[str] = mapped_column(Text, default="[]")
     gearing_json: Mapped[str] = mapped_column(Text, default="")
     samples_json: Mapped[str] = mapped_column(Text)
@@ -124,6 +126,11 @@ _SQLITE_MIGRATIONS = (
         "ALTER TABLE sessions ADD COLUMN track_name VARCHAR NOT NULL DEFAULT ''",
     ),
     ("laps", "tod_ms", "ALTER TABLE laps ADD COLUMN tod_ms INTEGER NOT NULL DEFAULT -1"),
+    (
+        "laps",
+        "counts_for_best",
+        "ALTER TABLE laps ADD COLUMN counts_for_best BOOLEAN NOT NULL DEFAULT 1",
+    ),
 ) + tuple(
     ("laps", column, f"ALTER TABLE laps ADD COLUMN {column} {ddl}")
     for column, ddl in (

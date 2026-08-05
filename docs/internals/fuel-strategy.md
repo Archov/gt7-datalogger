@@ -9,9 +9,10 @@ view).
 Computed in the browser from your most recent completed laps:
 
 ```
-recent        = last 3 completed laps that consumed > 0.01 L
-avgFuelPerLap = mean(recent.fuel_consumed)        # L
-avgLapMs      = mean(recent.time_ms)              # ms
+recent        = last 3 completed laps for the CURRENT CAR that consumed > 0.01 L
+usable        = recent minus partial-lap outliers (consumed < 50 % of the window max)
+avgFuelPerLap = mean(usable.fuel_consumed)        # L
+avgLapMs      = mean(usable.time_ms)              # ms
 
 lapsToEmpty   = current_fuel_level / avgFuelPerLap
 timeToEmpty   = lapsToEmpty × avgLapMs
@@ -22,6 +23,13 @@ Details that matter:
 
 - The window is the **last 3 laps**, so the projection adapts quickly to a fuel-map
   change or a different stint pace.
+- Laps **survive a race restart**: a restart opens a new recording session, but the
+  previous stint's laps (same car) keep feeding the projection so you have a fuel
+  estimate from the first meters — important in races with aggressive fuel
+  multipliers. Switching cars drops the old car's laps from the calculation.
+- **Partial laps are excluded**: a pit out-lap burns a fraction of a normal lap; if a
+  lap in the window consumed less than half of the window's maximum, it is dropped
+  rather than allowed to inflate the projected range.
 - Laps that consumed ≤ 0.01 L (fuel-consumption off, time trials) are excluded — until
   a lap actually burns fuel, no projection is shown at all rather than a misleading one.
 - **Warning colors**: the laps-to-empty readout turns amber below **4 laps** and red

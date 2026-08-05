@@ -98,6 +98,16 @@ just-completed lap (`prev_best_ms`). The live "Δ best" readout compares against
 The `personal_best` webhook fires only when an existing session best is actually beaten —
 never on the first lap of a session.
 
+**Partial-lap guard.** A pit out-lap can pass the structural checks (GT7 reports a
+time for it, and it lasts more than 10 s) while covering only part of the track —
+with a distance axis anchored at the pit exit, not the line. Such a lap must never
+become the session best or the live-delta reference: comparing positions against it
+produces garbage deltas that then freeze into a bogus end-of-lap fallback. So a lap
+only *counts for best* when its distance span is within **85 %** of the longest
+counted lap of the session, and when a clearly longer lap arrives it **invalidates**
+an earlier partial "best" (the first full lap takes over even if slower). The guard
+is span-relative, so it needs no knowledge of the track's true length.
+
 ## What "invalid lap" means here
 
 There is no track-limits detection (GT7 doesn't expose it). Laps are excluded only by
