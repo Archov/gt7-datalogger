@@ -5,6 +5,8 @@ Notable changes to GT7 Datalogger. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-05
+
 ### Added
 
 - **Auto-numbered corners on the track map**: corners are detected from the
@@ -24,13 +26,15 @@ Notable changes to GT7 Datalogger. The format follows
   delta then glitched for the first fraction of the next lap and froze on a bogus
   ~lap-sized fallback value. Laps now only count for best when their distance span
   matches the session's longest lap (85 %), and a full lap invalidates a partial
-  "best" retroactively.
+  "best" retroactively — including the already-saved rows (`counts_for_best`
+  column, migrated automatically), so the Sessions list and session-summary
+  webhook agree with the live view.
 - **Fuel projection survives race restarts**: recent laps are filtered by car
-  (not recording session), so a restart keeps the previous stint's consumption
-  data — you get a range estimate from the first meters instead of after a full
-  lap, which matters in races with aggressive fuel multipliers. Partial-lap
-  outliers (a lap consuming < 50 % of the window max, i.e. pit out-laps) are
-  excluded from the average.
+  (`car_id` first, name fallback — not recording session), so a restart keeps the
+  previous stint's consumption data — you get a range estimate from the first
+  meters instead of after a full lap, which matters in races with aggressive fuel
+  multipliers. Partial-lap outliers (a lap consuming < 50 % of the window max,
+  i.e. pit out-laps) are excluded from the average.
 
 ## [0.3.0] - 2026-08-04
 

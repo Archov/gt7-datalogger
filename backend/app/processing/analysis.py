@@ -160,9 +160,22 @@ def speed_peaks_valleys(
 # road-noise floor and bleeds adjacent corners together.
 CORNER_STEP_M = 2.0  # uniform resample grid for curvature
 CORNER_HALF_WIN_M = 16.0  # heading measured over ±this many meters
-CORNER_K_HI = 0.0030  # rad/m — |curvature| to enter a corner (~330 m radius)
-CORNER_K_LO = 0.0022  # rad/m — |curvature| to stay in one
-CORNER_END_GAP_M = 40.0  # below K_LO for this long ends the segment
+# The enter/stay thresholds adapt to each lap's own curvature noise (see
+# _thresholds). Calibrated by sweeping candidates over real road courses,
+# a banked oval, and the simulator: noisy real telemetry (jitter p85
+# ~0.0004) must run the validated 0.0030/0.0022 — anything lower flips
+# counts between laps; smooth data (jitter < 0.0001) safely drops to
+# 0.0020/0.0013, which recovers broad-radius corners without growing
+# phantoms (going lower DID grow one on the oval).
+CORNER_K_LO_MIN = 0.0013  # rad/m — floor for the stay threshold
+CORNER_K_LO_MAX = 0.0022  # rad/m — validated real-track value
+CORNER_K_HI_RATIO = 1.54  # enter = stay * ratio ...
+CORNER_K_HI_MAX = 0.0030  # ... capped at the validated real-track value
+# Stay threshold = this × the p85 curvature jitter. Measured jitter: real
+# GT7 laps 0.00029-0.00052 (×8 clamps them all to K_LO_MAX), smooth
+# sim/parametric data 0.00005-0.00008 (lands on K_LO_MIN with 2× margin).
+CORNER_NOISE_SCALE = 8.0
+CORNER_END_GAP_M = 40.0  # below the stay threshold for this long ends the segment
 CORNER_MERGE_GAP_M = 90.0  # same-direction arcs closer than this merge
 CORNER_NOISE_ANGLE_DEG = 12.0  # arcs below this are noise, dropped pre-merge
 CORNER_MIN_ANGLE_DEG = 25.0  # final significance threshold
@@ -184,6 +197,9 @@ class _Arc:
     end: int  # inclusive
     sign: int
     angle: float  # total heading change, radians (signed)
+    # Second index range of a start/finish-stitched corner (the post-line
+    # half at the beginning of the lap); None for ordinary corners.
+    wrap: tuple[int, int] | None = None
 
 
 def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
@@ -242,7 +258,8 @@ def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
         dh = _wrap_angle(math.atan2(dz1, dx1) - math.atan2(dz0, dx0))
         curv[i] = dh / (w * CORNER_STEP_M)
 
-    arcs = _segment_arcs(curv)
+    k_hi, k_lo = _thresholds(curv)
+    arcs = _segment_arcs(curv, k_hi, k_lo)
     # Noise arcs are discarded BEFORE merging so they cannot block a merge.
     arcs = [a for a in arcs if abs(math.degrees(a.angle)) >= CORNER_NOISE_ANGLE_DEG]
     arcs = _merge_arcs(arcs)
@@ -257,34 +274,57 @@ def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
     ]
 
     corners: list[dict[str, float | int | str]] = []
-    for a in sorted(arcs, key=lambda a: _apex_index(a, curv)):
-        i = _apex_index(a, curv)
+    with_apex = sorted(((a, _apex_index(a, curv)) for a in arcs), key=lambda t: t[1])
+    for a, i in with_apex:
+        # A stitched start/finish corner spans the lap boundary: its extent
+        # wraps (entry_dist > exit_dist) and min_speed covers both halves.
+        entry, exit_ = a.start, a.end
+        speeds = gs[a.start : a.end + 1]
+        if a.wrap is not None:
+            entry, exit_ = a.start, a.wrap[1]
+            speeds = speeds + gs[a.wrap[0] : a.wrap[1] + 1]
         corners.append(
             {
                 "n": len(corners) + 1,
                 "apex_dist": round(grid[i], 1),
                 "apex_x": round(gx[i], 1),
                 "apex_z": round(gz[i], 1),
-                "entry_dist": round(grid[a.start], 1),
-                "exit_dist": round(grid[a.end], 1),
+                "entry_dist": round(grid[entry], 1),
+                "exit_dist": round(grid[exit_], 1),
                 # Positive heading delta is CCW in raw x/z, but the map (and
                 # GT7's own view) renders z inverted — that's a right-hander.
                 "direction": "R" if a.sign > 0 else "L",
-                "min_speed": round(min(gs[a.start : a.end + 1]), 1),
+                "min_speed": round(min(speeds), 1),
                 "angle_deg": round(abs(math.degrees(a.angle)), 1),
             }
         )
     return corners
 
 
-def _segment_arcs(curv: list[float]) -> list[_Arc]:
+def _thresholds(curv: list[float]) -> tuple[float, float]:
+    """Hysteresis thresholds anchored to this lap's curvature noise floor.
+
+    The floor is the high end of the frame-to-frame curvature jitter — real
+    GT7 telemetry wobbles around zero on straights, smooth data barely at
+    all. The stay threshold must clear that jitter or adjacent corners bleed
+    together; but fixing it at the real-track value silently drops the
+    broad-radius corners of clean low-curvature tracks.
+    """
+    jitter = sorted(abs(curv[i] - curv[i - 1]) for i in range(1, len(curv)))
+    noise = jitter[int(len(jitter) * 0.85)] if jitter else 0.0
+    k_lo = min(CORNER_K_LO_MAX, max(CORNER_K_LO_MIN, noise * CORNER_NOISE_SCALE))
+    k_hi = min(k_lo * CORNER_K_HI_RATIO, CORNER_K_HI_MAX)
+    return k_hi, k_lo
+
+
+def _segment_arcs(curv: list[float], k_hi: float, k_lo: float) -> list[_Arc]:
     """Hysteresis segmentation of the curvature series, split on sign flips."""
     end_gap = int(CORNER_END_GAP_M / CORNER_STEP_M)
     arcs: list[_Arc] = []
     i = 0
     m = len(curv)
     while i < m:
-        if abs(curv[i]) <= CORNER_K_HI:
+        if abs(curv[i]) <= k_hi:
             i += 1
             continue
         sign = 1 if curv[i] > 0 else -1
@@ -293,11 +333,11 @@ def _segment_arcs(curv: list[float]) -> list[_Arc]:
         angle = 0.0
         while i < m:
             k = curv[i]
-            if k * sign > 0 and abs(k) >= CORNER_K_LO:
+            if k * sign > 0 and abs(k) >= k_lo:
                 last_active = i
                 angle += k * CORNER_STEP_M
                 i += 1
-            elif k * -sign > CORNER_K_HI:
+            elif k * -sign > k_hi:
                 break  # strong opposite curvature: an S — new corner
             elif i - last_active >= end_gap:
                 break  # faded out for long enough
@@ -326,9 +366,10 @@ def _stitch_wraparound(arcs: list[_Arc], m: int) -> list[_Arc]:
     the start/finish line; merge the two halves into one corner.
 
     Each half may sit at most half the merge gap from its lap edge, so the
-    combined tolerance matches the mid-lap merge distance. The larger half
-    keeps the corner's extent/apex (a wrapped extent isn't representable);
-    min_speed therefore covers only that half — a known approximation.
+    combined tolerance matches the mid-lap merge distance. The surviving arc
+    is the pre-line half; `wrap` records the post-line half so the corner's
+    extent (entry > exit signals the wrap), min_speed, and apex consider
+    both halves.
     """
     edge = int(CORNER_MERGE_GAP_M / 2 / CORNER_STEP_M)
     if len(arcs) < 2:
@@ -339,22 +380,36 @@ def _stitch_wraparound(arcs: list[_Arc], m: int) -> list[_Arc]:
         and first.start <= edge
         and m - 1 - last.end <= edge
     ):
-        keep, other = (first, last) if abs(first.angle) >= abs(last.angle) else (last, first)
-        keep.angle += other.angle
-        return [keep, *arcs[1:-1]] if keep is first else arcs[1:]
+        last.angle += first.angle
+        last.wrap = (first.start, first.end)
+        return arcs[1:]
     return arcs
 
 
 def _apex_index(a: _Arc, curv: list[float]) -> int:
     """Curvature-weighted centroid: stable within ~25 m across laps, where
-    the min-speed point wanders with braking for the NEXT corner."""
-    total = 0.0
-    weighted = 0.0
-    for i in range(a.start, a.end + 1):
-        w = abs(curv[i])
-        total += w
-        weighted += w * i
-    return round(weighted / total) if total > 0 else (a.start + a.end) // 2
+    the min-speed point wanders with braking for the NEXT corner.
+
+    For a start/finish-stitched corner the centroid comes from whichever
+    half turns more — averaging indices across the lap seam would land the
+    apex mid-lap, nowhere near the corner.
+    """
+
+    def centroid(lo: int, hi: int) -> tuple[int, float]:
+        total = 0.0
+        weighted = 0.0
+        for i in range(lo, hi + 1):
+            w = abs(curv[i])
+            total += w
+            weighted += w * i
+        idx = round(weighted / total) if total > 0 else (lo + hi) // 2
+        return idx, total
+
+    idx0, t0 = centroid(a.start, a.end)
+    if a.wrap is None:
+        return idx0
+    idx1, t1 = centroid(*a.wrap)
+    return idx0 if t0 >= t1 else idx1
 
 
 # --- Fuel map ---------------------------------------------------------------
