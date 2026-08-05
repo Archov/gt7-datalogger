@@ -160,9 +160,22 @@ def speed_peaks_valleys(
 # road-noise floor and bleeds adjacent corners together.
 CORNER_STEP_M = 2.0  # uniform resample grid for curvature
 CORNER_HALF_WIN_M = 16.0  # heading measured over ±this many meters
-CORNER_K_HI = 0.0030  # rad/m — |curvature| to enter a corner (~330 m radius)
-CORNER_K_LO = 0.0022  # rad/m — |curvature| to stay in one
-CORNER_END_GAP_M = 40.0  # below K_LO for this long ends the segment
+# The enter/stay thresholds adapt to each lap's own curvature noise (see
+# _thresholds). Calibrated by sweeping candidates over real road courses,
+# a banked oval, and the simulator: noisy real telemetry (jitter p85
+# ~0.0004) must run the validated 0.0030/0.0022 — anything lower flaps
+# counts between laps; smooth data (jitter < 0.0001) safely drops to
+# 0.0020/0.0013, which recovers broad-radius corners without growing
+# phantoms (going lower DID grow one on the oval).
+CORNER_K_LO_MIN = 0.0013  # rad/m — floor for the stay threshold
+CORNER_K_LO_MAX = 0.0022  # rad/m — validated real-track value
+CORNER_K_HI_RATIO = 1.54  # enter = stay * ratio ...
+CORNER_K_HI_MAX = 0.0030  # ... capped at the validated real-track value
+# Stay threshold = this × the p85 curvature jitter. Measured jitter: real
+# GT7 laps 0.00029-0.00052 (×8 clamps them all to K_LO_MAX), smooth
+# sim/parametric data 0.00005-0.00008 (lands on K_LO_MIN with 2× margin).
+CORNER_NOISE_SCALE = 8.0
+CORNER_END_GAP_M = 40.0  # below the stay threshold for this long ends the segment
 CORNER_MERGE_GAP_M = 90.0  # same-direction arcs closer than this merge
 CORNER_NOISE_ANGLE_DEG = 12.0  # arcs below this are noise, dropped pre-merge
 CORNER_MIN_ANGLE_DEG = 25.0  # final significance threshold
@@ -245,7 +258,8 @@ def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
         dh = _wrap_angle(math.atan2(dz1, dx1) - math.atan2(dz0, dx0))
         curv[i] = dh / (w * CORNER_STEP_M)
 
-    arcs = _segment_arcs(curv)
+    k_hi, k_lo = _thresholds(curv)
+    arcs = _segment_arcs(curv, k_hi, k_lo)
     # Noise arcs are discarded BEFORE merging so they cannot block a merge.
     arcs = [a for a in arcs if abs(math.degrees(a.angle)) >= CORNER_NOISE_ANGLE_DEG]
     arcs = _merge_arcs(arcs)
@@ -287,14 +301,30 @@ def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
     return corners
 
 
-def _segment_arcs(curv: list[float]) -> list[_Arc]:
+def _thresholds(curv: list[float]) -> tuple[float, float]:
+    """Hysteresis thresholds anchored to this lap's curvature noise floor.
+
+    The floor is the high end of the frame-to-frame curvature jitter — real
+    GT7 telemetry wobbles around zero on straights, smooth data barely at
+    all. The stay threshold must clear that jitter or adjacent corners bleed
+    together; but fixing it at the real-track value silently drops the
+    broad-radius corners of clean low-curvature tracks.
+    """
+    jitter = sorted(abs(curv[i] - curv[i - 1]) for i in range(1, len(curv)))
+    noise = jitter[int(len(jitter) * 0.85)] if jitter else 0.0
+    k_lo = min(CORNER_K_LO_MAX, max(CORNER_K_LO_MIN, noise * CORNER_NOISE_SCALE))
+    k_hi = min(k_lo * CORNER_K_HI_RATIO, CORNER_K_HI_MAX)
+    return k_hi, k_lo
+
+
+def _segment_arcs(curv: list[float], k_hi: float, k_lo: float) -> list[_Arc]:
     """Hysteresis segmentation of the curvature series, split on sign flips."""
     end_gap = int(CORNER_END_GAP_M / CORNER_STEP_M)
     arcs: list[_Arc] = []
     i = 0
     m = len(curv)
     while i < m:
-        if abs(curv[i]) <= CORNER_K_HI:
+        if abs(curv[i]) <= k_hi:
             i += 1
             continue
         sign = 1 if curv[i] > 0 else -1
@@ -303,11 +333,11 @@ def _segment_arcs(curv: list[float]) -> list[_Arc]:
         angle = 0.0
         while i < m:
             k = curv[i]
-            if k * sign > 0 and abs(k) >= CORNER_K_LO:
+            if k * sign > 0 and abs(k) >= k_lo:
                 last_active = i
                 angle += k * CORNER_STEP_M
                 i += 1
-            elif k * -sign > CORNER_K_HI:
+            elif k * -sign > k_hi:
                 break  # strong opposite curvature: an S — new corner
             elif i - last_active >= end_gap:
                 break  # faded out for long enough

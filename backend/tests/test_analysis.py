@@ -209,8 +209,9 @@ def test_corners_numbered_in_track_order() -> None:
 
 
 def test_corners_shallow_kink_ignored() -> None:
-    # 10° bend at huge radius: a kink, not a corner
-    lap = track_lap([("straight", 500), ("arc", 500, 10), ("straight", 500)])
+    # 10° bend at huge radius (|k|≈0.0017, below even the relaxed clean-data
+    # enter threshold): a kink, not a corner
+    lap = track_lap([("straight", 500), ("arc", 600, 10), ("straight", 500)])
     assert analysis.detect_corners(lap) == []
 
 
