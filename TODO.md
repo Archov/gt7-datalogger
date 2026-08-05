@@ -203,15 +203,16 @@ Change who would use the tool.
   centerline. Fictional GT7 tracks still need edge tracing. Their own backend
   (api.gt-telemetry.com/tracks) is auth-gated and its data unlicensed — don't scrape it;
   ask via GitHub issue if we ever want their fictional-track layouts.
-- [ ] **Auto-numbered corners on the track map** *(tabled 2026-07-26 — prototyped, then
-  reverted; the naive version was wrong)*. Detect corners from racing-line curvature and
-  number them from the start line, GT7-Data-Logger style. Lesson from the failed attempt:
-  UNSIGNED curvature is not enough — a long hairpin splits into two corners where curvature
-  dips mid-arc, and an S-section merges into one. A correct detector needs **signed**
-  curvature (split regions when turn direction flips, merge only same-direction arcs),
-  hysteresis on the threshold, and probably apex-at-minimum-speed rather than
-  apex-at-max-curvature. Display rule that worked: dots on the full map, numbered circles
-  only when the zoomed section shows ≤ ~30 corners.
+- [x] **Auto-numbered corners on the track map** *(shipped 2026-08-05; tabled
+  2026-07-26 after a failed unsigned-curvature prototype)*. Signed curvature with
+  hysteresis (enter 0.0030, stay 0.0022 rad/m), noise arcs dropped before same-direction
+  merging (90 m gap), 25°–300° significance band, start/finish wrap stitching, apex at
+  the curvature-weighted centroid (min-speed apexes wander ~100 m between laps —
+  the spec's own assumption proved wrong when validated against real laps). Parameters
+  tuned for identical counts + <30 m apex drift across 5 real GT7 sessions. Numbered
+  circles ≤30 in view, dots beyond; detection on the reference lap only. Follow-up
+  idea: per-track canonical corner store (median of clean laps) so numbering survives
+  reference-lap switches.
 
 ---
 

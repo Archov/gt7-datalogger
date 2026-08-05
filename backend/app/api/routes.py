@@ -357,7 +357,11 @@ async def compare(
             "peaks_valleys": analysis.speed_peaks_valleys(samples),
             "events": events_by_id.get(lap_id, []),
         }
-        if lap_id != ref:
+        if lap_id == ref:
+            # Corner numbering comes from the reference lap only, so every
+            # overlaid lap shares one consistent set of map markers.
+            entry["corners"] = analysis.detect_corners(samples)
+        else:
             entry["delta"] = analysis.time_delta_series(samples, samples_by_id[ref], step)
         out["laps"][str(lap_id)] = entry
     return out

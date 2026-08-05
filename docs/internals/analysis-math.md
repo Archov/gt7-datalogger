@@ -67,12 +67,47 @@ The ▲/▼ markers on the map are local speed extrema, found with a sliding win
 Valleys approximate apexes (minimum corner speed) and peaks approximate the end of
 acceleration zones — without needing full corner detection.
 
-!!! note "Why no numbered corners?"
-    Curvature-based corner numbering was prototyped and removed: unsigned curvature
-    splits hairpins into two "corners" and merges S-sections into one. Doing it right
-    needs signed curvature with hysteresis — it's on the roadmap; until then the
-    peaks/valleys markers plus the **S1/S2/S3** section-zoom buttons (fixed thirds of
-    the lap distance) cover the workflow.
+## Auto-numbered corners
+
+The numbered circles on the map are corners detected from the **reference lap's**
+racing-line geometry (one canonical set, so every overlaid lap shares the same
+numbering). The detector was tuned empirically against real GT7 laps — 5 sessions
+across road courses and a banked oval — with one acceptance criterion: **identical
+corner counts and < 30 m apex drift across laps of the same track**. Pipeline:
+
+1. Resample positions onto a uniform **2 m** distance grid (strictly-increasing
+   distances only), decoupling curvature from the 60 Hz speed-dependent spacing.
+2. **Signed curvature** at each point: the wrapped angle between the chord headings
+   of the 16 m windows before and after, divided by the span.
+3. **Hysteresis segmentation**: enter a corner when |κ| > 0.0030 rad/m (~330 m
+   radius), stay while same-signed |κ| > 0.0022, end after 40 m below that. Strong
+   opposite curvature splits immediately — an S-section is two corners even when
+   the magnitude never dips.
+4. Arcs turning less than **12°** are noise and are dropped *before* merging —
+   a surviving opposite blip would block a merge on some laps only, which was the
+   dominant instability in early tuning.
+5. Same-direction arcs within **90 m** merge: a hairpin or double-apex complex
+   whose curvature relaxes mid-arc stays one corner (real complexes contain
+   50–80 m low-curvature interludes).
+6. A lap that starts mid-corner has that corner split across the start/finish
+   line — the two edge arcs are stitched back into one (each half within 45 m
+   of its lap edge, matching the mid-lap merge distance; the larger half keeps
+   the corner's extent and apex). Stitching runs *before* the significance
+   filter so a split corner is judged on its combined angle.
+7. Keep arcs turning **25°–300°**. Below is a kink; above is a spin, not a corner.
+8. **Apex = the curvature-weighted centroid** of the segment, *not* the
+   minimum-speed point: min speed sits at the segment edge (braking for the next
+   corner) and wanders 60–110 m between laps, while the centroid stays within
+   ~25 m. Minimum corner speed is still reported per corner as a stat.
+
+The thresholds are deliberately a narrow band: raising the entry threshold above
+~0.0035 loses banked/high-speed corners entirely (a 300 m-radius banked turn peaks
+at |κ| ≈ 0.004), and dropping the stay threshold below ~0.002 sinks into the
+road-noise floor and bleeds adjacent corners together.
+
+Display rule: numbered circles while ≤ 30 corners are in view (the zoomed section
+or the whole lap); beyond that they collapse to small dots. The Corner Detail
+widget shows the current corner (`T5 R`) while the cursor is inside one.
 
 ## Cursor synchronization
 
