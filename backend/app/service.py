@@ -192,23 +192,32 @@ class TelemetryService:
         lap_id = await self.repo.save_lap(self.session_id, lap)
         log.info("lap %d saved (%d ms, id=%d)", lap.number, lap.time_ms, lap_id)
 
+        # A longer lap just proved the stored "best" was a partial out-lap:
+        # forget it — comparing deltas against a fraction of the track (with
+        # a pit-exit-anchored distance axis) produces garbage.
+        if lap.invalidated_best:
+            self._session_best_ms = None
+            self._prev_best_ms = None
+            self._best_ref = None
+
         # Remember the best BEFORE this lap: the live "Δ best" compares the
         # latest lap against it (comparing against a best that already
         # includes the latest lap can never show an improvement).
         self._prev_best_ms = self._session_best_ms
 
-        # Personal best (only when beating an existing best, not on the first lap)
-        if self._session_best_ms is not None and lap.time_ms < self._session_best_ms:
-            self.notifier.personal_best(
-                lap.time_ms,
-                self._session_best_ms,
-                lap.number,
-                self.cars.name(lap.car_id),
-                self.track_name,
-            )
-        if self._session_best_ms is None or lap.time_ms < self._session_best_ms:
-            self._session_best_ms = lap.time_ms
-            self._best_ref = {"dist": lap.samples["dist"], "t": lap.samples["t"]}
+        if lap.counts_for_best:
+            # Personal best (only when beating an existing best, not on the first lap)
+            if self._session_best_ms is not None and lap.time_ms < self._session_best_ms:
+                self.notifier.personal_best(
+                    lap.time_ms,
+                    self._session_best_ms,
+                    lap.number,
+                    self.cars.name(lap.car_id),
+                    self.track_name,
+                )
+            if self._session_best_ms is None or lap.time_ms < self._session_best_ms:
+                self._session_best_ms = lap.time_ms
+                self._best_ref = {"dist": lap.samples["dist"], "t": lap.samples["t"]}
 
         # Track auto-identification from the first completed lap's geometry
         if not self.track_name:

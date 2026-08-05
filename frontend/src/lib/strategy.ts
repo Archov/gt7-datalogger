@@ -13,10 +13,23 @@ export function projectStrategy(
   frame: LiveFrame,
   laps: LapSummary[],
 ): StrategyProjection | null {
-  const recent = laps.slice(0, 3).filter((lap) => lap.fuel_consumed > 0.01);
+  // Same car only (a race restart keeps the stint's laps; a car swap must
+  // not inherit another car's consumption), and only laps that actually
+  // burned fuel.
+  const recent = laps
+    .filter(
+      (lap) =>
+        lap.fuel_consumed > 0.01 &&
+        (!lap.car_name || !frame.car_name || lap.car_name === frame.car_name),
+    )
+    .slice(0, 3);
   if (recent.length === 0) return null;
-  const avgFuelPerLap = recent.reduce((a, lap) => a + lap.fuel_consumed, 0) / recent.length;
-  const avgLapMs = recent.reduce((a, lap) => a + lap.time_ms, 0) / recent.length;
+  // Drop partial laps (pit out-laps burn a fraction of a normal lap and
+  // would inflate the projected range — dangerous with aggressive fuel use).
+  const maxFuel = Math.max(...recent.map((lap) => lap.fuel_consumed));
+  const usable = recent.filter((lap) => lap.fuel_consumed >= 0.5 * maxFuel);
+  const avgFuelPerLap = usable.reduce((a, lap) => a + lap.fuel_consumed, 0) / usable.length;
+  const avgLapMs = usable.reduce((a, lap) => a + lap.time_ms, 0) / usable.length;
   const lapsToEmpty = frame.fuel_level / avgFuelPerLap;
   return {
     avgFuelPerLap,

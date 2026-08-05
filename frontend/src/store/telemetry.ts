@@ -65,19 +65,12 @@ export const useTelemetry = create<TelemetryState>((set) => {
           }));
           break;
         case "status":
-          set({ status: msg.data });
-          break;
         case "session":
-          // Drop laps that belong to another session: a car change or race
-          // restart must not leave old laps in the feed, or the fuel-strategy
-          // average mixes consumption from the previous car/track. Track
-          // identification re-broadcasts the same session_id, so mid-session
-          // laps survive this filter.
-          set((st) => ({
-            status: msg.data,
-            recentLaps: st.recentLaps.filter((l) => l.session_id === msg.data.session_id),
-            lapEpoch: st.lapEpoch + 1,
-          }));
+          // Laps deliberately survive session boundaries: a race restart
+          // opens a new session, and losing the previous stint's laps would
+          // blank the fuel projection exactly when it matters (aggressive
+          // fuel-use races). projectStrategy filters by car instead.
+          set({ status: msg.data });
           break;
       }
     };
