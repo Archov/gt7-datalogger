@@ -163,7 +163,7 @@ CORNER_HALF_WIN_M = 16.0  # heading measured over ±this many meters
 # The enter/stay thresholds adapt to each lap's own curvature noise (see
 # _thresholds). Calibrated by sweeping candidates over real road courses,
 # a banked oval, and the simulator: noisy real telemetry (jitter p85
-# ~0.0004) must run the validated 0.0030/0.0022 — anything lower flaps
+# ~0.0004) must run the validated 0.0030/0.0022 — anything lower flips
 # counts between laps; smooth data (jitter < 0.0001) safely drops to
 # 0.0020/0.0013, which recovers broad-radius corners without growing
 # phantoms (going lower DID grow one on the oval).

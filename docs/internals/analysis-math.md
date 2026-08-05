@@ -82,7 +82,7 @@ corner counts and < 30 m apex drift across laps of the same track**. Pipeline:
 3. **Hysteresis segmentation** with thresholds anchored to the lap's own
    curvature noise floor (the p85 of frame-to-frame curvature jitter): on real
    GT7 telemetry (jitter ~0.0004) they land on the validated 0.0030/0.0022
-   rad/m enter/stay pair — sweeping lower flaps the counts between laps; on
+   rad/m enter/stay pair — sweeping lower flips the counts between laps; on
    smooth low-curvature data (jitter < 0.0001, e.g. the simulator's sweeping
    circuit) they relax to 0.0020/0.0013 so broad-radius corners still
    register — sweeping lower grew a phantom corner on a banked oval. A
