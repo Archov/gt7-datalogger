@@ -128,11 +128,25 @@ export interface PeakValley {
   z: number;
 }
 
+// Auto-detected corner on the reference lap (numbered from the start line)
+export interface Corner {
+  n: number;
+  apex_dist: number;
+  apex_x: number;
+  apex_z: number;
+  entry_dist: number;
+  exit_dist: number;
+  direction: "L" | "R";
+  min_speed: number;
+  angle_deg: number;
+}
+
 export interface CompareLapEntry {
   series: Samples & { dist: number[] };
   peaks_valleys: { peaks: PeakValley[]; valleys: PeakValley[] };
   events?: LapEvent[];
   delta?: { dist: number[]; delta_ms: number[] };
+  corners?: Corner[]; // reference lap only
 }
 
 export interface CompareResult {

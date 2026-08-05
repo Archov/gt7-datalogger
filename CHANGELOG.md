@@ -5,6 +5,17 @@ Notable changes to GT7 Datalogger. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Auto-numbered corners on the track map**: corners are detected from the
+  reference lap's racing-line signed curvature (hysteresis segmentation,
+  direction-aware split/merge, start/finish wrap stitching, apex at the
+  curvature-weighted centroid) and numbered from the start line, GT7 Data
+  Logger-style. Numbered circles while ≤ 30 corners are in view, dots beyond;
+  the Corner Detail widget shows the current corner (e.g. `T5 R`) while
+  scrubbing. Detection parameters were tuned against real GT7 laps for
+  identical counts and < 30 m apex drift across laps of the same track.
+
 ### Fixed
 
 - **Pit out-laps no longer poison the session best / live delta**: a short out-lap

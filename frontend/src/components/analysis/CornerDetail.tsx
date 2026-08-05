@@ -5,7 +5,7 @@
 // numbers + hollow bars), so focus-vs-ref stays visible without switching.
 
 import { useMemo, useState } from "react";
-import type { Samples } from "@/lib/types";
+import type { Corner as TrackCorner, Samples } from "@/lib/types";
 
 export interface CornerLap {
   id: string;
@@ -36,10 +36,12 @@ export function CornerDetail({
   laps,
   cursorDist,
   step,
+  trackCorners,
 }: {
   laps: CornerLap[];
   cursorDist: number | null;
   step: number;
+  trackCorners?: TrackCorner[];
 }) {
   const candidates = laps.filter((l) => !l.isRef);
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -145,6 +147,12 @@ export function CornerDetail({
   const ravg = ((at(focus.series, "tt_rl", i) ?? 0) + (at(focus.series, "tt_rr", i) ?? 0)) / 2;
   const balance = favg - ravg;
 
+  // Which auto-numbered corner (if any) the cursor is currently inside
+  const inCorner =
+    cursorDist != null
+      ? trackCorners?.find((c) => cursorDist >= c.entry_dist && cursorDist <= c.exit_dist)
+      : undefined;
+
   return (
     <div className="p-3">
       {/* Focus chips — hidden in the common 2-lap case (focus is the non-ref) */}
@@ -173,6 +181,11 @@ export function CornerDetail({
         {cell("rr")}
       </div>
       <div className="mt-2 text-center font-tabular text-xs text-ink-dim">
+        {inCorner && (
+          <span className="mr-2 rounded border border-edge px-1 py-0.5 text-[10px] text-ink">
+            T{inCorner.n} {inCorner.direction}
+          </span>
+        )}
         F/R balance{" "}
         <span className={balance > 3 ? "text-brake" : balance < -3 ? "text-coast" : "text-ink"}>
           {balance >= 0 ? "F +" : "R +"}
