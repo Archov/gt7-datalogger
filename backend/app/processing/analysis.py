@@ -184,6 +184,9 @@ class _Arc:
     end: int  # inclusive
     sign: int
     angle: float  # total heading change, radians (signed)
+    # Second index range of a start/finish-stitched corner (the post-line
+    # half at the beginning of the lap); None for ordinary corners.
+    wrap: tuple[int, int] | None = None
 
 
 def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
@@ -257,20 +260,27 @@ def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
     ]
 
     corners: list[dict[str, float | int | str]] = []
-    for a in sorted(arcs, key=lambda a: _apex_index(a, curv)):
-        i = _apex_index(a, curv)
+    with_apex = sorted(((a, _apex_index(a, curv)) for a in arcs), key=lambda t: t[1])
+    for a, i in with_apex:
+        # A stitched start/finish corner spans the lap boundary: its extent
+        # wraps (entry_dist > exit_dist) and min_speed covers both halves.
+        entry, exit_ = a.start, a.end
+        speeds = gs[a.start : a.end + 1]
+        if a.wrap is not None:
+            entry, exit_ = a.start, a.wrap[1]
+            speeds = speeds + gs[a.wrap[0] : a.wrap[1] + 1]
         corners.append(
             {
                 "n": len(corners) + 1,
                 "apex_dist": round(grid[i], 1),
                 "apex_x": round(gx[i], 1),
                 "apex_z": round(gz[i], 1),
-                "entry_dist": round(grid[a.start], 1),
-                "exit_dist": round(grid[a.end], 1),
+                "entry_dist": round(grid[entry], 1),
+                "exit_dist": round(grid[exit_], 1),
                 # Positive heading delta is CCW in raw x/z, but the map (and
                 # GT7's own view) renders z inverted — that's a right-hander.
                 "direction": "R" if a.sign > 0 else "L",
-                "min_speed": round(min(gs[a.start : a.end + 1]), 1),
+                "min_speed": round(min(speeds), 1),
                 "angle_deg": round(abs(math.degrees(a.angle)), 1),
             }
         )
@@ -326,9 +336,10 @@ def _stitch_wraparound(arcs: list[_Arc], m: int) -> list[_Arc]:
     the start/finish line; merge the two halves into one corner.
 
     Each half may sit at most half the merge gap from its lap edge, so the
-    combined tolerance matches the mid-lap merge distance. The larger half
-    keeps the corner's extent/apex (a wrapped extent isn't representable);
-    min_speed therefore covers only that half — a known approximation.
+    combined tolerance matches the mid-lap merge distance. The surviving arc
+    is the pre-line half; `wrap` records the post-line half so the corner's
+    extent (entry > exit signals the wrap), min_speed, and apex consider
+    both halves.
     """
     edge = int(CORNER_MERGE_GAP_M / 2 / CORNER_STEP_M)
     if len(arcs) < 2:
@@ -339,22 +350,36 @@ def _stitch_wraparound(arcs: list[_Arc], m: int) -> list[_Arc]:
         and first.start <= edge
         and m - 1 - last.end <= edge
     ):
-        keep, other = (first, last) if abs(first.angle) >= abs(last.angle) else (last, first)
-        keep.angle += other.angle
-        return [keep, *arcs[1:-1]] if keep is first else arcs[1:]
+        last.angle += first.angle
+        last.wrap = (first.start, first.end)
+        return arcs[1:]
     return arcs
 
 
 def _apex_index(a: _Arc, curv: list[float]) -> int:
     """Curvature-weighted centroid: stable within ~25 m across laps, where
-    the min-speed point wanders with braking for the NEXT corner."""
-    total = 0.0
-    weighted = 0.0
-    for i in range(a.start, a.end + 1):
-        w = abs(curv[i])
-        total += w
-        weighted += w * i
-    return round(weighted / total) if total > 0 else (a.start + a.end) // 2
+    the min-speed point wanders with braking for the NEXT corner.
+
+    For a start/finish-stitched corner the centroid comes from whichever
+    half turns more — averaging indices across the lap seam would land the
+    apex mid-lap, nowhere near the corner.
+    """
+
+    def centroid(lo: int, hi: int) -> tuple[int, float]:
+        total = 0.0
+        weighted = 0.0
+        for i in range(lo, hi + 1):
+            w = abs(curv[i])
+            total += w
+            weighted += w * i
+        idx = round(weighted / total) if total > 0 else (lo + hi) // 2
+        return idx, total
+
+    idx0, t0 = centroid(a.start, a.end)
+    if a.wrap is None:
+        return idx0
+    idx1, t1 = centroid(*a.wrap)
+    return idx0 if t0 >= t1 else idx1
 
 
 # --- Fuel map ---------------------------------------------------------------

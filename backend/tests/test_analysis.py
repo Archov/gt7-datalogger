@@ -107,7 +107,8 @@ def test_interp_edges() -> None:
 
 def track_lap(segments, step: float = 2.0, speed_kmh: float = 180.0) -> dict:
     """Build a lap from ('straight', length_m) / ('arc', radius_m, angle_deg)
-    segments. Positive angle turns left (CCW in x/z), negative right."""
+    segments. Positive angle is CCW in raw x/z coordinates — which the map
+    renders (z inverted) as a RIGHT-hander, so detect_corners labels it "R"."""
     import math
 
     s = new_sample_store()
@@ -238,6 +239,30 @@ def test_corners_wraparound_stitch() -> None:
     )
     corners = analysis.detect_corners(lap)
     assert len(corners) == 2
+    # The stitched corner's extent wraps the lap boundary: entry near the
+    # lap end, exit near the lap start (entry > exit signals the wrap).
+    wrap = max(corners, key=lambda c: c["entry_dist"])
+    assert wrap["entry_dist"] > wrap["exit_dist"]
+    assert wrap["exit_dist"] < 100.0
+
+
+def test_corners_wraparound_min_speed_covers_both_halves() -> None:
+    lap = track_lap(
+        [
+            ("arc", 80, 45),
+            ("straight", 600),
+            ("arc", 80, 90),
+            ("straight", 600),
+            ("arc", 80, 45),
+        ]
+    )
+    # Speed dip inside the POST-line half (start of the lap)
+    for i, d in enumerate(lap["dist"]):
+        if d <= 40:
+            lap["speed"][i] = 95.0
+    corners = analysis.detect_corners(lap)
+    wrap = max(corners, key=lambda c: c["entry_dist"])
+    assert wrap["min_speed"] == pytest.approx(95.0, abs=1.0)
 
 
 def test_corners_degenerate_inputs() -> None:

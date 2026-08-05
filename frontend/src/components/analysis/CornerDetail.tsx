@@ -147,10 +147,15 @@ export function CornerDetail({
   const ravg = ((at(focus.series, "tt_rl", i) ?? 0) + (at(focus.series, "tt_rr", i) ?? 0)) / 2;
   const balance = favg - ravg;
 
-  // Which auto-numbered corner (if any) the cursor is currently inside
+  // Which auto-numbered corner (if any) the cursor is currently inside.
+  // A start/finish corner's extent wraps the lap boundary (entry > exit).
   const inCorner =
     cursorDist != null
-      ? trackCorners?.find((c) => cursorDist >= c.entry_dist && cursorDist <= c.exit_dist)
+      ? trackCorners?.find((c) =>
+          c.entry_dist <= c.exit_dist
+            ? cursorDist >= c.entry_dist && cursorDist <= c.exit_dist
+            : cursorDist >= c.entry_dist || cursorDist <= c.exit_dist,
+        )
       : undefined;
 
   return (

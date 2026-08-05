@@ -91,9 +91,11 @@ corner counts and < 30 m apex drift across laps of the same track**. Pipeline:
    50–80 m low-curvature interludes).
 6. A lap that starts mid-corner has that corner split across the start/finish
    line — the two edge arcs are stitched back into one (each half within 45 m
-   of its lap edge, matching the mid-lap merge distance; the larger half keeps
-   the corner's extent and apex). Stitching runs *before* the significance
-   filter so a split corner is judged on its combined angle.
+   of its lap edge, matching the mid-lap merge distance). The stitched
+   corner's extent **wraps the lap boundary** (`entry_dist > exit_dist`),
+   min speed covers both halves, and the apex comes from whichever half turns
+   more. Stitching runs *before* the significance filter so a split corner is
+   judged on its combined angle.
 7. Keep arcs turning **25°–300°**. Below is a kink; above is a spin, not a corner.
 8. **Apex = the curvature-weighted centroid** of the segment, *not* the
    minimum-speed point: min speed sits at the segment edge (braking for the next
