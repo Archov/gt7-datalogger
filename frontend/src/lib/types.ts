@@ -74,6 +74,7 @@ export interface LapSummary {
   max_water_temp?: number;
   max_oil_temp?: number;
   min_oil_pressure?: number; // -1 = unknown
+  counts_for_best?: boolean; // false = partial lap (pit out-lap)
   event_counts?: Record<string, number>;
 }
 
@@ -128,11 +129,25 @@ export interface PeakValley {
   z: number;
 }
 
+// Auto-detected corner on the reference lap (numbered from the start line)
+export interface Corner {
+  n: number;
+  apex_dist: number;
+  apex_x: number;
+  apex_z: number;
+  entry_dist: number;
+  exit_dist: number;
+  direction: "L" | "R";
+  min_speed: number;
+  angle_deg: number;
+}
+
 export interface CompareLapEntry {
   series: Samples & { dist: number[] };
   peaks_valleys: { peaks: PeakValley[]; valleys: PeakValley[] };
   events?: LapEvent[];
   delta?: { dist: number[]; delta_ms: number[] };
+  corners?: Corner[]; // reference lap only
 }
 
 export interface CompareResult {

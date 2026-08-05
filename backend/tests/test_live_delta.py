@@ -116,3 +116,58 @@ async def test_live_delta_reference_resets_with_session(service) -> None:
         parse_packet(build_packet(current_lap=1, speed_mps=40.0, flags=ON_TRACK, car_id=42))
     )
     assert service._best_ref is None
+
+
+async def test_partial_outlap_never_stays_the_reference(service) -> None:
+    """A short pit out-lap gets a GT7 lap time but covers a fraction of the
+    track with a pit-exit-anchored distance axis — the first full lap must
+    replace it as session best / delta reference even though it's slower."""
+    await drive(service, lap=1, speed=40.0, ticks=30)  # out-lap: ~20 m span
+    await service._on_packet(packet(lap=2, speed=40.0, last_ms=60_500))
+    assert service._best_ref is not None  # baseline until proven partial
+
+    await drive(service, lap=2, speed=40.0, ticks=300)  # full lap: ~200 m
+    await service._on_packet(packet(lap=3, speed=40.0, last_ms=118_900))
+
+    assert service._session_best_ms == 118_900  # slower but real
+    assert service.processor.session is not None
+    assert service.processor.session.best_lap_time_ms == 118_900
+    ref = service._best_ref
+    assert ref is not None
+    assert ref["dist"][-1] == pytest.approx(300 * 40 / 60, rel=0.05)
+
+    p = await drive(service, lap=3, speed=40.0, ticks=5)
+    frame = service._live_frame(p)
+    assert frame["session_best_ms"] == 118_900
+    # prev_best must not point at the phantom out-lap time — the delta
+    # widget's end-of-lap fallback would otherwise show last-lap minus
+    # out-lap (~+58 s, frozen for the rest of the lap).
+    assert frame["prev_best_ms"] == -1
+
+    # The persisted aggregates must drop the partial lap too: the Sessions
+    # view and the session-summary webhook read best from the DB, not from
+    # the live service state.
+    sessions = await service.repo.list_sessions()
+    assert sessions[0]["best_lap_time_ms"] == 118_900
+    stats = await service.repo.session_lap_stats(service.session_id)
+    assert stats["best_ms"] == 118_900
+    laps = await service.repo.list_laps(service.session_id)
+    flags = {lap["number"]: lap["counts_for_best"] for lap in laps}
+    assert flags == {1: False, 2: True}
+
+
+async def test_later_pit_outlap_does_not_steal_best(service) -> None:
+    await drive(service, lap=1, speed=40.0, ticks=300)
+    await service._on_packet(packet(lap=2, speed=40.0, last_ms=118_900))
+    assert service._session_best_ms == 118_900
+
+    # Mid-race pit stop: short lap with a meaninglessly low reported time
+    await drive(service, lap=2, speed=40.0, ticks=30)
+    await service._on_packet(packet(lap=3, speed=40.0, last_ms=45_000))
+
+    assert service._session_best_ms == 118_900
+    assert service.processor.session is not None
+    assert service.processor.session.best_lap_time_ms == 118_900
+    ref = service._best_ref
+    assert ref is not None
+    assert ref["dist"][-1] == pytest.approx(300 * 40 / 60, rel=0.05)

@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
@@ -42,6 +42,7 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "max_water_temp": row.max_water_temp,
         "max_oil_temp": row.max_oil_temp,
         "min_oil_pressure": row.min_oil_pressure,
+        "counts_for_best": row.counts_for_best,
         "event_counts": _event_counts(row.events_json),
     }
 
@@ -88,6 +89,7 @@ class Repository:
                 tod_ms=lap.tod_ms,
                 tcs_active_pct=lap.tcs_active_pct,
                 asm_active_pct=lap.asm_active_pct,
+                counts_for_best=lap.counts_for_best,
                 max_water_temp=lap.max_water_temp,
                 max_oil_temp=lap.max_oil_temp,
                 min_oil_pressure=lap.min_oil_pressure,
@@ -103,9 +105,12 @@ class Repository:
         # One aggregate query for all sessions; the outer join keeps lap-less
         # sessions and only touches LapRow ids/times (never samples_json).
         async with self._sf() as db:
+            # Best excludes partial laps (pit out-laps, counts_for_best=0):
+            # their GT7-reported "times" aren't full-lap times.
+            best_expr = func.min(case((LapRow.counts_for_best, LapRow.time_ms)))
             rows = (
                 await db.execute(
-                    select(SessionRow, func.count(LapRow.id), func.min(LapRow.time_ms))
+                    select(SessionRow, func.count(LapRow.id), best_expr)
                     .outerjoin(LapRow, LapRow.session_id == SessionRow.id)
                     .group_by(SessionRow.id)
                     .order_by(SessionRow.id.desc())
@@ -136,7 +141,8 @@ class Repository:
                 await db.execute(
                     select(
                         func.count(LapRow.id),
-                        func.min(LapRow.time_ms),
+                        # partial out-laps don't own the session best
+                        func.min(case((LapRow.counts_for_best, LapRow.time_ms))),
                         func.coalesce(func.sum(LapRow.fuel_consumed), 0.0),
                         func.min(LapRow.car_id),
                     ).where(LapRow.session_id == session_id)
@@ -148,6 +154,21 @@ class Repository:
                 "fuel_used": fuel_used,
                 "car_id": car_id if car_id is not None else 0,
             }
+
+    async def mark_session_laps_partial(self, session_id: int, keep_lap_id: int) -> None:
+        """Flag every lap of the session except `keep_lap_id` as partial.
+
+        Called when a newly completed lap's distance span proves the earlier
+        laps were partial (out-laps): by the span invariant, every prior lap
+        of the session is shorter than 85 % of the new baseline.
+        """
+        async with self._sf() as db:
+            await db.execute(
+                update(LapRow)
+                .where(LapRow.session_id == session_id, LapRow.id != keep_lap_id)
+                .values(counts_for_best=False)
+            )
+            await db.commit()
 
     async def list_laps(self, session_id: int | None = None) -> list[dict[str, Any]]:
         async with self._sf() as db:

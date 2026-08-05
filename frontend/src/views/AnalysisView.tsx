@@ -368,7 +368,12 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
         )}
         {cornerLaps.length > 0 && (
           <SidePanel title="Corner detail — cursor synced">
-            <CornerDetail laps={cornerLaps} cursorDist={cursorDist} step={compare!.step} />
+            <CornerDetail
+              laps={cornerLaps}
+              cursorDist={cursorDist}
+              step={compare!.step}
+              trackCorners={refEntry?.corners}
+            />
           </SidePanel>
         )}
         {refLap != null && (

@@ -100,3 +100,225 @@ def test_interp_edges() -> None:
     assert analysis._interp(xs, ys, -5.0) == 0.0
     assert analysis._interp(xs, ys, 15.0) == 100.0
     assert analysis._interp(xs, ys, 5.0) == pytest.approx(50.0)
+
+
+# --- corner detection --------------------------------------------------------
+
+
+def track_lap(segments, step: float = 2.0, speed_kmh: float = 180.0) -> dict:
+    """Build a lap from ('straight', length_m) / ('arc', radius_m, angle_deg)
+    segments. Positive angle turns left (CCW in x/z), negative right."""
+    import math
+
+    s = new_sample_store()
+    x, z, heading, dist = 0.0, 0.0, 0.0, 0.0
+
+    def emit() -> None:
+        s["dist"].append(round(dist, 2))
+        s["pos_x"].append(round(x, 3))
+        s["pos_z"].append(round(z, 3))
+        s["speed"].append(speed_kmh)
+        s["t"].append(dist / (speed_kmh / 3.6))
+
+    emit()
+    for seg in segments:
+        if seg[0] == "straight":
+            length = seg[1]
+            n = max(1, int(length / step))
+            for _ in range(n):
+                x += step * math.cos(heading)
+                z += step * math.sin(heading)
+                dist += step
+                emit()
+        else:
+            _, radius, angle_deg = seg
+            arc_len = abs(math.radians(angle_deg)) * radius
+            n = max(2, int(arc_len / step))
+            dh = math.radians(angle_deg) / n
+            for _ in range(n):
+                heading += dh
+                x += step * math.cos(heading)
+                z += step * math.sin(heading)
+                dist += step
+                emit()
+    return s
+
+
+def test_corners_straight_line_has_none() -> None:
+    lap = track_lap([("straight", 2000)])
+    assert analysis.detect_corners(lap) == []
+
+
+def test_corners_single_90_degree_turn() -> None:
+    lap = track_lap([("straight", 400), ("arc", 100, 90), ("straight", 400)])
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 1
+    c = corners[0]
+    assert c["n"] == 1
+    assert c["direction"] == "R"  # positive heading delta renders as a right-hander
+    assert 60 <= c["angle_deg"] <= 120
+    # apex roughly mid-arc: arc spans 400..557
+    assert 400 <= c["apex_dist"] <= 560
+
+
+def test_corners_s_section_is_two_corners() -> None:
+    lap = track_lap(
+        [("straight", 300), ("arc", 90, 80), ("arc", 90, -80), ("straight", 300)]
+    )
+    corners = analysis.detect_corners(lap)
+    assert [c["direction"] for c in corners] == ["R", "L"]
+    assert [c["n"] for c in corners] == [1, 2]
+
+
+def test_corners_hairpin_with_mid_dip_is_one_corner() -> None:
+    # 180° hairpin whose curvature briefly relaxes mid-arc (double-apex):
+    # two 85° arcs joined by a ~42 m near-straight interlude (real GT7
+    # double-apex complexes contain 50-80 m low-curvature interludes).
+    lap = track_lap(
+        [
+            ("straight", 400),
+            ("arc", 60, 85),
+            ("arc", 1200, 2),  # low-curvature interlude, same direction
+            ("arc", 60, 85),
+            ("straight", 400),
+        ]
+    )
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 1
+    assert corners[0]["angle_deg"] > 120
+
+
+def test_corners_numbered_in_track_order() -> None:
+    lap = track_lap(
+        [
+            ("straight", 300),
+            ("arc", 80, 90),
+            ("straight", 500),
+            ("arc", 70, -120),
+            ("straight", 500),
+            ("arc", 90, 60),
+            ("straight", 300),
+        ]
+    )
+    corners = analysis.detect_corners(lap)
+    assert [c["n"] for c in corners] == [1, 2, 3]
+    dists = [c["apex_dist"] for c in corners]
+    assert dists == sorted(dists)
+    assert [c["direction"] for c in corners] == ["R", "L", "R"]
+
+
+def test_corners_shallow_kink_ignored() -> None:
+    # 10° bend at huge radius: a kink, not a corner
+    lap = track_lap([("straight", 500), ("arc", 500, 10), ("straight", 500)])
+    assert analysis.detect_corners(lap) == []
+
+
+def test_corners_spin_arc_dropped() -> None:
+    # A 420° loop (spin) must not be numbered
+    lap = track_lap(
+        [("straight", 400), ("arc", 80, 90), ("straight", 200), ("arc", 20, 420),
+         ("straight", 200), ("arc", 80, -90), ("straight", 400)]
+    )
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 2
+    assert all(c["angle_deg"] <= 300 for c in corners)
+
+
+def test_corners_wraparound_stitch() -> None:
+    # Lap starts mid-corner: the same physical corner appears at the very
+    # start and very end; it must be counted once.
+    lap = track_lap(
+        [
+            ("arc", 80, 45),  # second half of the start/finish corner
+            ("straight", 600),
+            ("arc", 80, 90),
+            ("straight", 600),
+            ("arc", 80, 45),  # first half of the start/finish corner
+        ]
+    )
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 2
+
+
+def test_corners_degenerate_inputs() -> None:
+    assert analysis.detect_corners({}) == []
+    assert analysis.detect_corners({"dist": [], "pos_x": [], "pos_z": [], "speed": []}) == []
+    short = track_lap([("straight", 10)])
+    assert analysis.detect_corners(short) == []
+    # non-monotonic dist must not crash
+    lap = track_lap([("straight", 300), ("arc", 80, 90), ("straight", 300)])
+    lap["dist"][50] = lap["dist"][49]  # duplicate
+    lap["dist"][120] = lap["dist"][119] - 5  # backwards
+    assert isinstance(analysis.detect_corners(lap), list)
+    # unequal lengths must not crash
+    lap2 = track_lap([("straight", 300), ("arc", 80, 90), ("straight", 300)])
+    lap2["speed"] = lap2["speed"][:-30]
+    assert isinstance(analysis.detect_corners(lap2), list)
+
+
+def test_corners_min_speed_reported() -> None:
+    lap = track_lap([("straight", 400), ("arc", 100, 90), ("straight", 400)])
+    # dip the speed inside the corner
+    for i, d in enumerate(lap["dist"]):
+        if 420 <= d <= 540:
+            lap["speed"][i] = 90.0
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 1
+    assert corners[0]["min_speed"] == pytest.approx(90.0, abs=1.0)
+
+
+def test_corners_merge_across_long_interlude() -> None:
+    """A ~73 m low-curvature interlude (real double-apex complexes contain
+    50-80 m ones) is long enough that segmentation splits the arc — the
+    merge stage must recombine it. Guards _merge_arcs against regressions."""
+    lap = track_lap(
+        [
+            ("straight", 400),
+            ("arc", 60, 85),
+            ("arc", 1200, 3.5),  # ~73 m near-straight, same direction
+            ("arc", 60, 85),
+            ("straight", 400),
+        ]
+    )
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 1
+    assert corners[0]["angle_deg"] > 120
+
+
+def test_corners_split_by_start_line_survives_significance_filter() -> None:
+    """A 40° corner split 20/20 across the start/finish line: each half is
+    below the 25° significance threshold, so stitching must happen first."""
+    lap = track_lap(
+        [
+            ("arc", 150, 20),  # second half of the start/finish corner
+            ("straight", 700),
+            ("arc", 80, 90),
+            ("straight", 700),
+            ("arc", 150, 20),  # first half of the start/finish corner
+        ]
+    )
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 2
+    # The ±16 m curvature window is blind at the lap edges, so the stitched
+    # angle reads low (~27° of the true 40°) — surviving the 25° filter is
+    # the behavior under test.
+    angles = sorted(c["angle_deg"] for c in corners)
+    assert 25.0 <= angles[0] <= 45.0
+
+
+def test_corners_two_distinct_corners_near_line_not_stitched() -> None:
+    """Two separate corners ~120 m apart across the start line must stay two
+    (the stitch tolerance matches the mid-lap 90 m merge gap, not double)."""
+    lap = track_lap(
+        [
+            ("straight", 60),
+            ("arc", 80, 60),
+            ("straight", 700),
+            ("arc", 80, 90),
+            ("straight", 700),
+            ("arc", 80, 60),
+            ("straight", 60),
+        ]
+    )
+    corners = analysis.detect_corners(lap)
+    assert len(corners) == 3

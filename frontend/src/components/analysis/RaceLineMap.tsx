@@ -12,6 +12,10 @@ import type { CompareLapEntry } from "@/lib/types";
 
 const ZONE_COLORS = [CHART_COLORS.brake, CHART_COLORS.coast, CHART_COLORS.throttle];
 
+// Numbered circles are readable up to about this many corners in view;
+// beyond that (or fully zoomed out on a long track) they collapse to dots.
+const MAX_NUMBERED_CORNERS = 30;
+
 function zoneOf(throttle: number, brake: number): number {
   if (brake >= 1) return 0;
   if (throttle >= 1) return 2;
@@ -159,6 +163,39 @@ export function RaceLineMap({
           z: 5,
         },
       );
+
+      // Auto-numbered corners (detected on the reference lap). Numbered
+      // circles while the view shows a readable amount; plain dots otherwise.
+      const corners = ref.entry.corners ?? [];
+      const cornersInView = corners.filter(
+        (c) => !zoomRange || (c.apex_dist >= zoomRange[0] && c.apex_dist <= zoomRange[1]),
+      );
+      const numbered =
+        cornersInView.length > 0 && cornersInView.length <= MAX_NUMBERED_CORNERS;
+      if (cornersInView.length > 0) {
+        series.push({
+          id: "corners",
+          type: "scatter",
+          data: cornersInView.map((c) => ({
+            value: [c.apex_x, c.apex_z],
+            name: String(c.n),
+          })),
+          symbolSize: numbered ? 15 : 5,
+          itemStyle: numbered
+            ? { color: "#14171c", borderColor: CHART_COLORS.label, borderWidth: 1 }
+            : { color: CHART_COLORS.label, opacity: 0.85 },
+          label: {
+            show: numbered,
+            position: "inside",
+            formatter: "{b}",
+            color: "#e5e7eb",
+            fontSize: 9,
+            fontWeight: "bold",
+          },
+          silent: true,
+          z: 4, // above the race line dots, below peak/valley markers & cursors
+        });
+      }
     }
 
     // One synced cursor dot per lap, in the lap's color (reference white).
@@ -241,6 +278,14 @@ export function RaceLineMap({
         <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-coast" />coast</span>
         <span className="text-warn">▲ peak</span>
         <span className="text-[#c084fc]">▼ valley</span>
+        {(ref?.entry.corners?.length ?? 0) > 0 && (
+          <span>
+            <i className="mr-1 inline-block h-2.5 w-2.5 rounded-full border border-ink-dim text-center align-middle text-[7px] leading-[9px]">
+              1
+            </i>
+            corner
+          </span>
+        )}
       </div>
     </div>
   );

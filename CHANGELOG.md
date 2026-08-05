@@ -3,6 +3,35 @@
 Notable changes to GT7 Datalogger. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Auto-numbered corners on the track map**: corners are detected from the
+  reference lap's racing-line signed curvature (hysteresis segmentation,
+  direction-aware split/merge, start/finish wrap stitching, apex at the
+  curvature-weighted centroid) and numbered from the start line, GT7 Data
+  Logger-style. Numbered circles while ≤ 30 corners are in view, dots beyond;
+  the Corner Detail widget shows the current corner (e.g. `T5 R`) while
+  scrubbing. Detection parameters were tuned against real GT7 laps for
+  identical counts and < 30 m apex drift across laps of the same track.
+
+### Fixed
+
+- **Pit out-laps no longer poison the session best / live delta**: a short out-lap
+  (GT7 reports a time for it, but it covers only part of the track with a
+  pit-exit-anchored distance axis) could become the delta reference — the live
+  delta then glitched for the first fraction of the next lap and froze on a bogus
+  ~lap-sized fallback value. Laps now only count for best when their distance span
+  matches the session's longest lap (85 %), and a full lap invalidates a partial
+  "best" retroactively.
+- **Fuel projection survives race restarts**: recent laps are filtered by car
+  (not recording session), so a restart keeps the previous stint's consumption
+  data — you get a range estimate from the first meters instead of after a full
+  lap, which matters in races with aggressive fuel multipliers. Partial-lap
+  outliers (a lap consuming < 50 % of the window max, i.e. pit out-laps) are
+  excluded from the average.
+
 ## [0.3.0] - 2026-08-04
 
 ### Added

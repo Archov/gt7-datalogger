@@ -6,6 +6,7 @@ LapProcessor (see SAMPLE_COLUMNS in laps.py).
 
 from __future__ import annotations
 
+import math
 from bisect import bisect_left
 from dataclasses import dataclass
 
@@ -147,6 +148,213 @@ def speed_peaks_valleys(
             i += w
         i += 1
     return {"peaks": peaks, "valleys": valleys}
+
+
+# --- Corner detection -------------------------------------------------------
+
+# Parameters empirically tuned against real GT7 laps (5 sessions, road courses
+# + a banked oval): the goal is IDENTICAL corner counts and <30 m apex drift
+# across laps of the same track — numbered corners that renumber between laps
+# are useless. The hysteresis band is deliberately narrow: K_HI above ~0.0035
+# loses banked/high-speed corners entirely, K_LO below ~0.002 sinks into the
+# road-noise floor and bleeds adjacent corners together.
+CORNER_STEP_M = 2.0  # uniform resample grid for curvature
+CORNER_HALF_WIN_M = 16.0  # heading measured over ±this many meters
+CORNER_K_HI = 0.0030  # rad/m — |curvature| to enter a corner (~330 m radius)
+CORNER_K_LO = 0.0022  # rad/m — |curvature| to stay in one
+CORNER_END_GAP_M = 40.0  # below K_LO for this long ends the segment
+CORNER_MERGE_GAP_M = 90.0  # same-direction arcs closer than this merge
+CORNER_NOISE_ANGLE_DEG = 12.0  # arcs below this are noise, dropped pre-merge
+CORNER_MIN_ANGLE_DEG = 25.0  # final significance threshold
+CORNER_MAX_ANGLE_DEG = 300.0  # beyond this it's a spin, not a corner
+
+
+def _wrap_angle(a: float) -> float:
+    """Wrap to (-pi, pi]."""
+    while a <= -math.pi:
+        a += 2 * math.pi
+    while a > math.pi:
+        a -= 2 * math.pi
+    return a
+
+
+@dataclass(slots=True)
+class _Arc:
+    start: int  # indices into the resampled grid
+    end: int  # inclusive
+    sign: int
+    angle: float  # total heading change, radians (signed)
+
+
+def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
+    """Auto-numbered corners from the racing line's signed curvature.
+
+    Pipeline (each stage exists because the naive version failed on real
+    laps — see docs/internals/analysis-math.md):
+    resample to a uniform grid → signed curvature from wrapped chord-heading
+    deltas → hysteresis segmentation that splits on direction flips → drop
+    sub-noise arcs BEFORE merging (a surviving opposite blip would block
+    merges on some laps only) → merge same-direction arcs across short gaps
+    (a hairpin whose curvature dips mid-arc is one corner) → keep significant
+    arcs → apex at the curvature-weighted centroid (min speed sits at the
+    segment edge and wanders ~100 m between laps).
+    """
+    dist = samples.get("dist") or []
+    xs = samples.get("pos_x") or []
+    zs = samples.get("pos_z") or []
+    speed = samples.get("speed") or []
+    n = min(len(dist), len(xs), len(zs), len(speed) or len(dist))
+    if n < 8:
+        return []
+    speed = speed[:n] if speed else [0.0] * n
+
+    # Strictly increasing distance only — duplicates/backwards points (pause
+    # edges, imports) break interpolation.
+    keep = [0]
+    for i in range(1, n):
+        if dist[i] > dist[keep[-1]]:
+            keep.append(i)
+    if len(keep) < 8 or dist[keep[-1]] - dist[keep[0]] < 8 * CORNER_STEP_M:
+        return []
+    d = [dist[i] for i in keep]
+    px = [xs[i] for i in keep]
+    pz = [zs[i] for i in keep]
+    sp = [speed[i] for i in keep]
+
+    # Uniform 2 m grid decouples curvature from the 60 Hz speed-dependent
+    # sample spacing.
+    total = d[-1] - d[0]
+    m = int(total / CORNER_STEP_M) + 1
+    grid = [d[0] + i * CORNER_STEP_M for i in range(m)]
+    gx = [_interp(d, px, g) for g in grid]
+    gz = [_interp(d, pz, g) for g in grid]
+    gs = [_interp(d, sp, g) for g in grid]
+
+    # Signed curvature: wrapped delta between the chord headings of the two
+    # half-windows either side of each point, divided by the half-span.
+    w = max(1, int(CORNER_HALF_WIN_M / CORNER_STEP_M))
+    curv = [0.0] * m
+    for i in range(w, m - w):
+        dx0, dz0 = gx[i] - gx[i - w], gz[i] - gz[i - w]
+        dx1, dz1 = gx[i + w] - gx[i], gz[i + w] - gz[i]
+        if (dx0 == 0 and dz0 == 0) or (dx1 == 0 and dz1 == 0):
+            continue
+        dh = _wrap_angle(math.atan2(dz1, dx1) - math.atan2(dz0, dx0))
+        curv[i] = dh / (w * CORNER_STEP_M)
+
+    arcs = _segment_arcs(curv)
+    # Noise arcs are discarded BEFORE merging so they cannot block a merge.
+    arcs = [a for a in arcs if abs(math.degrees(a.angle)) >= CORNER_NOISE_ANGLE_DEG]
+    arcs = _merge_arcs(arcs)
+    # Stitch BEFORE the significance filter: a corner split by the start line
+    # must be judged on its combined angle, not per half (a 40° corner split
+    # 20/20 would otherwise vanish). The spin cap also applies post-stitch.
+    arcs = _stitch_wraparound(arcs, m)
+    arcs = [
+        a
+        for a in arcs
+        if CORNER_MIN_ANGLE_DEG <= abs(math.degrees(a.angle)) <= CORNER_MAX_ANGLE_DEG
+    ]
+
+    corners: list[dict[str, float | int | str]] = []
+    for a in sorted(arcs, key=lambda a: _apex_index(a, curv)):
+        i = _apex_index(a, curv)
+        corners.append(
+            {
+                "n": len(corners) + 1,
+                "apex_dist": round(grid[i], 1),
+                "apex_x": round(gx[i], 1),
+                "apex_z": round(gz[i], 1),
+                "entry_dist": round(grid[a.start], 1),
+                "exit_dist": round(grid[a.end], 1),
+                # Positive heading delta is CCW in raw x/z, but the map (and
+                # GT7's own view) renders z inverted — that's a right-hander.
+                "direction": "R" if a.sign > 0 else "L",
+                "min_speed": round(min(gs[a.start : a.end + 1]), 1),
+                "angle_deg": round(abs(math.degrees(a.angle)), 1),
+            }
+        )
+    return corners
+
+
+def _segment_arcs(curv: list[float]) -> list[_Arc]:
+    """Hysteresis segmentation of the curvature series, split on sign flips."""
+    end_gap = int(CORNER_END_GAP_M / CORNER_STEP_M)
+    arcs: list[_Arc] = []
+    i = 0
+    m = len(curv)
+    while i < m:
+        if abs(curv[i]) <= CORNER_K_HI:
+            i += 1
+            continue
+        sign = 1 if curv[i] > 0 else -1
+        start = i
+        last_active = i
+        angle = 0.0
+        while i < m:
+            k = curv[i]
+            if k * sign > 0 and abs(k) >= CORNER_K_LO:
+                last_active = i
+                angle += k * CORNER_STEP_M
+                i += 1
+            elif k * -sign > CORNER_K_HI:
+                break  # strong opposite curvature: an S — new corner
+            elif i - last_active >= end_gap:
+                break  # faded out for long enough
+            else:
+                i += 1
+        arcs.append(_Arc(start=start, end=last_active, sign=sign, angle=angle))
+    return arcs
+
+
+def _merge_arcs(arcs: list[_Arc]) -> list[_Arc]:
+    """Merge same-direction arcs across short gaps (double-apex complexes)."""
+    gap = int(CORNER_MERGE_GAP_M / CORNER_STEP_M)
+    out: list[_Arc] = []
+    for a in arcs:
+        prev = out[-1] if out else None
+        if prev is not None and prev.sign == a.sign and a.start - prev.end <= gap:
+            prev.end = a.end
+            prev.angle += a.angle
+        else:
+            out.append(_Arc(a.start, a.end, a.sign, a.angle))
+    return out
+
+
+def _stitch_wraparound(arcs: list[_Arc], m: int) -> list[_Arc]:
+    """A lap that starts mid-corner shows one physical corner split across
+    the start/finish line; merge the two halves into one corner.
+
+    Each half may sit at most half the merge gap from its lap edge, so the
+    combined tolerance matches the mid-lap merge distance. The larger half
+    keeps the corner's extent/apex (a wrapped extent isn't representable);
+    min_speed therefore covers only that half — a known approximation.
+    """
+    edge = int(CORNER_MERGE_GAP_M / 2 / CORNER_STEP_M)
+    if len(arcs) < 2:
+        return arcs
+    first, last = arcs[0], arcs[-1]
+    if (
+        first.sign == last.sign
+        and first.start <= edge
+        and m - 1 - last.end <= edge
+    ):
+        keep, other = (first, last) if abs(first.angle) >= abs(last.angle) else (last, first)
+        keep.angle += other.angle
+        return [keep, *arcs[1:-1]] if keep is first else arcs[1:]
+    return arcs
+
+
+def _apex_index(a: _Arc, curv: list[float]) -> int:
+    """Curvature-weighted centroid: stable within ~25 m across laps, where
+    the min-speed point wanders with braking for the NEXT corner."""
+    total = 0.0
+    weighted = 0.0
+    for i in range(a.start, a.end + 1):
+        w = abs(curv[i])
+        total += w
+        weighted += w * i
+    return round(weighted / total) if total > 0 else (a.start + a.end) // 2
 
 
 # --- Fuel map ---------------------------------------------------------------
