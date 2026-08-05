@@ -74,6 +74,7 @@ export interface LapSummary {
   max_water_temp?: number;
   max_oil_temp?: number;
   min_oil_pressure?: number; // -1 = unknown
+  counts_for_best?: boolean; // false = partial lap (pit out-lap)
   event_counts?: Record<string, number>;
 }
 

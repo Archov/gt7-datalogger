@@ -194,11 +194,14 @@ class TelemetryService:
 
         # A longer lap just proved the stored "best" was a partial out-lap:
         # forget it — comparing deltas against a fraction of the track (with
-        # a pit-exit-anchored distance axis) produces garbage.
+        # a pit-exit-anchored distance axis) produces garbage. The saved rows
+        # are re-flagged too, so DB best-lap aggregates (Sessions view,
+        # session-summary webhook) drop them as well.
         if lap.invalidated_best:
             self._session_best_ms = None
             self._prev_best_ms = None
             self._best_ref = None
+            await self.repo.mark_session_laps_partial(self.session_id, lap_id)
 
         # Remember the best BEFORE this lap: the live "Δ best" compares the
         # latest lap against it (comparing against a best that already
@@ -227,6 +230,8 @@ class TelemetryService:
             "session_id": self.session_id,
             "number": lap.number,
             "time_ms": lap.time_ms,
+            "car_id": lap.car_id,
+            "counts_for_best": lap.counts_for_best,
             "car_name": self.cars.name(lap.car_id),
             "fuel_consumed": round(lap.fuel_consumed, 3),
             "full_throttle_pct": round(lap.full_throttle_pct, 1),

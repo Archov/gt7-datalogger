@@ -15,13 +15,15 @@ export function projectStrategy(
 ): StrategyProjection | null {
   // Same car only (a race restart keeps the stint's laps; a car swap must
   // not inherit another car's consumption), and only laps that actually
-  // burned fuel.
+  // burned fuel. Prefer car_id (exact); fall back to car_name; only when a
+  // lap carries neither (demo data, legacy rows) is it accepted as-is.
+  const sameCar = (lap: LapSummary): boolean => {
+    if (lap.car_id != null && frame.car_id != null) return lap.car_id === frame.car_id;
+    if (lap.car_name && frame.car_name) return lap.car_name === frame.car_name;
+    return true;
+  };
   const recent = laps
-    .filter(
-      (lap) =>
-        lap.fuel_consumed > 0.01 &&
-        (!lap.car_name || !frame.car_name || lap.car_name === frame.car_name),
-    )
+    .filter((lap) => lap.fuel_consumed > 0.01 && sameCar(lap))
     .slice(0, 3);
   if (recent.length === 0) return null;
   // Drop partial laps (pit out-laps burn a fraction of a normal lap and

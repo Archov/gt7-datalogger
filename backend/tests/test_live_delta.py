@@ -144,6 +144,17 @@ async def test_partial_outlap_never_stays_the_reference(service) -> None:
     # out-lap (~+58 s, frozen for the rest of the lap).
     assert frame["prev_best_ms"] == -1
 
+    # The persisted aggregates must drop the partial lap too: the Sessions
+    # view and the session-summary webhook read best from the DB, not from
+    # the live service state.
+    sessions = await service.repo.list_sessions()
+    assert sessions[0]["best_lap_time_ms"] == 118_900
+    stats = await service.repo.session_lap_stats(service.session_id)
+    assert stats["best_ms"] == 118_900
+    laps = await service.repo.list_laps(service.session_id)
+    flags = {lap["number"]: lap["counts_for_best"] for lap in laps}
+    assert flags == {1: False, 2: True}
+
 
 async def test_later_pit_outlap_does_not_steal_best(service) -> None:
     await drive(service, lap=1, speed=40.0, ticks=300)

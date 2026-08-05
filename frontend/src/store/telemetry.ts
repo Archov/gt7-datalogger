@@ -65,12 +65,15 @@ export const useTelemetry = create<TelemetryState>((set) => {
           }));
           break;
         case "status":
+          set({ status: msg.data });
+          break;
         case "session":
           // Laps deliberately survive session boundaries: a race restart
           // opens a new session, and losing the previous stint's laps would
           // blank the fuel projection exactly when it matters (aggressive
-          // fuel-use races). projectStrategy filters by car instead.
-          set({ status: msg.data });
+          // fuel-use races). projectStrategy filters by car instead. The
+          // epoch still bumps so session/lap lists refresh promptly.
+          set((st) => ({ status: msg.data, lapEpoch: st.lapEpoch + 1 }));
           break;
       }
     };
