@@ -8,8 +8,10 @@ import type {
   FuelMapResult,
   LapSummary,
   LogRecord,
+  RaceEngineerDiagnostics,
   SessionSummary,
   Track,
+  VoiceCallout,
 } from "./types";
 
 // Admin token (only needed when the server sets GT7_ADMIN_TOKEN). Stored per
@@ -106,11 +108,23 @@ export const api = {
       patch: Partial<
         Pick<
           AdminSettings,
-          "ps_ip" | "source" | "log_level" | "webhook_url" | "webhook_events" | "packet_format"
+          | "ps_ip"
+          | "source"
+          | "log_level"
+          | "webhook_url"
+          | "webhook_events"
+          | "packet_format"
+          | "race_engineer"
+          | "race_engineer_verbosity"
+          | "race_engineer_categories"
+          | "race_engineer_units"
         >
       >,
     ) => send<AdminSettings>("/api/admin/settings", "PUT", patch),
     testWebhook: () => send<{ status: string }>("/api/admin/test-webhook", "POST"),
+    raceEngineer: () => get<RaceEngineerDiagnostics>("/api/admin/race-engineer"),
+    testCallout: (text: string) =>
+      send<VoiceCallout>("/api/admin/race-engineer/test", "POST", { text }),
     logs: (limit = 300, level?: string) =>
       get<LogRecord[]>(`/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
     clearLogs: () => send<{ status: string }>("/api/admin/logs", "DELETE"),

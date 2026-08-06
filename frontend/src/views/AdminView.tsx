@@ -8,7 +8,17 @@ import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Select } from "@/components/ui/Select";
 import { api, getAdminToken, setAdminToken } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
-import type { AdminSettings, AdminStats, LogRecord, WebhookEvent } from "@/lib/types";
+import {
+  CALLOUT_CATEGORIES,
+  type AdminSettings,
+  type AdminStats,
+  type CalloutCategory,
+  type LogRecord,
+  type RaceEngineerDiagnostics,
+  type SpokenUnits,
+  type Verbosity,
+  type WebhookEvent,
+} from "@/lib/types";
 import { useTelemetry } from "@/store/telemetry";
 import { toast } from "@/store/toasts";
 
@@ -163,6 +173,14 @@ export function AdminView() {
           )}
         </Panel>
 
+        {/* Race Engineer voice callouts */}
+        <Panel title="Race Engineer" subtitle="what the voice callouts may say">
+          {settings ? (
+            <RaceEngineerForm settings={settings} busy={busy} onApply={apply} flash={flash} />
+          ) : (
+            <div className="p-4 text-sm text-ink-dim">Loading…</div>
+          )}
+        </Panel>
       </div>
 
       {/* Overlay & dashboard layout builder */}
@@ -468,6 +486,200 @@ function WebhookForm({
           changes must hold for ~1 s so side-by-side battles don't spam.
         </p>
       </div>
+    </div>
+  );
+}
+
+function RaceEngineerForm({
+  settings,
+  busy,
+  onApply,
+  flash,
+}: {
+  settings: AdminSettings;
+  busy: string | null;
+  onApply: (patch: Parameters<typeof api.admin.updateSettings>[0], label: string) => void;
+  flash: (text: string, error?: boolean) => void;
+}) {
+  const [diag, setDiag] = useState<RaceEngineerDiagnostics | null>(null);
+
+  useEffect(() => {
+    const load = () => api.admin.raceEngineer().then(setDiag).catch(() => {});
+    load();
+    const t = window.setInterval(load, 5000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  function toggleCategory(category: CalloutCategory, on: boolean) {
+    const next = CALLOUT_CATEGORIES.filter((c) =>
+      c === category ? on : settings.race_engineer_categories.includes(c),
+    );
+    onApply({ race_engineer_categories: next }, "Callout categories");
+  }
+
+  return (
+    <div className="space-y-3 p-4">
+      <label className="flex cursor-pointer items-baseline gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="translate-y-px accent-sky-400"
+          checked={settings.race_engineer}
+          disabled={busy !== null}
+          onChange={(e) => onApply({ race_engineer: e.target.checked }, "Race Engineer")}
+        />
+        <span>Generate voice callouts</span>
+        <span className="text-[11px] text-ink-dim">
+          — detection only runs while a browser has voice enabled
+        </span>
+      </label>
+
+      <div>
+        <span className="mb-1 block text-xs text-ink-dim">
+          Maximum verbosity — the most any device may hear
+        </span>
+        <div className="flex gap-1">
+          {(["minimal", "race", "coach"] as Verbosity[]).map((mode) => (
+            <button
+              key={mode}
+              disabled={busy !== null || !settings.race_engineer}
+              className={`flex-1 rounded-md border px-2 py-1 text-xs capitalize ${
+                settings.race_engineer_verbosity === mode
+                  ? "border-accent/60 bg-accent/10 text-ink"
+                  : "border-edge bg-panel-2 text-ink-dim hover:text-ink"
+              }`}
+              onClick={() => onApply({ race_engineer_verbosity: mode }, "Verbosity")}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-[11px] text-ink-dim">
+          Each browser picks its own verbosity under this one. Lowering it here
+          puts those categories out of reach for every device — a driver set to
+          Coach still hears nothing the server does not produce.
+        </p>
+      </div>
+
+      <div>
+        <span className="mb-1 block text-xs text-ink-dim">
+          Spoken units — for braking points and speeds inside callouts
+        </span>
+        <div className="flex gap-1">
+          {(["metric", "imperial"] as SpokenUnits[]).map((unit) => (
+            <button
+              key={unit}
+              disabled={busy !== null || !settings.race_engineer}
+              className={`flex-1 rounded-md border px-2 py-1 text-xs ${
+                settings.race_engineer_units === unit
+                  ? "border-accent/60 bg-accent/10 text-ink"
+                  : "border-edge bg-panel-2 text-ink-dim hover:text-ink"
+              }`}
+              onClick={() => onApply({ race_engineer_units: unit }, "Spoken units")}
+            >
+              {unit === "metric" ? "meters / km per hour" : "feet / miles per hour"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <span className="mb-1 block text-xs text-ink-dim">Categories the server emits</span>
+        <div className="grid grid-cols-3 gap-x-3">
+          {CALLOUT_CATEGORIES.map((category) => (
+            <label key={category} className="flex cursor-pointer items-baseline gap-1.5 text-xs">
+              <input
+                type="checkbox"
+                className="translate-y-px accent-sky-400"
+                checked={settings.race_engineer_categories.includes(category)}
+                disabled={busy !== null || !settings.race_engineer}
+                onChange={(e) => toggleCategory(category, e.target.checked)}
+              />
+              <span className="capitalize">{category}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {diag && (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 border-t border-edge pt-3 font-tabular text-sm">
+          <Stat
+            k="Detection"
+            v={diag.active ? "running" : diag.enabled ? "idle" : "disabled"}
+            cls={diag.active ? "text-throttle" : undefined}
+          />
+          <Stat k="Voice-capable clients" v={String(diag.clients.length)} />
+          <Stat
+            k="Active speaker"
+            v={
+              diag.clients.find((c) => c.is_active_speaker)?.page ??
+              (diag.active_client_id ? "elsewhere" : "none")
+            }
+          />
+          <Stat k="Callouts emitted" v={String(diag.stats.emitted ?? 0)} />
+          <Stat k="Suppressed (cooldown)" v={String(diag.stats.suppressed_cooldown ?? 0)} />
+          <Stat k="Suppressed (duplicate)" v={String(diag.stats.suppressed_duplicate ?? 0)} />
+          <Stat k="Suppressed (category)" v={String(diag.stats.suppressed_category ?? 0)} />
+          <Stat
+            k="Spoken acks"
+            v={String(diag.acks.spoken ?? 0)}
+            cls={diag.acks.spoken ? "text-throttle" : undefined}
+          />
+          <Stat
+            k="Speech failures"
+            v={String(diag.acks.speech_error ?? 0)}
+            cls={diag.acks.speech_error ? "text-brake" : undefined}
+          />
+          <Stat k="Corners on reference lap" v={String(diag.corners)} />
+          <Stat k="Laps in fuel model" v={String(diag.lap_history)} />
+        </div>
+      )}
+      {diag?.last_ack_reason && (diag.acks.speech_error ?? 0) > 0 && (
+        <div className="rounded-md border border-brake/40 bg-brake/10 p-2 text-xs text-brake">
+          <span className="text-[10px] uppercase tracking-widest">Speech failing </span>
+          {diag.last_ack_reason} — the browser is receiving callouts but cannot play
+          them.
+        </div>
+      )}
+      {diag?.last_callout && (
+        <div className="rounded-md border border-edge bg-panel-2 p-2 text-xs">
+          <span className="text-[10px] uppercase tracking-widest text-ink-dim">
+            Last emitted{" "}
+          </span>
+          {diag.last_callout.text}
+        </div>
+      )}
+
+      <button
+        className="btn"
+        disabled={busy !== null}
+        onClick={async () => {
+          try {
+            await api.admin.testCallout("Race engineer test callout.");
+            flash("Test callout sent to connected browsers");
+          } catch (e) {
+            flash(e instanceof Error ? e.message : "Test callout failed", true);
+          }
+        }}
+      >
+        Send test callout
+      </button>
+      <p className="text-[11px] text-ink-dim">
+        Voice plays in the browser, never on the server — no audio hardware is
+        needed on a Raspberry Pi or in Docker. Enable it on{" "}
+        <a className="text-accent hover:underline" href="/dash" target="_blank" rel="noreferrer">
+          /dash
+        </a>{" "}
+        or on the standalone{" "}
+        <a
+          className="text-accent hover:underline"
+          href="/engineer"
+          target="_blank"
+          rel="noreferrer"
+        >
+          /engineer
+        </a>{" "}
+        page.
+      </p>
     </div>
   );
 }

@@ -6,7 +6,11 @@ view).
 
 ## Live strategy projection
 
-Computed in the browser from your most recent completed laps:
+Computed from your most recent completed laps, in **two places that must agree**:
+`frontend/src/lib/strategy.ts` (`projectStrategy`) drives the dashboard widgets, and
+`backend/app/processing/strategy.py` (`project_strategy`) drives the Race Engineer's
+spoken fuel callouts. Same window, same outlier rule, same arithmetic — change one and
+change the other, or the voice and the display will disagree about the same tank.
 
 ```
 recent        = last 3 completed laps for the CURRENT CAR that consumed > 0.01 L

@@ -1,0 +1,307 @@
+// Race Engineer client state: browser-local voice preferences (persisted),
+// live status from the server, and the speech queue that turns callouts into
+// speech. Only /dash and /engineer mount the voice client — the OBS overlay
+// receives the same events but must never speak (several open browser sources
+// would otherwise all talk at once).
+
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import {
+  MAX_QUEUE,
+  VoiceQueue,
+  speakTest,
+  speechSupported,
+  type QueuedCallout,
+  type SpeechOptions,
+} from "@/lib/speech";
+import {
+  CALLOUT_CATEGORIES,
+  VERBOSITY_CATEGORIES,
+  type CalloutAckStatus,
+  type CalloutCategory,
+  type RaceEngineerStatus,
+  type Verbosity,
+  type VoiceCallout,
+} from "@/lib/types";
+import { sendWs } from "@/lib/wsBus";
+
+const CLIENT_ID_KEY = "gt7.clientId";
+export const ENGINEER_SETTINGS_KEY = "gt7-race-engineer-settings-v1";
+export const TEST_PHRASE = "Race engineer enabled.";
+
+/** Stable per-browser identity, so a refresh keeps the active-speaker claim. */
+export function clientId(): string {
+  let id = localStorage.getItem(CLIENT_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(CLIENT_ID_KEY, id);
+  }
+  return id;
+}
+
+export type VoicePage = "dash" | "engineer";
+
+interface EngineerState {
+  // --- persisted preferences (this device only) ---
+  /** The user's stored preference. Speech also needs `audioReady`. */
+  enabled: boolean;
+  voiceURI: string;
+  lang: string;
+  volume: number;
+  rate: number;
+  pitch: number;
+  verbosity: Verbosity;
+  categories: CalloutCategory[];
+  captions: boolean;
+  muteWhenHidden: boolean;
+  /** Whether this device wants the speaker role when it connects. */
+  wantsSpeaker: boolean;
+
+  // --- runtime (not persisted) ---
+  /**
+   * A stored preference does not carry a browser's autoplay permission across
+   * a restart, so speech stays off until the user clicks Enable in this page
+   * load and a test utterance goes through.
+   */
+  audioReady: boolean;
+  supported: boolean;
+  page: VoicePage | null;
+  activeClientId: string;
+  serverStatus: RaceEngineerStatus | null;
+  lastSpoken: VoiceCallout | null;
+  /** Why the last utterance failed — the difference between "nothing is
+   *  happening" and "the browser refused to make a sound". */
+  speechError: string | null;
+  /** Utterances the engine actually started, and ones that failed. */
+  spokenCount: number;
+  failedCount: number;
+  speaking: VoiceCallout | null;
+  queue: QueuedCallout[];
+  history: VoiceCallout[];
+
+  setEnabled: (on: boolean) => void;
+  setVoice: (voiceURI: string, lang: string) => void;
+  setAudio: (patch: Partial<Pick<EngineerState, "volume" | "rate" | "pitch">>) => void;
+  setVerbosity: (v: Verbosity) => void;
+  toggleCategory: (c: CalloutCategory, on: boolean) => void;
+  setCaptions: (on: boolean) => void;
+  setMuteWhenHidden: (on: boolean) => void;
+  setPage: (page: VoicePage | null) => void;
+  claimSpeaker: () => void;
+  releaseSpeaker: () => void;
+  testVoice: () => void;
+  /** Click handler for "Enable Race Engineer": arms audio, claims, registers. */
+  enableVoice: () => Promise<void>;
+  handleCallout: (callout: VoiceCallout) => void;
+  applyServerStatus: (status: RaceEngineerStatus) => void;
+  setActiveClient: (id: string) => void;
+  sendCapabilities: () => void;
+  isActiveSpeaker: () => boolean;
+}
+
+function speechOptions(s: EngineerState): SpeechOptions {
+  return {
+    voiceURI: s.voiceURI,
+    lang: s.lang,
+    volume: s.volume,
+    rate: s.rate,
+    pitch: s.pitch,
+  };
+}
+
+/** The single queue instance, reachable from the disconnect path. */
+let voiceQueue: VoiceQueue | null = null;
+
+export function clearVoiceQueue(): void {
+  voiceQueue?.clear();
+}
+
+export const useEngineer = create<EngineerState>()(
+  persist(
+    (set, get) => {
+      const queue = new VoiceQueue({
+        enabled: () => get().enabled && get().audioReady,
+        activeSpeaker: () => get().isActiveSpeaker(),
+        categoryEnabled: (c) =>
+          get().categories.includes(c) &&
+          VERBOSITY_CATEGORIES[get().verbosity].includes(c),
+        muted: () => get().muteWhenHidden && document.hidden,
+        options: () => speechOptions(get()),
+        onAck: (calloutId, status, reason) => {
+          sendWs({
+            type: "voice_callout_ack",
+            data: {
+              callout_id: calloutId,
+              client_id: clientId(),
+              status,
+              spoken_at_ms: Date.now(),
+              ...(reason ? { reason } : {}),
+            },
+          });
+          if (status === "spoken") {
+            const spoken = get().history.find((c) => c.id === calloutId) ?? null;
+            if (spoken) set({ lastSpoken: spoken });
+          }
+        },
+        onSpeaking: (callout) => set({ speaking: callout }),
+        onQueue: (items) => set({ queue: items }),
+        onSpeechStarted: () =>
+          set((st) => ({
+            speechError: null,
+            audioReady: true,
+            spokenCount: st.spokenCount + 1,
+          })),
+        onSpeechFailure: (reason) =>
+          set((st) => ({ speechError: reason, failedCount: st.failedCount + 1 })),
+      });
+      voiceQueue = queue;
+
+      return {
+        enabled: false,
+        voiceURI: "",
+        lang: "en-US",
+        volume: 1,
+        rate: 1.05,
+        pitch: 1,
+        verbosity: "race",
+        categories: [...CALLOUT_CATEGORIES],
+        captions: true,
+        muteWhenHidden: false,
+        wantsSpeaker: true,
+
+        audioReady: false,
+        supported: speechSupported(),
+        page: null,
+        activeClientId: "",
+        serverStatus: null,
+        lastSpoken: null,
+        speechError: null,
+        spokenCount: 0,
+        failedCount: 0,
+        speaking: null,
+        queue: [],
+        history: [],
+
+        setEnabled: (on) => {
+          set({ enabled: on });
+          if (!on) {
+            queue.clear();
+            set({ audioReady: false });
+            get().releaseSpeaker();
+          }
+          get().sendCapabilities();
+        },
+        setVoice: (voiceURI, lang) => set({ voiceURI, lang }),
+        setAudio: (patch) => set(patch),
+        setVerbosity: (verbosity) => set({ verbosity }),
+        toggleCategory: (c, on) =>
+          set((s) => ({
+            categories: CALLOUT_CATEGORIES.filter((cat) =>
+              cat === c ? on : s.categories.includes(cat),
+            ),
+          })),
+        setCaptions: (captions) => set({ captions }),
+        setMuteWhenHidden: (muteWhenHidden) => set({ muteWhenHidden }),
+        setPage: (page) => set({ page }),
+
+        claimSpeaker: () => {
+          set({ wantsSpeaker: true });
+          sendWs({ type: "claim_voice_output", data: { client_id: clientId() } });
+        },
+        releaseSpeaker: () => {
+          set({ wantsSpeaker: false });
+          queue.clear();
+          sendWs({ type: "release_voice_output", data: { client_id: clientId() } });
+        },
+
+        testVoice: () => {
+          set({ speechError: null });
+          queue.resetFailures();
+          speakTest(TEST_PHRASE, speechOptions(get()), {
+            onStart: () => set({ speechError: null, audioReady: true }),
+            onError: (reason) => set({ speechError: reason }),
+          });
+        },
+
+        enableVoice: async () => {
+          const supported = speechSupported();
+          set({ supported, enabled: true });
+          if (supported) {
+            // The test utterance is also the browser's audio unlock, so it has
+            // to happen inside the click, not after an await. Whether it is
+            // ALLOWED to make a sound is only known when it starts — until
+            // then "ready" would be a guess, and a wrong one is what makes a
+            // silent setup impossible to diagnose.
+            set({ speechError: null, audioReady: true });
+            queue.resetFailures();
+            speakTest(TEST_PHRASE, speechOptions(get()), {
+              onStart: () => {
+                set({ speechError: null });
+                get().sendCapabilities();
+              },
+              onError: (reason) => {
+                set({ speechError: reason });
+                get().sendCapabilities();
+              },
+            });
+          }
+          get().sendCapabilities();
+          get().claimSpeaker();
+        },
+
+        handleCallout: (callout) => {
+          set((s) => ({ history: [callout, ...s.history].slice(0, 20) }));
+          queue.enqueue(callout);
+        },
+
+        applyServerStatus: (status) =>
+          set({ serverStatus: status, activeClientId: status.active_client_id }),
+
+        setActiveClient: (id) => {
+          set({ activeClientId: id });
+          if (id !== clientId()) queue.clear();
+        },
+
+        sendCapabilities: () => {
+          const s = get();
+          if (!s.page) return; // pages that never speak don't register
+          sendWs({
+            type: "client_capabilities",
+            data: {
+              client_id: clientId(),
+              page: s.page,
+              voice_supported: s.supported,
+              voice_enabled: s.enabled && s.audioReady,
+            },
+          });
+        },
+
+        isActiveSpeaker: () => {
+          const s = get();
+          return s.activeClientId !== "" && s.activeClientId === clientId();
+        },
+      };
+    },
+    {
+      name: ENGINEER_SETTINGS_KEY,
+      // Runtime state (queue, speaking, server status) must never be restored
+      // from disk — callouts are live events, not saved notifications.
+      partialize: (s) => ({
+        enabled: s.enabled,
+        voiceURI: s.voiceURI,
+        lang: s.lang,
+        volume: s.volume,
+        rate: s.rate,
+        pitch: s.pitch,
+        verbosity: s.verbosity,
+        categories: s.categories,
+        captions: s.captions,
+        muteWhenHidden: s.muteWhenHidden,
+        wantsSpeaker: s.wantsSpeaker,
+      }),
+    },
+  ),
+);
+
+export { MAX_QUEUE };
+export type { CalloutAckStatus };

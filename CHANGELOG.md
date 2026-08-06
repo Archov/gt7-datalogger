@@ -5,6 +5,68 @@ Notable changes to GT7 Datalogger. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-06
+
+### Added
+
+- **Race Engineer — spoken callouts.** The datalogger now talks. Conditions are
+  detected on the backend and spoken by the browser (`/dash`, or the new standalone
+  `/engineer` page) with the Web Speech API, so no audio device, text-to-speech
+  package or cloud service is needed on the Raspberry Pi, NAS or Docker host, and
+  nothing leaves the machine.
+  - **Race**: lap times, personal bests, sustained pace loss, final lap and halfway,
+    positions gained and lost.
+  - **Strategy**: fuel range, fuel shortage against the race distance, and the pit
+    window — the same projection the dashboard widgets use, ported to the backend.
+  - **Vehicle health**: water and oil temperature, oil pressure, tire temperature and
+    balance, with the same limits the dashboard colours use.
+  - **Coaching**: braking points against your best lap ("You are braking early into
+    turn four, about fifteen meters"), repeated lockups and wheelspin by corner,
+    bottoming out, and where a lap lost its time ("You lost three tenths in turn six.
+    You braked eighteen meters earlier and carried five kilometers per hour less at
+    the apex").
+  - Reliability before frequency: persistence windows, hysteresis, per-event
+    cooldowns, semantic deduplication, severity escalation that bypasses a cooldown
+    when something gets worse, and an expiry on every message — a stale callout is
+    dropped rather than spoken. Around one to three messages a lap.
+  - Numbers are spelled out for speech ("1:32.487" → "one minute thirty-two point
+    five"), in metric or imperial (`GT7_RACE_ENGINEER_UNITS`), so the wording is
+    identical on every browser and voice.
+  - **One device speaks.** Pages register over the WebSocket and claim voice output,
+    so a laptop, a phone and several OBS sources can all be open without a chorus.
+    The OBS overlay may never claim it.
+  - **Verbosity and categories per device** (minimal / race / coach, plus eleven
+    individual categories), under a server-side ceiling in **Admin → Race Engineer**.
+    The panel lists what every category says, in the callouts' own words.
+  - **It says why it is silent**: whether the browser has permission, whether this
+    device is the speaker, whether the backend is producing anything, and — when the
+    speech engine refuses — the engine's own reason, in the panel, in the admin
+    diagnostics and in the server log. Where speech is unavailable the dashboard is
+    unaffected and callouts appear as on-screen captions.
+  - Coaching waits until several laps agree on the track's distance, so braking
+    points and corner losses are never computed against a half-recorded lap.
+  - Fully opt-in: detection does not run until a browser enables voice, so the
+    feature costs nothing for anyone who never turns it on.
+- **Simulator scenarios** (`GT7_SIM_SCENARIO`): `race`, `fuel_shortage`,
+  `overheating` and `oil_pressure` stage situations for testing callouts without a
+  console. The default `practice` behaviour is unchanged.
+
+### Fixed
+
+- **A lap the logger only half-saw could win the session.** Capture starting mid-lap,
+  or a lap out of the garage, still gets a lap time from GT7 — a *short* one — so it
+  became the session best, the live-delta reference and the basis of every lap
+  comparison. The 0.3.1 guard compared each lap against the longest lap of the session
+  at 85 %, which let a lap covering 88 % of the track through.
+  Recalibrated against 850 recorded laps: laps are judged against the **median** span
+  of recent laps at **97 %** (98 % of real laps sit within 0.5 % of that median, while
+  the partials measured 40-95 %). The yardstick is no longer the longest lap — 12 of
+  those laps ran *longer* than their session median, one by 44 %, and a single such
+  lap made every normal lap after it look partial. Every lap of a session is now
+  re-judged as new laps arrive (in both directions), and dropping a partial lap
+  promotes the fastest remaining full lap instead of blanking the best until the next
+  one arrives.
+
 ## [0.3.1] - 2026-08-05
 
 ### Added

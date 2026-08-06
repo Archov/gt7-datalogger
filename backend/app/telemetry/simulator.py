@@ -12,6 +12,7 @@ import logging
 import math
 import random
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from app.models import SimulatorFlags, TelemetryPacket
 from app.telemetry.packet import build_packet, parse_packet
@@ -22,6 +23,39 @@ TICK = 1 / 60
 TRACK_LENGTH = 3200.0  # meters
 CAR_ID = 3298  # Shelby GT350R '16 in the bundled cars.csv
 FUEL_PER_LAP = 1.8
+
+
+@dataclass(slots=True, frozen=True)
+class SimScenario:
+    """Optional overrides that stage a situation worth talking about.
+
+    The defaults reproduce the original free-practice simulation exactly —
+    many tests depend on it, so a scenario only ever adds to that behavior.
+    Selected with GT7_SIM_SCENARIO; see SCENARIOS below.
+    """
+
+    race_laps: int = 0  # 0 = open practice (no race distance)
+    fuel_start: float = 100.0
+    fuel_rate: float = 1.0  # multiplier on FUEL_PER_LAP
+    temp_offset: float = 0.0  # °C added to water and oil
+    oil_pressure_scale: float = 1.0
+    race_positions: int = 0  # 0 = no position reporting (GT7 sends -1)
+
+
+# Scenarios for exercising Race Engineer callouts without a console.
+SCENARIOS: dict[str, SimScenario] = {
+    "practice": SimScenario(),
+    # A short race: final lap, halfway, and positions changing under you.
+    "race": SimScenario(race_laps=6, race_positions=8),
+    # Not enough fuel to finish: pit window, then the shortage warning.
+    "fuel_shortage": SimScenario(race_laps=10, fuel_start=9.0, fuel_rate=2.5),
+    "overheating": SimScenario(race_laps=6, temp_offset=35.0),
+    "oil_pressure": SimScenario(race_laps=6, oil_pressure_scale=0.2),
+}
+
+
+def scenario_for(name: str) -> SimScenario:
+    return SCENARIOS.get(name, SCENARIOS["practice"])
 
 
 def _speed_profile(s: float, jitter: float) -> float:
@@ -40,8 +74,13 @@ def _speed_profile(s: float, jitter: float) -> float:
 
 
 class SimTelemetrySource:
-    def __init__(self, on_packet: Callable[[TelemetryPacket], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        on_packet: Callable[[TelemetryPacket], Awaitable[None]],
+        scenario: SimScenario | None = None,
+    ) -> None:
         self._on_packet = on_packet
+        self._scenario = scenario or SCENARIOS["practice"]
         self._task: asyncio.Task[None] | None = None
         self._packet_count = 0
 
@@ -71,12 +110,16 @@ class SimTelemetrySource:
 
     async def _run(self) -> None:
         rng = random.Random(42)
+        sim = self._scenario
         distance = 0.0
         lap = 1
         lap_start_tick = 0
         tick = 0
         speed = 40.0
-        fuel = 100.0
+        fuel = sim.fuel_start
+        # Mid-pack start, gaining a place every other lap: enough for the
+        # position detector to have something to stabilize on.
+        position = max(1, sim.race_positions // 2) if sim.race_positions else -1
         best_ms = -1
         last_ms = -1
         lap_jitter = rng.uniform(-1.5, 1.5)
@@ -101,17 +144,25 @@ class SimTelemetrySource:
                 brake = 0
                 speed = target
             distance += speed * TICK
-            fuel -= FUEL_PER_LAP * (speed * TICK) / TRACK_LENGTH
+            fuel -= FUEL_PER_LAP * sim.fuel_rate * (speed * TICK) / TRACK_LENGTH
             if fuel <= 0:
-                fuel = 100.0
+                fuel = sim.fuel_start
 
             new_lap = int(distance // TRACK_LENGTH) + 1
             if new_lap != lap:
                 last_ms = int((tick - lap_start_tick) * TICK * 1000)
                 best_ms = last_ms if best_ms < 0 else min(best_ms, last_ms)
+                if sim.race_laps and new_lap > sim.race_laps:
+                    # Checkered flag: start the race again rather than driving
+                    # cool-down laps forever. The lap counter reset is exactly
+                    # what a real race restart looks like to the pipeline.
+                    distance, new_lap, fuel, best_ms = 0.0, 1, sim.fuel_start, -1
+                    position = sim.race_positions // 2 if sim.race_positions else -1
                 lap = new_lap
                 lap_start_tick = tick
                 lap_jitter = rng.uniform(-1.5, 1.5)
+                if position > 1 and lap % 2 == 0:
+                    position -= 1
 
             # Position on a rounded-rectangle circuit
             angle = s * 2 * math.pi
@@ -174,10 +225,12 @@ class SimTelemetrySource:
                 boost=0.0,
                 tire_temps=(70 + speed / 4, 71 + speed / 4, 68 + speed / 5, 69 + speed / 5),
                 current_lap=lap,
-                total_laps=0,
+                total_laps=sim.race_laps,
                 best_lap_time_ms=best_ms,
                 last_lap_time_ms=last_ms,
                 day_progression_ms=int(tick * TICK * 1000),
+                race_position=position,
+                total_positions=sim.race_positions,
                 flags=int(flags),
                 current_gear=gear,
                 suggested_gear=15,
@@ -185,9 +238,9 @@ class SimTelemetrySource:
                 brake=brake,
                 wheel_rps=rps,
                 suspension=suspension,
-                oil_pressure=6.5 - rpm / 9000 * 1.5,
-                water_temp=84.0 + (tick % 36000) / 36000 * 8,
-                oil_temp=88.0 + (tick % 36000) / 36000 * 12,
+                oil_pressure=(6.5 - rpm / 9000 * 1.5) * sim.oil_pressure_scale,
+                water_temp=84.0 + (tick % 36000) / 36000 * 8 + sim.temp_offset,
+                oil_temp=88.0 + (tick % 36000) / 36000 * 12 + sim.temp_offset,
                 gear_ratios=(3.2, 2.3, 1.8, 1.4, 1.15, 0.95),
                 transmission_top_speed=290.0,
                 car_id=CAR_ID,

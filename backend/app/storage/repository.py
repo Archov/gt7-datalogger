@@ -155,18 +155,19 @@ class Repository:
                 "car_id": car_id if car_id is not None else 0,
             }
 
-    async def mark_session_laps_partial(self, session_id: int, keep_lap_id: int) -> None:
-        """Flag every lap of the session except `keep_lap_id` as partial.
+    async def mark_session_laps_partial(self, session_id: int, numbers: list[int]) -> None:
+        """Set which laps of a session are partial — and which are not.
 
-        Called when a newly completed lap's distance span proves the earlier
-        laps were partial (out-laps): by the span invariant, every prior lap
-        of the session is shorter than 85 % of the new baseline.
+        Called when later laps change the verdict on an earlier one. The whole
+        session is rewritten rather than only the newly-condemned laps, because
+        the yardstick moves in both directions: the lap that looked short next
+        to one wide lap is full again once a third lap settles the distance.
         """
         async with self._sf() as db:
             await db.execute(
                 update(LapRow)
-                .where(LapRow.session_id == session_id, LapRow.id != keep_lap_id)
-                .values(counts_for_best=False)
+                .where(LapRow.session_id == session_id)
+                .values(counts_for_best=LapRow.number.notin_(numbers) if numbers else True)
             )
             await db.commit()
 

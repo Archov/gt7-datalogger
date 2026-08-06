@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from app import logbuffer
 from app.api.auth import require_admin
 from app.notify import ALL_EVENTS
+from app.race_engineer import CATEGORIES
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -48,6 +49,12 @@ async def get_settings(request: Request) -> dict[str, Any]:
         "webhook_url": s.webhook_url,
         "webhook_events": [e for e in ALL_EVENTS if e in s.enabled_webhook_events()],
         "packet_format": s.packet_format,
+        "race_engineer": s.race_engineer,
+        "race_engineer_verbosity": s.race_engineer_verbosity,
+        "race_engineer_categories": [
+            c for c in CATEGORIES if c in s.enabled_callout_categories()
+        ],
+        "race_engineer_units": s.race_engineer_units,
     }
 
 
@@ -61,6 +68,12 @@ class SettingsPayload(BaseModel):
         | None
     ) = None
     packet_format: Literal["A", "B", "~", "C"] | None = None
+    race_engineer: bool | None = None
+    race_engineer_verbosity: Literal["minimal", "race", "coach"] | None = None
+    # Validated against app.race_engineer.CATEGORIES below rather than a
+    # Literal, so the category list has exactly one definition.
+    race_engineer_categories: list[str] | None = None
+    race_engineer_units: Literal["metric", "imperial"] | None = None
 
 
 @router.put("/settings")
@@ -101,7 +114,72 @@ async def put_settings(request: Request, payload: SettingsPayload) -> dict[str, 
         service.notifier.enabled = service.settings.enabled_webhook_events()
         await service.repo.set_setting("webhook_events", spec)
         log.info("webhook events: %s", spec or "none")
+    await _apply_race_engineer(service, payload)
     return await get_settings(request)
+
+
+async def _apply_race_engineer(service: TelemetryService, payload: SettingsPayload) -> None:
+    """Race Engineer settings: env default, admin override, DB-persisted."""
+    changed = False
+    if payload.race_engineer is not None:
+        service.settings.race_engineer = payload.race_engineer
+        await service.repo.set_setting("race_engineer", str(payload.race_engineer).lower())
+        changed = True
+    if payload.race_engineer_verbosity is not None:
+        service.settings.race_engineer_verbosity = payload.race_engineer_verbosity
+        await service.repo.set_setting(
+            "race_engineer_verbosity", payload.race_engineer_verbosity
+        )
+        changed = True
+    if payload.race_engineer_categories is not None:
+        unknown = [c for c in payload.race_engineer_categories if c not in CATEGORIES]
+        if unknown:
+            raise HTTPException(400, f"unknown callout categories: {', '.join(unknown)}")
+        spec = ",".join(dict.fromkeys(payload.race_engineer_categories))
+        service.settings.race_engineer_categories = spec
+        await service.repo.set_setting("race_engineer_categories", spec)
+        changed = True
+    if payload.race_engineer_units is not None:
+        service.settings.race_engineer_units = payload.race_engineer_units
+        await service.repo.set_setting("race_engineer_units", payload.race_engineer_units)
+        changed = True
+    if not changed:
+        return
+    service.engineer.configure(
+        enabled=service.settings.race_engineer,
+        verbosity=service.settings.race_engineer_verbosity,
+        categories=service.settings.enabled_callout_categories(),
+        units=service.settings.race_engineer_units,
+    )
+    service.publish_engineer_status()
+    log.info(
+        "race engineer: %s, %s verbosity",
+        "enabled" if service.settings.race_engineer else "disabled",
+        service.settings.race_engineer_verbosity,
+    )
+
+
+# --- race engineer diagnostics ----------------------------------------------
+
+
+@router.get("/race-engineer")
+async def race_engineer(request: Request) -> dict[str, Any]:
+    service = svc(request)
+    return {**service.engineer.diagnostics(), **service.engineer_status()}
+
+
+class TestCalloutPayload(BaseModel):
+    event_type: str = Field(default="test", max_length=64)
+    text: str = Field(default="Race engineer test callout.", max_length=300)
+
+
+@router.post("/race-engineer/test")
+async def test_callout(request: Request, payload: TestCalloutPayload) -> dict[str, Any]:
+    """Inject a callout so voice output can be verified without driving."""
+    service = svc(request)
+    callout = service.engineer.test_callout(payload.event_type, payload.text)
+    service.publish_callout(callout)
+    return callout.to_dict()
 
 
 @router.post("/test-webhook")

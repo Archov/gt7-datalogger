@@ -70,8 +70,10 @@ Delta values are milliseconds, **positive = slower than the reference**.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/admin/settings` | current runtime settings |
-| PUT | `/api/admin/settings` | `{ps_ip?, source?, log_level?, webhook_url?}` — applied live, persisted to the DB |
+| PUT | `/api/admin/settings` | `{ps_ip?, source?, log_level?, webhook_url?, webhook_events?, packet_format?, race_engineer?, race_engineer_verbosity?, race_engineer_categories?, race_engineer_units?}` — applied live, persisted to the DB |
 | POST | `/api/admin/test-webhook` | send a test notification |
+| GET | `/api/admin/race-engineer` | Race Engineer diagnostics: counters, detector state, connected voice clients, last callout |
+| POST | `/api/admin/race-engineer/test` | `{text?, event_type?}` — inject a callout into every connected browser |
 | GET | `/api/admin/logs` | `limit` (≤2000), `level` — recent log records from the ring buffer |
 | DELETE | `/api/admin/logs` | clear the ring buffer |
 | GET | `/api/admin/stats` | uptime, DB stats, source stats, client count, LAN IP |
@@ -82,8 +84,11 @@ Delta values are milliseconds, **positive = slower than the reference**.
 
 ## WebSocket — `/ws/live`
 
-One endpoint, server-push only (client messages are ignored/pings). Every message is
-`{"type": ..., "data": ...}` with four types:
+One endpoint. Traffic is overwhelmingly server-push; the only client → server
+messages are the Race Engineer voice protocol (below), and anything else a client
+sends is ignored. Every message is `{"type": ..., "data": ...}`.
+
+Server → browser:
 
 - **`telemetry`** — the live frame, throttled to `GT7_WS_RATE` (default 30 Hz):
   speed, RPM + redline, gear + suggested gear, throttle/brake %, boost, fuel level and
@@ -95,9 +100,32 @@ One endpoint, server-push only (client messages are ignored/pings). Every messag
   event counts. The UI uses this to refresh lists live.
 - **`session`** — sent on new session, track identification, or track naming.
 - **`status`** — sent on connect and whenever the source or console IP changes.
+- **`voice_callout`** — a Race Engineer callout: `id`, `event_type`, `text`,
+  `category`, `priority` (0–100), `created_at_ms`, `expires_at_ms`, `ttl_ms`,
+  `interrupt`, `dedupe_key`, `message_key`/`message_args` (localization) and
+  `metadata`. Sent to every client; only the active speaker should voice it.
+- **`voice_output_status`** — `{active_client_id}`: which browser may speak.
+- **`race_engineer_status`** — feature enabled/active, verbosity, emitted categories,
+  and the connected voice-capable clients.
 
-On connect the client immediately receives a `status` message. The frontend
-auto-reconnects every 2 s if the socket closes.
+Browser → server (Race Engineer only; never token-gated, and unparseable messages are
+ignored so older pages keep working):
+
+| Message | Data |
+| --- | --- |
+| `client_capabilities` | `client_id`, `page`, `voice_supported`, `voice_enabled` |
+| `claim_voice_output` | `client_id` |
+| `release_voice_output` | `client_id` |
+| `voice_callout_ack` | `callout_id`, `client_id`, `status`, `spoken_at_ms`, `reason?` |
+
+Ack statuses: `spoken`, `expired`, `duplicate`, `disabled`, `category_disabled`,
+`not_active_speaker`, `interrupted` (stopped on purpose — a critical callout, a
+disconnect, or the user pressing Test voice) and `speech_error`, which carries the
+engine's own `reason`. Acks are diagnostics only and never gate the pipeline.
+
+On connect the client immediately receives a `status` and a `race_engineer_status`
+message — never past callouts, which are live events. The frontend auto-reconnects
+every 2 s if the socket closes.
 
 !!! note "CORS"
     CORS is wide open (`*`) — the API is designed for a trusted home network, not

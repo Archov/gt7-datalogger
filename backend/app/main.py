@@ -16,6 +16,7 @@ from app import logbuffer
 from app.api import admin, layouts, routes, ws
 from app.config import get_settings
 from app.processing.cars import CarDatabase
+from app.race_engineer import VERBOSITY_MODES
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
 from app.storage.repository import Repository
@@ -55,6 +56,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.webhook_url = stored["webhook_url"]
     if "webhook_events" in stored:
         settings.webhook_events = stored["webhook_events"]
+    if "race_engineer" in stored:
+        settings.race_engineer = stored["race_engineer"] == "true"
+    if stored.get("race_engineer_verbosity") in VERBOSITY_MODES:
+        settings.race_engineer_verbosity = stored["race_engineer_verbosity"]
+    if "race_engineer_categories" in stored:
+        settings.race_engineer_categories = stored["race_engineer_categories"]
+    if stored.get("race_engineer_units") in ("metric", "imperial"):
+        settings.race_engineer_units = stored["race_engineer_units"]
 
     cars = CarDatabase()
     cars.load(settings.cars_csv)
@@ -101,6 +110,10 @@ def create_app() -> FastAPI:
 
         @app.get("/dash", include_in_schema=False)
         async def dash_page() -> FileResponse:
+            return FileResponse(FRONTEND_DIST / "index.html")
+
+        @app.get("/engineer", include_in_schema=False)
+        async def engineer_page() -> FileResponse:
             return FileResponse(FRONTEND_DIST / "index.html")
 
         app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="spa")
