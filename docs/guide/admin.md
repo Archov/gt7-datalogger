@@ -72,13 +72,15 @@ and setting `GT7_ADMIN_TOKEN` ensures only you can change the URL.
 
 ## Race Engineer
 
-Server-side control of the spoken callouts: the feature switch, the **default
+Server-side control of the spoken callouts: the feature switch, the **maximum
 verbosity**, the **spoken units** (meters/km-h or feet/mph, used by the braking-point
 and apex-speed coaching), and which callout **categories** the backend emits at all.
 
-These are a ceiling, not a default — a browser can narrow what it speaks but never
-widen it, so a category switched off here never reaches any device. Voice, volume,
-rate and per-device toggles belong to each browser, on `/dash` or `/engineer`.
+Both settings are a **ceiling**, not a default: a browser picks its own verbosity and
+categories underneath them, but can never exceed them, so anything switched off here
+never reaches any device. Out of the box the ceiling is *Coach* — the server produces
+everything and each device decides what it wants. Voice, volume, rate and per-device
+toggles belong to each browser, on `/dash` or `/engineer`.
 
 The diagnostics block shows whether detection is running (it only runs while a
 browser has voice enabled), how many voice-capable clients are connected, which one

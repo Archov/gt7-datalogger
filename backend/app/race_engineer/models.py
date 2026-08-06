@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Callout categories the user can toggle individually, in display order.
-# Kept in sync with the frontend (lib/raceEngineer.ts) and the docs.
+# Mirrored by hand in frontend/src/lib/types.ts (CALLOUT_CATEGORIES) and
+# described for users in frontend/src/lib/calloutCatalog.ts — which a test in
+# tests/test_race_engineer.py checks against the SPECS table below.
 CATEGORIES = (
     "system",
     "lap",
@@ -29,7 +31,10 @@ CATEGORIES = (
 )
 
 VERBOSITY_MODES = ("minimal", "race", "coach")
-DEFAULT_VERBOSITY = "race"
+# Matches the shipped GT7_RACE_ENGINEER_VERBOSITY default. The server setting is
+# a ceiling over every device, so the default has to be the maximum — capping it
+# lower here would put categories out of reach with no visible cause.
+DEFAULT_VERBOSITY = "coach"
 
 # Verbosity is a coarse preset over the same category set: each mode is the
 # set of categories it speaks. Explicit per-category toggles narrow it further.

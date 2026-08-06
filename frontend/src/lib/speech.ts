@@ -48,6 +48,9 @@ export interface QueuedCallout {
   callout: VoiceCallout;
   /** Local deadline — server clocks are not trusted (see VoiceCallout.ttl_ms). */
   deadline: number;
+  /** Arrival order. Sorting is stable, so without this two callouts of equal
+   *  priority keep insertion order and the queue cap drops the NEWER one. */
+  seq: number;
 }
 
 export function speechSupported(): boolean {
@@ -104,7 +107,7 @@ export function insertByPriority(
   item: QueuedCallout,
 ): QueuedCallout[] {
   const next = [...queue, item];
-  next.sort((a, b) => b.callout.priority - a.callout.priority);
+  next.sort((a, b) => b.callout.priority - a.callout.priority || b.seq - a.seq);
   return next.slice(0, MAX_QUEUE);
 }
 
@@ -130,6 +133,7 @@ export class VoiceQueue {
   private speaking: VoiceCallout | null = null;
   private watchdog: number | undefined;
   private failures = 0;
+  private arrived = 0;
 
   constructor(private hooks: QueueHooks) {}
 
@@ -146,7 +150,7 @@ export class VoiceQueue {
       return this.ack(callout, "duplicate");
     }
     const ttl = callout.ttl_ms > 0 ? callout.ttl_ms : 10_000;
-    const item: QueuedCallout = { callout, deadline: now + ttl };
+    const item: QueuedCallout = { callout, deadline: now + ttl, seq: this.arrived++ };
 
     if (callout.interrupt && callout.priority >= INTERRUPT_PRIORITY) {
       // Critical: stop mid-sentence. Whatever was being said matters less
@@ -240,8 +244,10 @@ export class VoiceQueue {
     this.hooks.onQueue(this.queue);
 
     if (!speechSupported()) {
-      // Visual-only mode: the banner still shows it, so this is not an error.
+      // Visual-only mode: the banner still shows it, so this is not an error —
+      // but the rest of the queue still has to be drained and acknowledged.
       this.ack(item.callout, "speech_error", "this browser has no speech synthesis");
+      this.pump();
       return;
     }
     if (this.failures >= MAX_CONSECUTIVE_FAILURES) {
