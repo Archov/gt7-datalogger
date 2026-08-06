@@ -98,15 +98,35 @@ just-completed lap (`prev_best_ms`). The live "Δ best" readout compares against
 The `personal_best` webhook fires only when an existing session best is actually beaten —
 never on the first lap of a session.
 
-**Partial-lap guard.** A pit out-lap can pass the structural checks (GT7 reports a
-time for it, and it lasts more than 10 s) while covering only part of the track —
-with a distance axis anchored at the pit exit, not the line. Such a lap must never
-become the session best or the live-delta reference: comparing positions against it
-produces garbage deltas that then freeze into a bogus end-of-lap fallback. So a lap
-only *counts for best* when its distance span is within **85 %** of the longest
-counted lap of the session, and when a clearly longer lap arrives it **invalidates**
-an earlier partial "best" (the first full lap takes over even if slower). The guard
-is span-relative, so it needs no knowledge of the track's true length.
+**Partial-lap guard.** A lap the logger only saw part of — a pit out-lap, or capture
+starting mid-lap — passes every structural check above (GT7 reports a time for it, and
+it lasts more than 10 s) while covering less of the track, with a distance axis
+anchored wherever recording began rather than at the line. Its reported time is
+*shorter* than a real lap's, so left alone it wins the session, becomes the live-delta
+reference, and turns every position-based comparison built on it into garbage.
+
+`_apply_span_guard` judges each lap by its distance span against recent laps, so it
+needs no knowledge of the track's true length. Two properties matter more than the
+numbers:
+
+- **Every lap of the session is re-judged when a new one arrives.** The yardstick
+  moves as laps accumulate, so a verdict fixed at lap time goes stale — a lap that
+  looked full next to one short lap is partial once three laps agree, and vice versa.
+  Stored rows are rewritten in both directions (`mark_session_laps_partial`).
+- **Dropping a lap promotes the fastest remaining full lap**, rather than blanking the
+  best until the next one arrives.
+
+Calibrated against 850 recorded laps of real driving:
+
+| | Value | Why |
+| --- | --- | --- |
+| Yardstick | median span of the last 5 laps | 12 of those laps ran *longer* than their session median (one by 44 %, an off-track excursion), and against a max-based yardstick one such lap makes every normal lap after it look partial |
+| Full-lap ratio | 97 % | 98 % of laps sit within 0.5 % of their session median; no legitimate lap fell below 94.7 %, while real partials measured 40-95 % |
+| Ratio before 3 laps | 93 % | with two laps "this one is 6 % short" and "that one ran 6 % wide" are the same picture, so only a flagrant shortfall counts until a third lap settles it |
+
+`span_confirmed` — several laps agreeing on the distance — is exported for consumers
+that compare laps *by position*: the Race Engineer's coaching callouts stay silent
+until it is true (see [Race Engineer callouts](race-engineer.md)).
 
 ## What "invalid lap" means here
 

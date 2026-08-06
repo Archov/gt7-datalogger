@@ -171,3 +171,74 @@ async def test_later_pit_outlap_does_not_steal_best(service) -> None:
     ref = service._best_ref
     assert ref is not None
     assert ref["dist"][-1] == pytest.approx(300 * 40 / 60, rel=0.05)
+
+
+async def test_slightly_short_first_lap_loses_the_best_to_a_full_lap(service) -> None:
+    """The failure this guard exists for, in the shape it was reported.
+
+    Capture starting a little late (or a garage out-lap) gives lap 1 a GT7 lap
+    time that is genuinely faster — because it is not a whole lap. Recorded
+    like that it wins the session, poisons the delta reference and every
+    coaching comparison built on it. Measured against 850 real laps, a lap
+    12 % short is never a real lap.
+    """
+    await drive(service, lap=1, speed=40.0, ticks=264)  # ~88 % of a full lap
+    await service._on_packet(packet(lap=2, speed=40.0, last_ms=49_812))
+    assert service._session_best_ms == 49_812  # provisional: nothing to compare to
+
+    await drive(service, lap=2, speed=40.0, ticks=300)
+    await service._on_packet(packet(lap=3, speed=40.0, last_ms=52_162))
+    await drive(service, lap=3, speed=40.0, ticks=300)
+    await service._on_packet(packet(lap=4, speed=40.0, last_ms=52_019))
+
+    # The short lap is gone from every surface, and the fastest FULL lap wins.
+    assert service._session_best_ms == 52_019
+    assert service.processor.session is not None
+    assert service.processor.session.best_lap_time_ms == 52_019
+    laps = await service.repo.list_laps(service.session_id)
+    assert {lap["number"]: lap["counts_for_best"] for lap in laps} == {1: False, 2: True, 3: True}
+    stats = await service.repo.session_lap_stats(service.session_id)
+    assert stats["best_ms"] == 52_019
+
+
+async def test_dropping_a_partial_lap_promotes_the_fastest_remaining_lap(service) -> None:
+    """Not the next lap to come — the best of the laps already driven."""
+    await drive(service, lap=1, speed=40.0, ticks=264)  # short
+    await service._on_packet(packet(lap=2, speed=40.0, last_ms=87_034))
+    await drive(service, lap=2, speed=40.0, ticks=300)  # full, and the quickest
+    await service._on_packet(packet(lap=3, speed=40.0, last_ms=89_756))
+    await drive(service, lap=3, speed=40.0, ticks=300)  # full, slower
+    await service._on_packet(packet(lap=4, speed=40.0, last_ms=91_198))
+
+    assert service._session_best_ms == 89_756
+
+
+async def test_one_wide_lap_does_not_condemn_the_rest(service) -> None:
+    """A lap driven long (an excursion) must not make normal laps look short."""
+    await drive(service, lap=1, speed=40.0, ticks=340)  # wide lap, 13 % longer
+    await service._on_packet(packet(lap=2, speed=40.0, last_ms=95_000))
+    await drive(service, lap=2, speed=40.0, ticks=300)
+    await service._on_packet(packet(lap=3, speed=40.0, last_ms=90_000))
+    await drive(service, lap=3, speed=40.0, ticks=300)
+    await service._on_packet(packet(lap=4, speed=40.0, last_ms=91_000))
+
+    laps = await service.repo.list_laps(service.session_id)
+    flags = {lap["number"]: lap["counts_for_best"] for lap in laps}
+    assert flags == {1: True, 2: True, 3: True}
+    assert service._session_best_ms == 90_000
+
+
+async def test_span_is_unconfirmed_until_laps_agree(service) -> None:
+    """Coaching waits for this: two laps cannot establish a track's length."""
+    seen: list[bool] = []
+    original = service._on_lap
+
+    async def spy(lap):
+        seen.append(lap.span_confirmed)
+        await original(lap)
+
+    service.processor.on_lap = spy
+    for lap in (1, 2, 3):
+        await drive(service, lap=lap, speed=40.0, ticks=300)
+        await service._on_packet(packet(lap=lap + 1, speed=40.0, last_ms=90_000))
+    assert seen == [False, False, True]

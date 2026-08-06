@@ -19,6 +19,11 @@ working directory.
 | `GT7_WS_RATE` | `30` | Live stream rate to the browser (Hz); capture stays at ~60 Hz |
 | `GT7_WEBHOOK_URL` | *(empty)* | Webhook for race notifications (also settable in Admin) |
 | `GT7_WEBHOOK_EVENTS` | *(all)* | Comma-separated events to send: `personal_best`, `session_summary`, `overtake`, `position_lost`, `off_road` (toggles in Admin) |
+| `GT7_RACE_ENGINEER` | `true` | Generate voice callouts. Detection only runs while a browser has voice enabled, so leaving this on costs nothing (also settable in Admin) |
+| `GT7_RACE_ENGINEER_VERBOSITY` | `coach` | The **most** any device may hear: `minimal`, `race` or `coach`. Each browser chooses its own verbosity under this ceiling, so the default produces everything and lets the device decide; lowering it puts those categories out of reach for every device |
+| `GT7_RACE_ENGINEER_CATEGORIES` | *(all)* | Comma-separated callout categories: `system`, `lap`, `pace`, `race`, `position`, `fuel`, `strategy`, `engine`, `tires`, `chassis`, `coaching` |
+| `GT7_RACE_ENGINEER_UNITS` | `metric` | Units spoken inside callouts (`metric` = meters and km/h, `imperial` = feet and mph) |
+| `GT7_SIM_SCENARIO` | `practice` | With `GT7_SOURCE=sim`: `practice`, `race`, `fuel_shortage`, `overheating`, `oil_pressure` — staged situations for testing callouts |
 | `GT7_LOG_LEVEL` | `INFO` | Root log level (also settable in Admin) |
 | `GT7_ADMIN_TOKEN` | *(empty)* | When set, the Admin pages and all destructive/mutating API calls require this token via the `X-API-Key` header; overlay/dash/read endpoints stay open. Empty = fully open (LAN-trusted) |
 | `GT7_CORS_ORIGINS` | *(empty)* | Comma-separated origins allowed for cross-origin API use. Empty (default) sends no CORS headers — the bundled UI is same-origin and needs none |
@@ -61,3 +66,11 @@ Set a webhook URL (environment variable or **Admin** view) to get:
 Every event type has its own toggle in the Admin view (`GT7_WEBHOOK_EVENTS` via env).
 Discord webhook URLs receive a rich embed; any other URL receives plain JSON.
 See [Admin view](../guide/admin.md) for details.
+
+## Race Engineer voice
+
+Spoken callouts are generated on the server and **played by the browser** — no audio
+device, speaker, or text-to-speech package is needed on the Raspberry Pi, NAS, or
+Docker host. Server-side settings (feature switch, verbosity, categories) live in the
+Admin view or the environment variables above; voice, volume, rate and per-category
+toggles are per-device browser settings. See [Race Engineer](../guide/race-engineer.md).

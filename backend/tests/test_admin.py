@@ -117,3 +117,54 @@ async def test_log_level_change(client) -> None:
     assert resp.status_code == 200
     assert logging.getLogger().level == logging.DEBUG
     await c.put("/api/admin/settings", json={"log_level": "INFO"})
+
+
+async def test_race_engineer_settings_apply_and_persist(client) -> None:
+    c, service = client
+    resp = await c.put(
+        "/api/admin/settings",
+        json={
+            "race_engineer_verbosity": "coach",
+            "race_engineer_categories": ["engine", "strategy"],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["race_engineer_verbosity"] == "coach"
+    assert body["race_engineer_categories"] == ["strategy", "engine"]  # CATEGORIES order
+    # Applied live, not just stored.
+    assert service.engineer.verbosity == "coach"
+    assert service.engineer.effective_categories == {"engine", "strategy"}
+    stored = await service.repo.get_settings()
+    assert stored["race_engineer_categories"] == "engine,strategy"
+
+
+async def test_race_engineer_rejects_unknown_categories(client) -> None:
+    c, _ = client
+    resp = await c.put(
+        "/api/admin/settings", json={"race_engineer_categories": ["engine", "nonsense"]}
+    )
+    assert resp.status_code == 400
+
+
+async def test_race_engineer_diagnostics_and_test_callout(client) -> None:
+    c, service = client
+    data = (await c.get("/api/admin/race-engineer")).json()
+    assert data["enabled"] is True
+    assert data["active"] is False  # no browser has voice enabled
+    assert data["stats"]["emitted"] == 0
+
+    resp = await c.post("/api/admin/race-engineer/test", json={"text": "Radio check."})
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "Radio check."
+    assert service.engineer.diagnostics()["stats"]["emitted"] == 1
+
+
+async def test_spoken_units_apply_live(client) -> None:
+    c, service = client
+    resp = await c.put("/api/admin/settings", json={"race_engineer_units": "imperial"})
+    assert resp.status_code == 200
+    assert resp.json()["race_engineer_units"] == "imperial"
+    assert service.engineer.ctx.units == "imperial"
+    stored = await service.repo.get_settings()
+    assert stored["race_engineer_units"] == "imperial"

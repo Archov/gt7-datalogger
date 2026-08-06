@@ -105,6 +105,11 @@ per-feature guides, how every calculation works, and the API reference.
   (persisted in the database), live log viewer with level filtering, connection
   diagnostics, database stats with compact/clear actions, and one-click car-database
   updates.
+- **Race Engineer voice callouts** — spoken lap times, personal bests, fuel range, pit
+  windows, position changes, engine warnings and corner coaching, generated on the
+  backend and **spoken by the browser** (`/dash` or `/engineer`) — no speaker, audio
+  device, or TTS package needed on the Pi or server. Opt-in per device, one active
+  speaker at a time, with verbosity modes and per-category toggles.
 - **Webhook / Discord notifications** — personal bests, session summaries, overtakes,
   positions lost, and off-road excursions posted to any webhook URL (Discord URLs get
   a rich embed, others plain JSON), each event individually toggleable.

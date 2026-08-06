@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from statistics import median
 
 from app.models import TelemetryPacket
 
@@ -23,13 +24,30 @@ MIN_LAP_TICKS = 600
 # reset, long outage) — extrapolating a minute of distance at current speed
 # would corrupt the lap worse than under-counting one frame does.
 MAX_FRAME_GAP = 60
-# Partial-lap guard: an out-lap from the pits covers only part of the track
-# (and its distance axis starts at the pit exit, not the line), so it must
-# never become the session best or the live-delta reference. A lap "counts"
-# only when its distance span is within this fraction of the longest counted
-# lap; a lap longer than the counted span by the inverse margin proves the
-# earlier "best" was partial and invalidates it.
-FULL_LAP_SPAN_RATIO = 0.85
+# Partial-lap guard: a lap the logger only saw part of — an out-lap from the
+# pits, or capture starting mid-lap — covers less of the track than a real
+# lap, so it must never become the session best, the live-delta reference or
+# a coaching reference. GT7 still reports a lap time for it, and that time is
+# short, which is exactly what makes it win.
+#
+# Calibrated against 850 real recorded laps: 98 % of laps sit within 0.5 % of
+# their session's median span, while genuinely partial laps came in at 39-95 %.
+# 97 % therefore separates them with a wide margin on both sides.
+FULL_LAP_SPAN_RATIO = 0.97
+# Spans are compared against the MEDIAN of recent laps, not the longest: 12 of
+# those 850 laps ran longer than the median (one by 44 % — an off-track
+# excursion), and a single such lap would make every normal lap after it look
+# partial against a max-based yardstick.
+SPAN_WINDOW = 5
+# Below this the median can still be swung by one bad lap, so the longest lap
+# seen is the better guess at the real track length.
+SPANS_FOR_MEDIAN = 3
+# Until then, two laps that disagree are ambiguous: "this lap is 6 % short"
+# and "that lap ran 6 % wide" look identical, and a third lap settles it. The
+# looser ratio holds off on those while still catching the flagrant case —
+# no legitimate lap in 850 recorded ones came in below 94 % of its session,
+# and the real partials sat at 88 %, 88 %, 81 %, 65 % and 40 %.
+PROVISIONAL_SPAN_RATIO = 0.93
 
 # Columnar per-tick series kept for each lap. Column order matters for the
 # frontend; keep in sync with frontend/src/lib/types.ts.
@@ -94,6 +112,18 @@ class CompletedLap:
     # the session best, and whether it proved the previous best was partial.
     counts_for_best: bool = True
     invalidated_best: bool = False
+    # Lap numbers in this session that now look partial — re-flagged in the DB
+    # when `invalidated_best` fires. Only the short ones: a longer lap does not
+    # prove that every earlier lap was partial.
+    partial_lap_numbers: list[int] = field(default_factory=list)
+    # True once enough full laps agree on the track's length for the span
+    # check to be trustworthy. Coaching waits for this.
+    span_confirmed: bool = False
+    # Session best over the full laps BEFORE this one (-1 = none). Personal
+    # bests and the delta widget's end-of-lap fallback need the best that
+    # excludes the lap being reported — a best that already contains it can
+    # never show an improvement.
+    session_best_before_ms: int = -1
 
     def compute_metrics(self) -> None:
         # Imported laps from older export versions may lack the newer columns;
@@ -160,7 +190,12 @@ class LapProcessor:
     _last_pid: int = -1
     _pending_dt: int = 1  # frames covered by the next sample (1 = no drops)
     _dropped_frames: int = 0
-    _best_span: float = 0.0  # distance span of the longest counted lap
+    # (lap number, distance span, time) for every lap of the session, and the
+    # lap numbers currently judged partial. Both are needed to *recompute* the
+    # best whenever the yardstick moves: dropping a partial lap must promote
+    # the fastest remaining real lap, not blank the best until the next one.
+    _laps: list[tuple[int, float, int]] = field(default_factory=list)
+    _partial: set[int] = field(default_factory=set)
     _fuel_start: float = 0.0
     _last_packet: TelemetryPacket | None = None
     # Engine-health aggregates for the lap in progress (not per-tick columns)
@@ -208,7 +243,8 @@ class LapProcessor:
                 started_at=datetime.now(UTC).isoformat(),
             )
             self._current_lap = -1
-            self._best_span = 0.0
+            self._laps.clear()
+            self._partial.clear()
             await self.on_session(self._session)
 
         if p.current_lap != self._current_lap:
@@ -268,25 +304,83 @@ class LapProcessor:
             assert self._session is not None
             self._session.lap_count += 1
 
-            # Partial-lap guard: only laps spanning (roughly) the full track
-            # may set the session best; a clearly longer lap proves earlier
-            # "bests" were partial out-laps and voids them.
-            span = finished_samples["dist"][-1] if finished_samples["dist"] else 0.0
-            if self._best_span > 0 and span * FULL_LAP_SPAN_RATIO > self._best_span:
-                lap.invalidated_best = True
-                self._session.best_lap_time_ms = -1
-                self._best_span = 0.0
-            lap.counts_for_best = (
-                self._best_span == 0.0 or span >= self._best_span * FULL_LAP_SPAN_RATIO
-            )
-            if lap.counts_for_best:
-                self._best_span = max(self._best_span, span)
-                if (
-                    self._session.best_lap_time_ms < 0
-                    or lap.time_ms < self._session.best_lap_time_ms
-                ):
-                    self._session.best_lap_time_ms = lap.time_ms
+            self._apply_span_guard(lap, finished_samples)
             await self.on_lap(lap)
+
+    def _apply_span_guard(self, lap: CompletedLap, samples: dict[str, list[float]]) -> None:
+        """Judge which laps of this session covered the whole track.
+
+        The yardstick is how far recent laps ran, so it needs no knowledge of
+        the circuit — but it moves as laps arrive, so the verdict for EVERY
+        lap of the session is recomputed each time rather than fixed when the
+        lap finished. That is what lets a lap the logger only half-saw be
+        retracted later, and what stops the best from being blanked when it is:
+        the fastest remaining full lap takes over instead.
+
+        It only becomes trustworthy once several laps agree on the distance
+        (`span_confirmed`) — which is what coaching waits for.
+        """
+        assert self._session is not None
+        span = samples["dist"][-1] if samples["dist"] else 0.0
+        # Keyed by lap number, because that is what the stored rows are
+        # re-flagged by. A repeated number (GT7 re-reporting after a rewind)
+        # would otherwise put two laps behind one key and let a single verdict
+        # condemn both — the later lap replaces the earlier one instead.
+        self._laps = [entry for entry in self._laps if entry[0] != lap.number]
+        self._laps.append((lap.number, span, lap.time_ms))
+
+        reference = self._reference_span()
+        ratio = (
+            FULL_LAP_SPAN_RATIO if len(self._laps) >= SPANS_FOR_MEDIAN
+            else PROVISIONAL_SPAN_RATIO
+        )
+        full_enough = reference * ratio
+        # A lone lap has nothing to be compared with, so it counts — until a
+        # second lap gives the comparison meaning.
+        partial = (
+            set()
+            if len(self._laps) == 1
+            else {number for number, value, _ in self._laps if value < full_enough}
+        )
+
+        lap.counts_for_best = lap.number not in partial
+        lap.span_confirmed = self._span_confirmed(reference)
+        # The set changing means an earlier verdict was wrong in one direction
+        # or the other; the stored rows have to be brought back in line.
+        if partial != self._partial:
+            lap.invalidated_best = True
+            lap.partial_lap_numbers = sorted(partial)
+            self._partial = partial
+
+        prior = [
+            time
+            for number, _, time in self._laps
+            if number not in partial and number != lap.number
+        ]
+        lap.session_best_before_ms = min(prior) if prior else -1
+        valid = [time for number, _, time in self._laps if number not in partial]
+        self._session.best_lap_time_ms = min(valid) if valid else -1
+
+    def _reference_span(self) -> float:
+        """How far a full lap of this circuit runs, as far as we can tell."""
+        spans = sorted(value for _, value, _ in self._laps[-SPAN_WINDOW:])
+        if len(spans) < SPANS_FOR_MEDIAN:
+            # Two laps that disagree are ambiguous — one is short or the other
+            # ran wide. The longer is the better guess at the track's length,
+            # and a third lap settles it either way.
+            return spans[-1] if spans else 0.0
+        return median(spans)
+
+    def _span_confirmed(self, reference: float) -> bool:
+        """True once several laps agree on the track length within tolerance."""
+        if len(self._laps) < SPANS_FOR_MEDIAN or reference <= 0:
+            return False
+        agreeing = sum(
+            1
+            for _, value, _ in self._laps[-SPAN_WINDOW:]
+            if value >= reference * FULL_LAP_SPAN_RATIO
+        )
+        return agreeing >= SPANS_FOR_MEDIAN - 1
 
     def _append_sample(self, p: TelemetryPacket) -> None:
         s = self._samples

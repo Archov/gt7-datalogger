@@ -3,11 +3,13 @@ import { StatusBar } from "@/components/StatusBar";
 import { Toasts } from "@/components/ui/Toasts";
 import { TooltipProvider } from "@/components/ui/Tooltip";
 import { isDashLocation, parseDashParams } from "@/lib/dash";
+import { isEngineerLocation } from "@/lib/engineerRoute";
 import { isOverlayLocation, parseOverlayRoute } from "@/lib/overlay";
 import { parseAnalysisParams, parseHash, type Route } from "@/lib/router";
 import { AdminView } from "@/views/AdminView";
 import { AnalysisView } from "@/views/AnalysisView";
 import { DashView } from "@/views/DashView";
+import { EngineerView } from "@/views/EngineerView";
 import { LiveView } from "@/views/LiveView";
 import { OverlayView } from "@/views/OverlayView";
 import { SessionsView } from "@/views/SessionsView";
@@ -42,6 +44,9 @@ export default function App() {
   }
   if (isDashLocation(window.location)) {
     return <DashView params={parseDashParams(window.location)} />;
+  }
+  if (isEngineerLocation(window.location)) {
+    return <EngineerView />;
   }
 
   return (

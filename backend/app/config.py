@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     # "C" (game v1.68+) is the richest; older game versions only answer "A".
     packet_format: str = "C"
 
+    # Simulated-source scenario: "practice" (default), "race", "fuel_shortage",
+    # "overheating", "oil_pressure". See app.telemetry.simulator.SCENARIOS —
+    # they exist to exercise Race Engineer callouts without a console.
+    sim_scenario: str = "practice"
+
     db_path: Path = Path("data/gt7.db")
     cars_csv: Path = Path("data/cars.csv")
     sample_lap: Path = Path("data/sample_lap.json")
@@ -43,10 +48,32 @@ class Settings(BaseSettings):
     # Comma-separated events to send; see app.notify.ALL_EVENTS.
     webhook_events: str = "personal_best,session_summary,overtake,position_lost,off_road"
 
+    # Race Engineer voice callouts. Detection only runs while a browser has
+    # registered itself as voice-capable, so leaving this on costs nothing
+    # until someone presses "Enable Race Engineer".
+    race_engineer: bool = True
+    # The MOST any device may hear: "minimal", "race" or "coach". A browser
+    # picks its own verbosity under this ceiling, so the default emits
+    # everything and lets each device decide — a lower value here makes the
+    # device setting silently unable to reach the categories it excludes.
+    race_engineer_verbosity: str = "coach"
+    # Comma-separated callout categories; see app.race_engineer.CATEGORIES.
+    race_engineer_categories: str = (
+        "system,lap,pace,race,position,fuel,strategy,engine,tires,chassis,coaching"
+    )
+    # Units spoken for distances and speeds ("metric" or "imperial"). Server
+    # side because the callout text is worded before it reaches a browser.
+    race_engineer_units: str = "metric"
+
     def enabled_webhook_events(self) -> set[str]:
         from app.notify import parse_events
 
         return parse_events(self.webhook_events)
+
+    def enabled_callout_categories(self) -> set[str]:
+        from app.race_engineer import parse_categories
+
+        return parse_categories(self.race_engineer_categories)
 
 
 @lru_cache

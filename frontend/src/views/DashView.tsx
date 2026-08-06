@@ -2,16 +2,26 @@
 // Renders a built-in preset or a saved server layout on the shared grid.
 
 import { useEffect, useState } from "react";
+import { CalloutBanner } from "@/components/CalloutBanner";
 import { GridRenderer } from "@/components/GridRenderer";
+import { RaceEngineerPanel } from "@/components/RaceEngineerPanel";
 import { api } from "@/lib/api";
 import type { DashParams } from "@/lib/dash";
 import { DASH_PRESETS, DEFAULT_DASH_PRESET } from "@/lib/dashPresets";
 import { normalizeLayout, type LayoutConfig } from "@/lib/layout";
 import { useLiveFrame } from "@/lib/useLiveFrame";
+import { useVoiceClient } from "@/lib/useVoiceClient";
+import { clientId, useEngineer } from "@/store/engineer";
 
 export function DashView({ params }: { params: DashParams }) {
   const [serverLayout, setServerLayout] = useState<LayoutConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [engineerOpen, setEngineerOpen] = useState(false);
+  // The dashboard is the primary driver-facing surface, so it is one of the
+  // two pages allowed to speak (see lib/useVoiceClient).
+  useVoiceClient("dash");
+  const voiceEnabled = useEngineer((s) => s.enabled && s.audioReady);
+  const isSpeaker = useEngineer((s) => s.activeClientId !== "" && s.activeClientId === clientId());
 
   useEffect(() => {
     document.body.classList.add("overlay-page");
@@ -65,8 +75,40 @@ export function DashView({ params }: { params: DashParams }) {
         <GridRenderer layout={resolved} frame={frame} laps={laps} />
       )}
 
+      <CalloutBanner />
+
+      {engineerOpen && (
+        <div className="absolute right-2 top-9 z-10 max-h-[80vh] w-80 overflow-y-auto rounded-xl border border-edge bg-panel/95 shadow-xl backdrop-blur">
+          <div className="flex items-baseline justify-between border-b border-edge px-3 py-2">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-ink-dim">
+              Race Engineer
+            </span>
+            <button
+              className="text-xs text-ink-dim hover:text-ink"
+              onClick={() => setEngineerOpen(false)}
+            >
+              close
+            </button>
+          </div>
+          <RaceEngineerPanel compact />
+        </div>
+      )}
+
       {/* status dot + fullscreen, kept tiny so they don't distract mid-race */}
       <div className="absolute right-2 top-2 flex items-center gap-2">
+        <button
+          className={`rounded border border-white/10 bg-black/40 px-1.5 py-0.5 text-[10px] ${
+            voiceEnabled && isSpeaker ? "text-throttle" : "text-ink-dim hover:text-ink"
+          }`}
+          title={
+            voiceEnabled && isSpeaker
+              ? "Race Engineer: speaking on this device"
+              : "Race Engineer voice settings"
+          }
+          onClick={() => setEngineerOpen((open) => !open)}
+        >
+          {voiceEnabled && isSpeaker ? "🔊" : "🔈"}
+        </button>
         <span
           title={status}
           className={`h-2 w-2 rounded-full ${

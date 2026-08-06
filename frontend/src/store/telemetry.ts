@@ -4,7 +4,8 @@
 
 import { create } from "zustand";
 import { api } from "@/lib/api";
-import type { ConnectionStatus, LapSummary, LiveFrame, WsMessage } from "@/lib/types";
+import type { ClientMessage, ConnectionStatus, LapSummary, LiveFrame, WsMessage } from "@/lib/types";
+import { notifyWsOpen, publishWs, setWsSender } from "@/lib/wsBus";
 
 interface TelemetryState {
   status: ConnectionStatus | null;
@@ -26,12 +27,24 @@ export const liveFrameRef: { current: LiveFrame | null; at: number } = {
 let socket: WebSocket | null = null;
 let retryTimer: number | undefined;
 
+// Client -> server messages (the Race Engineer voice protocol). Returns false
+// when the socket isn't open; callers re-send on the next connect instead of
+// buffering, since every message is about current state.
+setWsSender((msg: ClientMessage): boolean => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(msg));
+  return true;
+});
+
 export const useTelemetry = create<TelemetryState>((set) => {
   function open() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     socket = new WebSocket(`${proto}://${location.host}/ws/live`);
     socket.onopen = () => {
       set({ wsConnected: true });
+      // Race Engineer re-registers its capabilities on every connect; the
+      // server keeps no client state across a socket.
+      notifyWsOpen();
       // Seed the lap feed with the current session's laps so widgets that
       // need lap history (fuel strategy) work right after a page load.
       void (async () => {
@@ -54,6 +67,13 @@ export const useTelemetry = create<TelemetryState>((set) => {
     socket.onmessage = (ev) => {
       const msg = JSON.parse(ev.data) as WsMessage;
       switch (msg.type) {
+        case "voice_callout":
+        case "voice_output_status":
+        case "race_engineer_status":
+          // Handled by the Race Engineer client (store/engineer.ts) via the
+          // bus, so this store never has to know about speech.
+          publishWs(msg);
+          break;
         case "telemetry":
           liveFrameRef.current = msg.data;
           liveFrameRef.at = performance.now();

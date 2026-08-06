@@ -188,7 +188,136 @@ export interface AdminSettings {
   webhook_url: string;
   webhook_events: WebhookEvent[];
   packet_format: "A" | "B" | "~" | "C";
+  race_engineer: boolean;
+  race_engineer_verbosity: Verbosity;
+  race_engineer_categories: CalloutCategory[];
+  race_engineer_units: SpokenUnits;
 }
+
+// Units spoken inside callout text ("eighteen meters" / "fifty-nine feet").
+// Server-side because the text is worded before it reaches a browser — the
+// dashboard's own km/h-vs-mph toggle only affects what is displayed.
+export type SpokenUnits = "metric" | "imperial";
+
+// --- Race Engineer (mirrors backend app/race_engineer/models.py) ------------
+
+export const CALLOUT_CATEGORIES = [
+  "system",
+  "lap",
+  "pace",
+  "race",
+  "position",
+  "fuel",
+  "strategy",
+  "engine",
+  "tires",
+  "chassis",
+  "coaching",
+] as const;
+
+export type CalloutCategory = (typeof CALLOUT_CATEGORIES)[number];
+export type Verbosity = "minimal" | "race" | "coach";
+
+const MINIMAL_CATEGORIES: CalloutCategory[] = ["system", "engine", "strategy", "race"];
+
+// Verbosity is a preset over the same categories (mirrors the backend). The
+// server applies its own setting as a ceiling — a browser can only narrow it.
+export const VERBOSITY_CATEGORIES: Record<Verbosity, CalloutCategory[]> = {
+  minimal: MINIMAL_CATEGORIES,
+  race: [...MINIMAL_CATEGORIES, "lap", "pace", "position", "fuel"],
+  coach: [...CALLOUT_CATEGORIES],
+};
+
+export interface VoiceCallout {
+  id: string;
+  event_type: string;
+  text: string;
+  category: CalloutCategory;
+  priority: number; // 0..100; 90+ may interrupt
+  created_at_ms: number; // server clock — display/debug only
+  expires_at_ms: number; // server clock — display/debug only
+  // Lifetime measured from the moment the browser receives it. Server and
+  // browser clocks disagree (phones, Pi without NTP), so expiry uses this.
+  ttl_ms: number;
+  interrupt: boolean;
+  dedupe_key?: string | null;
+  message_key?: string;
+  message_args?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface VoiceClientInfo {
+  client_id: string;
+  page: string;
+  voice_supported: boolean;
+  voice_enabled: boolean;
+  is_active_speaker: boolean;
+}
+
+export interface RaceEngineerStatus {
+  enabled: boolean; // feature switched on server-side
+  active: boolean; // ...and at least one browser has voice enabled
+  verbosity: Verbosity;
+  categories: CalloutCategory[]; // categories the server will emit
+  // Whether enough laps agree on the track distance for lap-vs-lap coaching
+  // to mean anything. Explains a quiet coaching category early in a session.
+  coaching_ready: boolean;
+  active_client_id: string;
+  clients: VoiceClientInfo[];
+}
+
+export interface RaceEngineerDiagnostics extends RaceEngineerStatus {
+  units: SpokenUnits;
+  session_id: number | null;
+  lap_history: number;
+  best_lap_ms: number | null;
+  corners: number;
+  effective_categories: CalloutCategory[];
+  stats: Record<string, number>;
+  acks: Record<string, number>;
+  /** Why the browser last failed to speak, in the engine's own words. */
+  last_ack_reason: string;
+  last_callout: VoiceCallout | null;
+}
+
+export type CalloutAckStatus =
+  | "spoken"
+  | "expired"
+  // Stopped on purpose — by a critical callout, a disconnect, or the user
+  // pressing Test voice. Not a failure, and never treated as one.
+  | "interrupted"
+  | "duplicate"
+  | "disabled"
+  | "category_disabled"
+  | "not_active_speaker"
+  | "speech_error";
+
+// Browser -> server. The only client-to-server protocol on /ws/live; older
+// pages send nothing and the server ignores anything it can't parse.
+export type ClientMessage =
+  | {
+      type: "client_capabilities";
+      data: {
+        client_id: string;
+        page: string;
+        voice_supported: boolean;
+        voice_enabled: boolean;
+      };
+    }
+  | { type: "claim_voice_output"; data: { client_id: string } }
+  | { type: "release_voice_output"; data: { client_id: string } }
+  | {
+      type: "voice_callout_ack";
+      data: {
+        callout_id: string;
+        client_id: string;
+        status: CalloutAckStatus;
+        spoken_at_ms: number;
+        /** Engine reason when status is speech_error — the only clue a
+         *  silent setup leaves on the server. */
+        reason?: string;
+      };
+    };
 
 export type WebhookEvent =
   | "personal_best"
@@ -218,4 +347,7 @@ export type WsMessage =
   | { type: "telemetry"; data: LiveFrame }
   | { type: "lap"; data: LapSummary }
   | { type: "status"; data: ConnectionStatus }
-  | { type: "session"; data: ConnectionStatus };
+  | { type: "session"; data: ConnectionStatus }
+  | { type: "voice_callout"; data: VoiceCallout }
+  | { type: "voice_output_status"; data: { active_client_id: string } }
+  | { type: "race_engineer_status"; data: RaceEngineerStatus };

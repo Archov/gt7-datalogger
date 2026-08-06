@@ -66,6 +66,7 @@ nav:
       - Sessions view: guide/sessions-view.md
       - Overlay & streaming: guide/overlay.md
       - Driver dashboard: guide/dash.md
+      - Race Engineer (voice): guide/race-engineer.md
       - Widget reference: guide/widgets.md
       - Admin view: guide/admin.md
   - How it works:
@@ -77,6 +78,7 @@ nav:
       - Chassis event detection: internals/event-detection.md
       - Track identification: internals/track-identification.md
       - Fuel & race strategy: internals/fuel-strategy.md
+      - Race Engineer callouts: internals/race-engineer.md
   - Reference:
       - REST & WebSocket API: reference/api.md
       - Lap file format: reference/lap-file-format.md

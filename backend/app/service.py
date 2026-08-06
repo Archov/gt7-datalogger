@@ -20,9 +20,11 @@ from app.processing.cars import CarDatabase
 from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
 from app.processing.live_events import LiveEvent, LiveEventWatcher
 from app.processing.tracks import signature_from_samples
+from app.race_engineer import CATEGORIES, VoiceCallout
+from app.race_engineer.manager import RaceEngineerManager
 from app.storage.repository import Repository, lap_summary  # noqa: F401  (re-export)
 from app.telemetry.listener import UdpTelemetrySource
-from app.telemetry.simulator import SimTelemetrySource
+from app.telemetry.simulator import SimTelemetrySource, scenario_for
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +44,13 @@ class _ClientStream:
     frame: str | None = None
     wakeup: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task[None] | None = None
+    # Race Engineer: who this browser is and whether it can speak. Set from
+    # the client's `client_capabilities` message; absent for older pages,
+    # which simply never register and never speak.
+    client_id: str = ""
+    page: str = ""
+    voice_supported: bool = False
+    voice_enabled: bool = False
 
 
 async def _close_ws(ws: WebSocket) -> None:
@@ -69,7 +78,9 @@ class TelemetryService:
         self.processor = LapProcessor(on_lap=self._on_lap, on_session=self._on_session)
         self.source: UdpTelemetrySource | SimTelemetrySource
         if settings.source == "sim":
-            self.source = SimTelemetrySource(self._on_packet)
+            self.source = SimTelemetrySource(
+                self._on_packet, scenario_for(settings.sim_scenario)
+            )
         else:
             self.source = UdpTelemetrySource(settings, self._on_packet)
 
@@ -81,8 +92,21 @@ class TelemetryService:
         self.notifier.url = settings.webhook_url
         self.notifier.enabled = settings.enabled_webhook_events()
         self.event_watcher = LiveEventWatcher()
+        self.engineer = RaceEngineerManager(
+            enabled=settings.race_engineer,
+            verbosity=settings.race_engineer_verbosity,
+            categories=settings.enabled_callout_categories(),
+            units=settings.race_engineer_units,
+        )
+        # client_id of the browser currently allowed to speak, and the last
+        # one that held the claim (restored when the same page reconnects).
+        self._active_voice_client = ""
+        self._last_voice_client = ""
         self._session_best_ms: int | None = None
         self._prev_best_ms: int | None = None
+        # Lap number the delta reference came from, so a later partial lap
+        # doesn't discard a perfectly good reference.
+        self._best_ref_lap: int | None = None
         # (dist, t) trace of the session-best lap — the reference for the
         # live delta. Safe to hold by reference: the processor allocates a
         # fresh sample store at every lap boundary.
@@ -107,7 +131,9 @@ class TelemetryService:
         await self.source.stop()
         self.settings.source = kind
         if kind == "sim":
-            self.source = SimTelemetrySource(self._on_packet)
+            self.source = SimTelemetrySource(
+                self._on_packet, scenario_for(self.settings.sim_scenario)
+            )
         else:
             self.source = UdpTelemetrySource(self.settings, self._on_packet)
         await self.source.start()
@@ -126,18 +152,36 @@ class TelemetryService:
 
     # --- pipeline callbacks -------------------------------------------------
 
+    @property
+    def engineer_active(self) -> bool:
+        """Whether callout detection should run at all.
+
+        Off unless a browser has actually enabled Race Engineer: a user who
+        never touches the feature pays nothing for it, and detectors start
+        from a clean baseline when someone does enable it mid-session.
+        """
+        return self.engineer.enabled and any(
+            c.voice_enabled for c in self._clients.values()
+        )
+
     async def _on_packet(self, p: TelemetryPacket) -> None:
         self.latest_packet = p
         if self.recording:
             await self.processor.feed(p)
         for event in self.event_watcher.feed(p):
             self._notify_live_event(event, p)
+        if self.engineer_active:
+            self._publish_callouts(self.engineer.on_packet(p))
         now = time.monotonic()
         if now - self._last_ws_send >= self._ws_interval:
             self._last_ws_send = now
             self._publish({"type": "telemetry", "data": self._live_frame(p)})
 
     def _notify_live_event(self, event: LiveEvent, p: TelemetryPacket) -> None:
+        # Voice reuses the watcher's debounced events rather than running a
+        # second position detector that could disagree with the webhooks.
+        if self.engineer_active:
+            self._publish_callouts(self.engineer.on_live_event(event))
         car = self.cars.name(p.car_id)
         if event.kind == "overtake":
             self.notifier.overtake(
@@ -156,10 +200,12 @@ class TelemetryService:
         self.event_watcher.reset()
         await self._close_previous_session()
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
+        self.engineer.on_session(info, self.session_id)
         self.track_name = ""
         self._session_best_ms = None
         self._prev_best_ms = None
         self._best_ref = None
+        self._best_ref_lap = None
         log.info("new session %s (car %s)", self.session_id, self.cars.name(info.car_id))
         self._publish({"type": "session", "data": await self.status()})
 
@@ -192,39 +238,53 @@ class TelemetryService:
         lap_id = await self.repo.save_lap(self.session_id, lap)
         log.info("lap %d saved (%d ms, id=%d)", lap.number, lap.time_ms, lap_id)
 
-        # A longer lap just proved the stored "best" was a partial out-lap:
-        # forget it — comparing deltas against a fraction of the track (with
-        # a pit-exit-anchored distance axis) produces garbage. The saved rows
-        # are re-flagged too, so DB best-lap aggregates (Sessions view,
-        # session-summary webhook) drop them as well.
+        # Which laps covered the whole track is re-judged on every lap (see
+        # LapProcessor._apply_span_guard), so the verdict can change for laps
+        # already saved. Bring the rows back in line, or the DB aggregates
+        # (Sessions view, session-summary webhook) keep the old answer.
         if lap.invalidated_best:
-            self._session_best_ms = None
-            self._prev_best_ms = None
-            self._best_ref = None
-            await self.repo.mark_session_laps_partial(self.session_id, lap_id)
+            await self.repo.mark_session_laps_partial(
+                self.session_id, lap.partial_lap_numbers
+            )
+            # Only drop the delta reference when the lap that PROVIDED it
+            # turned out partial. A pit out-lap later in the stint says
+            # nothing about the good lap the reference came from.
+            if self._best_ref_lap in lap.partial_lap_numbers:
+                self._best_ref = None
+                self._best_ref_lap = None
 
-        # Remember the best BEFORE this lap: the live "Δ best" compares the
-        # latest lap against it (comparing against a best that already
-        # includes the latest lap can never show an improvement).
-        self._prev_best_ms = self._session_best_ms
+        # The best BEFORE this lap: the live "Δ best" and the personal-best
+        # check both compare against it (a best that already includes this lap
+        # can never show an improvement).
+        before = lap.session_best_before_ms
+        self._prev_best_ms = before if before > 0 else None
 
         if lap.counts_for_best:
-            # Personal best (only when beating an existing best, not on the first lap)
-            if self._session_best_ms is not None and lap.time_ms < self._session_best_ms:
+            if before > 0 and lap.time_ms < before:
                 self.notifier.personal_best(
-                    lap.time_ms,
-                    self._session_best_ms,
-                    lap.number,
-                    self.cars.name(lap.car_id),
+                    lap.time_ms, before, lap.number, self.cars.name(lap.car_id),
                     self.track_name,
                 )
-            if self._session_best_ms is None or lap.time_ms < self._session_best_ms:
-                self._session_best_ms = lap.time_ms
+            if before <= 0 or lap.time_ms < before:
                 self._best_ref = {"dist": lap.samples["dist"], "t": lap.samples["t"]}
+                self._best_ref_lap = lap.number
+        # The processor owns the session best: dropping a partial lap promotes
+        # the fastest remaining real lap rather than blanking it.
+        session = self.processor.session
+        best = session.best_lap_time_ms if session else -1
+        self._session_best_ms = best if best > 0 else None
 
         # Track auto-identification from the first completed lap's geometry
         if not self.track_name:
             await self._identify_track(lap)
+
+        if self.engineer_active:
+            self.engineer.ctx.track_name = self.track_name
+            self._publish_callouts(self.engineer.on_lap(lap))
+            # Corner detection for coaching runs off the event loop; a lap
+            # boundary is the only place it can afford to happen.
+            await self.engineer.refresh_reference()
+
         summary = {
             "id": lap_id,
             "session_id": self.session_id,
@@ -344,6 +404,11 @@ class TelemetryService:
         # orphaned in a task-less queue.
         client.task = asyncio.create_task(self._client_sender(client))
         client.events.put_nowait(json.dumps({"type": "status", "data": await self.status()}))
+        # Current Race Engineer state, never past callouts: a reconnecting
+        # page must not hear what it missed while it was away.
+        client.events.put_nowait(
+            json.dumps({"type": "race_engineer_status", "data": self.engineer_status()})
+        )
         client.wakeup.set()
 
     async def unregister(self, ws: WebSocket) -> None:
@@ -351,6 +416,137 @@ class TelemetryService:
         if client and client.task:
             client.task.cancel()
             await asyncio.gather(client.task, return_exceptions=True)
+        if client and client.client_id and client.client_id == self._active_voice_client:
+            # The speaker went away (tab closed, refresh, network drop). Clear
+            # the claim but remember it, so the same page gets it back when it
+            # comes home instead of the room going silent.
+            self._active_voice_client = ""
+            log.info("voice output released: client %s disconnected", client.client_id)
+            self._publish_voice_status()
+
+    # --- race engineer voice protocol ---------------------------------------
+
+    # Only driver-facing pages may speak. An OBS overlay or the admin page
+    # showing callouts must never start talking over the dashboard.
+    VOICE_PAGES = frozenset({"dash", "engineer"})
+
+    def set_client_capabilities(
+        self,
+        ws: WebSocket,
+        client_id: str,
+        page: str,
+        voice_supported: bool,
+        voice_enabled: bool,
+    ) -> None:
+        client = self._clients.get(ws)
+        if client is None or not client_id:
+            return
+        client.client_id = client_id
+        client.page = page
+        client.voice_supported = voice_supported
+        client.voice_enabled = voice_enabled
+        # A refresh reconnects the same client_id; restoring its claim keeps
+        # F5 from silently demoting the driver's own dashboard.
+        if (
+            voice_enabled
+            and not self._active_voice_client
+            and client_id == self._last_voice_client
+            and page in self.VOICE_PAGES
+        ):
+            self._active_voice_client = client_id
+        self._publish_voice_status()
+
+    def claim_voice_output(self, ws: WebSocket, client_id: str) -> None:
+        client = self._clients.get(ws)
+        # The claim must come from the socket that registered the id: one page
+        # cannot hand the microphone to another.
+        if client is None or not client_id or client.client_id != client_id:
+            return
+        if client.page not in self.VOICE_PAGES:
+            log.info("voice claim from %s page ignored (%s)", client.page or "?", client_id)
+            return
+        self._active_voice_client = client_id
+        self._last_voice_client = client_id
+        log.info("voice output claimed by %s (%s)", client_id, client.page)
+        self._publish_voice_status()
+
+    def release_voice_output(self, ws: WebSocket, client_id: str) -> None:
+        client = self._clients.get(ws)
+        if client is None or client.client_id != client_id:
+            return
+        if self._active_voice_client == client_id:
+            self._active_voice_client = ""
+            log.info("voice output released by %s", client_id)
+            self._publish_voice_status()
+
+    def record_callout_ack(
+        self, client_id: str, callout_id: str, status: str, reason: str = ""
+    ) -> None:
+        """Diagnostics only — acks never gate anything in the pipeline."""
+        self.engineer.record_ack(status, reason)
+        if status == "speech_error":
+            # Worth a warning: the driver is hearing nothing, and the reason
+            # the browser reported is the only clue to why.
+            log.warning("callout %s not spoken: %s", callout_id, reason or "no reason given")
+        else:
+            log.debug("callout %s %s (client %s)", callout_id, status, client_id)
+
+    @property
+    def voice_clients(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "client_id": c.client_id,
+                "page": c.page,
+                "voice_supported": c.voice_supported,
+                "voice_enabled": c.voice_enabled,
+                "is_active_speaker": bool(c.client_id)
+                and c.client_id == self._active_voice_client,
+            }
+            for c in self._clients.values()
+            if c.client_id
+        ]
+
+    def engineer_status(self) -> dict[str, Any]:
+        return {
+            "enabled": self.engineer.enabled,
+            "active": self.engineer_active,
+            "verbosity": self.engineer.verbosity,
+            # What the server will actually send. Clients use this to grey out
+            # categories they could never receive.
+            "categories": [
+                c for c in CATEGORIES if c in self.engineer.effective_categories
+            ],
+            # Why coaching is quiet: it waits for enough laps to agree on the
+            # track's distance before comparing one lap against another.
+            "coaching_ready": (
+                self.engineer.ctx.span_confirmed and self.engineer.ctx.reference is not None
+            ),
+            "active_client_id": self._active_voice_client,
+            "clients": self.voice_clients,
+        }
+
+    def _publish_voice_status(self) -> None:
+        self._publish({"type": "voice_output_status", "data": {
+            "active_client_id": self._active_voice_client,
+        }})
+        self.publish_engineer_status()
+
+    def publish_engineer_status(self) -> None:
+        self._publish({"type": "race_engineer_status", "data": self.engineer_status()})
+
+    def publish_callout(self, callout: VoiceCallout) -> None:
+        """Send one callout (used by the admin test-callout endpoint)."""
+        self._publish_callouts([callout])
+
+    def _publish_callouts(self, callouts: list[VoiceCallout]) -> None:
+        """Send callouts on the event lane — a dropped warning is a bug.
+
+        Staleness is handled by each callout's own expiry, not by dropping it
+        from a queue: the browser decides, on arrival, whether it is still
+        worth speaking.
+        """
+        for callout in callouts:
+            self._publish({"type": "voice_callout", "data": callout.to_dict()})
 
     def _publish(self, message: dict[str, Any]) -> None:
         """Queue a message for every client without awaiting any client I/O.
