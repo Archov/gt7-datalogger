@@ -5,6 +5,7 @@
   --color-panel: #14171c;
   --color-panel-2: #1b1f26;
   --color-edge: #262b33;
+  --color-edge-bright: #3d4552; /* hover state for edge-bordered controls */
   --color-ink: #e6e9ee;
   --color-ink-dim: #8b93a1;
   --color-accent: #38bdf8;

@@ -5,6 +5,31 @@ Notable changes to GT7 Datalogger. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-07
+
+### Fixed
+
+- **Race Engineer voice now works from other devices on the LAN.** Opening the
+  dashboard from a plain-HTTP address (`http://<pi-ip>:8000` — the normal way to
+  reach a Raspberry Pi) broke voice output: the browser only provides
+  `crypto.randomUUID` on HTTPS or localhost, so registering the device and claiming
+  **Use this device for voice output** failed silently. The client id now falls back
+  to `crypto.getRandomValues`, which works everywhere.
+- **Phone navigation.** The header nav drops to its own row on narrow screens
+  instead of clipping tab names — Sessions and Admin are reachable on a phone again.
+- **Lap colours no longer collide in Analysis.** Colours are keyed to the lap id
+  six-wise, so laps 6 apart — routinely the "latest vs best" pair — rendered
+  identically in the charts, map and chips. Laps compared together now always get
+  distinct colours; a lap only changes colour when it collides, and keeps its
+  canonical colour everywhere else.
+- **`/dash` and `/engineer` have a way back** to the main app (a small home link);
+  the OBS overlay stays chrome-less.
+- **`#/overlay` now routes to the overlay** like its `#/dash` and `#/engineer`
+  siblings, alongside the existing `/overlay` and `#overlay` forms.
+- Cross-view links into Analysis keep the chart channel selection (`ch=` was
+  declared but never written), and the S1/S2/S3 zoom buttons' hover style renders
+  (its colour token was never defined).
+
 ## [0.4.0] - 2026-08-06
 
 ### Added

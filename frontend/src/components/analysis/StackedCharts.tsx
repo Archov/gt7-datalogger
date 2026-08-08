@@ -76,6 +76,7 @@ const REPLACE_SERIES = ["series"];
 export function StackedCharts({
   data,
   lapLabels,
+  lapColors,
   units,
   channels,
   onCursorDist,
@@ -84,6 +85,8 @@ export function StackedCharts({
 }: {
   data: CompareResult;
   lapLabels: Record<string, string>;
+  /** Collision-resolved per-set colors (see lapColorMap); lapColor fallback. */
+  lapColors?: Record<string, string>;
   units: Units;
   channels: ChannelDef[]; // ordered, from the channel picker
   onCursorDist?: (dist: number | null) => void;
@@ -283,7 +286,7 @@ export function StackedCharts({
           showSymbol: false,
           step: panel.step ? "end" : undefined,
           lineStyle: { width: 1.4 },
-          color: lapColor(Number(lapId)),
+          color: lapColors?.[lapId] ?? lapColor(Number(lapId)),
           ...(isDelta
             ? {
                 markLine: {
@@ -299,7 +302,10 @@ export function StackedCharts({
             ? {
                 markArea: {
                   silent: true,
-                  itemStyle: { color: lapColor(Number(lapId)), opacity: 0.14 },
+                  itemStyle: {
+                    color: lapColors?.[lapId] ?? lapColor(Number(lapId)),
+                    opacity: 0.14,
+                  },
                   data: bands,
                 },
               }
@@ -447,7 +453,7 @@ export function StackedCharts({
         },
       },
     };
-  }, [data, lapLabels, units, panels]);
+  }, [data, lapLabels, lapColors, units, panels]);
 
   return (
     <div className="flex flex-col">

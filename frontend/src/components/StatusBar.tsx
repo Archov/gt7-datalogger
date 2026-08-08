@@ -29,13 +29,16 @@ export function StatusBar({ view }: { view: View }) {
       : "Disconnected from server";
 
   return (
-    <header className="flex items-center gap-4 border-b border-edge bg-panel px-4 py-2">
+    // Below sm the nav drops to its own full-width row (order-last) — a single
+    // non-wrapping row clips tab names on phones and leaves Sessions/Admin
+    // unreachable.
+    <header className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-edge bg-panel px-4 py-2">
       <div className="flex items-center gap-2" title={dotTitle}>
         <span className={`h-2.5 w-2.5 rounded-full ${dotColor} ${telemetryUp ? "animate-pulse" : ""}`} />
-        <h1 className="text-sm font-semibold tracking-wide">GT7 Datalogger</h1>
+        <h1 className="whitespace-nowrap text-sm font-semibold tracking-wide">GT7 Datalogger</h1>
       </div>
 
-      <nav className="flex gap-1 overflow-x-auto">
+      <nav className="order-last flex w-full gap-1 overflow-x-auto sm:order-none sm:w-auto">
         {TABS.map((t) => (
           <button
             key={t.id}
