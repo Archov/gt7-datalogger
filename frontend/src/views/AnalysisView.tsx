@@ -21,7 +21,7 @@ import {
   loadChannelKeys,
   saveChannelKeys,
 } from "@/lib/channels";
-import { lapColor } from "@/lib/colors";
+import { lapColor, lapColorMap } from "@/lib/colors";
 import { formatLapTime, formatSpeed } from "@/lib/format";
 import { reflectAnalysisSelection, type AnalysisRequest } from "@/lib/router";
 import type { CompareResult, DeviationResult, LapSummary, SessionSummary } from "@/lib/types";
@@ -201,17 +201,31 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   const refEntry = compare?.laps[String(refLap)];
   const refSummary = laps.find((l) => l.id === refLap);
 
-  // Laps for the track map, colored by lap id exactly like the chart series.
+  // One color assignment for everything that shows the compared laps together
+  // (chips, chart series, map, corner detail): id-keyed, but two selected laps
+  // never share a color (laps 6 apart otherwise would — latest vs best hits it).
+  const lapColors = useMemo<Record<string, string>>(() => {
+    const ids = new Set<number>(selected);
+    if (refLap != null) ids.add(refLap);
+    for (const id of Object.keys(compare?.laps ?? {})) ids.add(Number(id));
+    return Object.fromEntries(
+      [...lapColorMap(ids)].map(([id, color]) => [String(id), color]),
+    );
+  }, [selected, refLap, compare]);
+  const colorOf = (id: string | number) =>
+    lapColors[String(id)] ?? lapColor(Number(id));
+
+  // Laps for the track map, colored exactly like the chart series.
   const mapLaps = useMemo<MapLap[]>(() => {
     if (!compare) return [];
     return Object.keys(compare.laps).map((id) => ({
       id,
       entry: compare.laps[id],
-      color: lapColor(Number(id)),
+      color: lapColors[id] ?? lapColor(Number(id)),
       label: lapLabels[id] ?? `Lap ${id}`,
       isRef: id === String(refLap),
     }));
-  }, [compare, lapLabels, refLap]);
+  }, [compare, lapLabels, refLap, lapColors]);
 
   // Same laps, shaped for the Corner Detail widget (cursor-synced with the
   // charts and the map dot).
@@ -220,11 +234,11 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
     return Object.keys(compare.laps).map((id) => ({
       id,
       label: lapLabels[id] ?? `Lap ${id}`,
-      color: lapColor(Number(id)),
+      color: lapColors[id] ?? lapColor(Number(id)),
       isRef: id === String(refLap),
       series: compare.laps[id].series,
     }));
-  }, [compare, lapLabels, refLap]);
+  }, [compare, lapLabels, refLap, lapColors]);
 
   if (sessions == null) {
     // Failed fetch would otherwise leave the skeleton up forever.
@@ -306,7 +320,7 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
                     {active && (
                       <span
                         className="h-2 w-2 rounded-full"
-                        style={{ backgroundColor: lapColor(lap.id) }}
+                        style={{ backgroundColor: colorOf(lap.id) }}
                       />
                     )}
                     L{lap.number} {formatLapTime(lap.time_ms)}
@@ -342,6 +356,7 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
             <StackedCharts
               data={compare}
               lapLabels={lapLabels}
+              lapColors={lapColors}
               units={units}
               channels={channelDefs}
               onCursorDist={onCursorDist}
