@@ -108,15 +108,15 @@ export const PHONE_PRESET: OverlayConfig = {
 
 // Preferred URL form is the plain path /overlay?w=… — hash-fragment URLs
 // (/#overlay?…) still work but are rejected by some apps' URL validators
-// (e.g. TikTok LIVE Studio web sources).
+// (e.g. TikTok LIVE Studio web sources). #/overlay is accepted too so the
+// hash form matches its siblings (#/dash, #/engineer).
 export function isOverlayLocation(loc: {
   pathname: string;
   hash: string;
 }): boolean {
   return (
     loc.pathname === "/overlay" ||
-    loc.hash === "#overlay" ||
-    loc.hash.startsWith("#overlay?")
+    /^#\/?overlay(\?|$)/.test(loc.hash)
   );
 }
 

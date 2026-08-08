@@ -43,6 +43,7 @@ export function openInAnalysis(req: AnalysisRequest): void {
   if (req.session != null) params.session = String(req.session);
   if (req.laps && req.laps.length > 0) params.laps = req.laps.join(",");
   if (req.ref != null) params.ref = String(req.ref);
+  if (req.channels && req.channels.length > 0) params.ch = req.channels.join(",");
   navigate("analysis", params);
 }
 
