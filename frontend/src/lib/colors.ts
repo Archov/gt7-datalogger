@@ -33,16 +33,29 @@ export function lapColor(lapId: number): string {
 }
 
 /**
- * Collision-free colors for a set of laps shown together. Ids are processed in
- * ascending order, so the older lap keeps its canonical lapColor() and only the
- * newer one shifts — and the same set always yields the same assignment. Past
- * six laps the palette is exhausted and slots repeat (labels disambiguate).
+ * Collision-free colors for a set of laps shown together. Two passes: every
+ * lap that can hold its canonical lapColor() slot keeps it (oldest lap wins a
+ * contested slot), and only the losers move to the next free slot — a
+ * displaced lap must never steal a slot another lap holds canonically. The
+ * same set always yields the same assignment. Past six laps the palette is
+ * exhausted and slots repeat (labels disambiguate).
  */
 export function lapColorMap(lapIds: Iterable<number>): Map<number, string> {
   const n = SERIES_COLORS.length;
+  const ids = [...new Set(lapIds)].sort((a, b) => a - b);
   const assigned = new Map<number, string>();
   const used = new Set<number>();
-  for (const id of [...new Set(lapIds)].sort((a, b) => a - b)) {
+  const displaced: number[] = [];
+  for (const id of ids) {
+    const slot = Math.abs(id) % n;
+    if (used.has(slot)) {
+      displaced.push(id);
+    } else {
+      assigned.set(id, SERIES_COLORS[slot]);
+      used.add(slot);
+    }
+  }
+  for (const id of displaced) {
     let slot = Math.abs(id) % n;
     for (let i = 0; i < n && used.has(slot); i++) slot = (slot + 1) % n;
     assigned.set(id, SERIES_COLORS[slot]);
