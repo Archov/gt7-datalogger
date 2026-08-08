@@ -33,10 +33,28 @@ export const TEST_PHRASE = "Race engineer enabled.";
 export function clientId(): string {
   let id = localStorage.getItem(CLIENT_ID_KEY);
   if (!id) {
-    id = crypto.randomUUID();
+    id = randomId();
     localStorage.setItem(CLIENT_ID_KEY, id);
   }
   return id;
+}
+
+/**
+ * `crypto.randomUUID` exists only in secure contexts, and this dashboard is
+ * typically served plain-HTTP from a Pi on the LAN — where it is undefined and
+ * the call throws, taking claimSpeaker/sendCapabilities down with it.
+ * `getRandomValues` has no such restriction.
+ */
+function randomId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // UUID v4 version/variant bits, so the
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // id looks the same either way
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-` +
+    `${hex.slice(16, 20)}-${hex.slice(20)}`
+  );
 }
 
 export type VoicePage = "dash" | "engineer";
