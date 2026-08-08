@@ -129,6 +129,15 @@ export function DashView({ params }: { params: DashParams }) {
         >
           ⛶
         </button>
+        {/* /#/live (not #/live): /dash may be a path, where a bare hash change
+            would still match isDashLocation and go nowhere. */}
+        <a
+          href="/#/live"
+          className="rounded border border-white/10 bg-black/40 px-1.5 py-0.5 text-[10px] text-ink-dim hover:text-ink"
+          title="Back to the main app"
+        >
+          ⌂
+        </a>
       </div>
     </div>
   );

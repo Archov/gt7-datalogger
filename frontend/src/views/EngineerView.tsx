@@ -23,13 +23,19 @@ export function EngineerView() {
     <div className="mx-auto max-w-xl space-y-3 p-3">
       <div className="flex items-baseline justify-between">
         <h1 className="text-lg font-semibold">Race Engineer</h1>
-        <span className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              !wsConnected ? "bg-brake" : isSpeaker ? "bg-throttle" : "bg-warn"
-            }`}
-          />
-          {!wsConnected ? "offline" : isSpeaker ? "speaking here" : "connected"}
+        <span className="flex items-center gap-3 text-[11px] text-ink-dim">
+          <span className="flex items-center gap-1.5">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                !wsConnected ? "bg-brake" : isSpeaker ? "bg-throttle" : "bg-warn"
+              }`}
+            />
+            {!wsConnected ? "offline" : isSpeaker ? "speaking here" : "connected"}
+          </span>
+          {/* /#/live: this page has no other way back (no header, no nav). */}
+          <a href="/#/live" className="hover:text-ink" title="Back to the main app">
+            ⌂ home
+          </a>
         </span>
       </div>
 
