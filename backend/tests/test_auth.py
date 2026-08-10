@@ -68,7 +68,6 @@ async def test_mutating_routes_require_token(secured) -> None:
     c, service = secured
     await drive_laps(service, laps=1)
     lap_id = (await c.get("/api/laps")).json()[0]["id"]
-
     checks = [
         ("DELETE", f"/api/laps/{lap_id}", None),
         ("DELETE", "/api/sessions/1", None),
@@ -96,6 +95,7 @@ async def test_reads_stay_open_with_token_set(secured) -> None:
     c, service = secured
     await drive_laps(service, laps=1)
     lap_id = (await c.get("/api/laps")).json()[0]["id"]
+    session_id = (await c.get("/api/sessions")).json()[0]["id"]
     for url in (
         "/api/health",
         "/api/status",
@@ -103,6 +103,7 @@ async def test_reads_stay_open_with_token_set(secured) -> None:
         "/api/laps",
         f"/api/laps/{lap_id}/export",
         f"/api/laps/{lap_id}/export.csv",
+        f"/api/sessions/{session_id}/export.llm.json",
         "/api/tracks",
         "/api/layouts",
     ):

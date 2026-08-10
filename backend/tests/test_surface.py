@@ -151,7 +151,7 @@ async def test_lap_without_surface_data_is_unknown(setup) -> None:
         await proc.feed(make_packet(current_lap=1))  # format A: no surface
     await proc.feed(make_packet(current_lap=2, last_lap_time_ms=61_000))
     lap = c.laps[0]
-    assert set(lap.samples["surface"]) == {float(SURFACE_NONE)}
+    assert "surface" not in lap.samples
     assert lap.off_track_count == -1
     assert lap.clean_lap is None
 

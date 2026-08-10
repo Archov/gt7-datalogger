@@ -54,6 +54,64 @@ async def test_lap_completion(setup) -> None:
     assert lap.max_speed == pytest.approx(180.0)
 
 
+async def test_signed_yaw_and_packet_a_optional_channels(setup) -> None:
+    proc, collector = setup
+    await feed_lap(proc, 1, 3, angular_velocity=(0.0, -0.25, 0.0))
+    await proc.feed(make_packet(current_lap=2, last_lap_time_ms=10_000))
+    samples = collector.laps[0].samples
+    assert samples["yaw_rate"] == [0.25, 0.25, 0.25]
+    assert samples["yaw_rate_signed"] == [-0.25, -0.25, -0.25]
+    assert "steering_wheel_rad" not in samples
+    assert "surface" not in samples
+    assert len({len(values) for values in samples.values()}) == 1
+
+
+async def test_extended_channels_and_metadata(setup) -> None:
+    proc, collector = setup
+    kwargs = {
+        "fmt": "C",
+        "wheel_rotation": 0.3,
+        "steering_angular_velocity": -0.4,
+        "sway": 1.1,
+        "heave": 1.2,
+        "surge": -1.3,
+        "throttle_filtered": 128,
+        "brake_filtered": 64,
+        "torque_vectors": (1.0, 2.0, 3.0, 4.0),
+        "energy_recovery": 5.0,
+        "surface_types": "TCTG",
+        "wheel_steering_rad": (0.1, 0.2),
+        "wheelbase_m": 2.7,
+        "car_category": "GR3",
+        "fuel_capacity": 80.0,
+    }
+    await feed_lap(proc, 1, 3, **kwargs)
+    await proc.feed(make_packet(current_lap=2, last_lap_time_ms=10_000, **kwargs))
+    lap = collector.laps[0]
+    assert lap.samples["steering_angular_velocity"] == [-0.4, -0.4, -0.4]
+    assert lap.samples["throttle_filtered"][0] == pytest.approx(50.2)
+    assert lap.samples["steer_fr_rad"] == [0.2, 0.2, 0.2]
+    assert len({len(values) for values in lap.samples.values()}) == 1
+    assert lap.telemetry_meta == {
+        "packet_format": "C",
+        "wheelbase_m": pytest.approx(2.7),
+        "car_category": "GR3",
+        "fuel_capacity": pytest.approx(80.0),
+    }
+
+
+async def test_disappearing_extension_drops_whole_optional_group(setup) -> None:
+    proc, _ = setup
+    await proc.feed(make_packet(current_lap=1, fmt="C"))
+    await proc.feed(make_packet(current_lap=1, fmt="A"))
+    samples = proc.live_lap_samples
+    assert "steering_wheel_rad" not in samples
+    assert "throttle_filtered" not in samples
+    assert "surface" not in samples
+    assert proc.live_telemetry_meta is not None
+    assert proc.live_telemetry_meta["packet_format"] == "A"
+
+
 async def test_no_lap_on_first_boundary(setup) -> None:
     """Going from menu (lap 0) onto track (lap 1) must not emit a lap."""
     proc, c = setup

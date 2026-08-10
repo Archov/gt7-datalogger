@@ -48,6 +48,10 @@ laps.
   Older v1 files import cleanly; the newer per-corner channels are simply absent and
   the charts skip them. Events and aid metrics are recomputed from the samples on
   import.
+- **Export for LLM** — download one token-efficient whole-session analysis file. It uses
+  fixed-distance timing, common reference-lap corners, event context, and bounded detail
+  traces rather than concatenating every lap's 60 Hz samples. See the
+  [LLM session export schema](../reference/llm-session-export.md).
 
 ## Recording control
 

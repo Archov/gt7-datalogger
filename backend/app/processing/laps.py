@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from statistics import median
 
 from app.models import TelemetryPacket
+from app.processing.analysis import time_weights
 from app.processing.surface import encode_surface, off_track_excursions
 
 log = logging.getLogger(__name__)
@@ -50,35 +51,84 @@ SPANS_FOR_MEDIAN = 3
 # and the real partials sat at 88 %, 88 %, 81 %, 65 % and 40 %.
 PROVISIONAL_SPAN_RATIO = 0.93
 
-# Columnar per-tick series kept for each lap. Column order matters for the
-# frontend; keep in sync with frontend/src/lib/types.ts.
-SAMPLE_COLUMNS = (
-    "t", "dist", "speed", "throttle", "brake", "coast", "gear", "rpm",
-    "boost", "tire_slip", "yaw_rate", "pos_x", "pos_z", "body_height", "fuel",
+# Columnar per-tick series kept for each lap. Core columns exist for every
+# packet format. Extension columns exist only when that format was available
+# for the whole recorded lap; this keeps "not recorded" distinct from zero.
+CORE_SAMPLE_COLUMNS = (
+    "t",
+    "dist",
+    "speed",
+    "throttle",
+    "brake",
+    "coast",
+    "gear",
+    "rpm",
+    "boost",
+    "tire_slip",
+    "yaw_rate",
+    "yaw_rate_signed",
+    "pos_x",
+    "pos_z",
+    "body_height",
+    "fuel",
+    "road_plane_x",
+    "road_plane_y",
+    "road_plane_z",
+    "road_plane_distance",
     # Tier 1 per-corner channels (FL FR RL RR)
-    "slip_fl", "slip_fr", "slip_rl", "slip_rr",
-    "tt_fl", "tt_fr", "tt_rl", "tt_rr",
-    "sus_fl", "sus_fr", "sus_rl", "sus_rr",  # suspension compression, mm
+    "slip_fl",
+    "slip_fr",
+    "slip_rl",
+    "slip_rr",
+    "tt_fl",
+    "tt_fr",
+    "tt_rl",
+    "tt_rr",
+    "sus_fl",
+    "sus_fr",
+    "sus_rl",
+    "sus_rr",  # suspension compression, mm
     "aids",  # AidsBits mask: TCS | ASM | handbrake | rev limiter
-    "surface",  # packed per-wheel surface codes (see processing/surface.py)
 )
+
+OPTIONAL_SAMPLE_GROUPS = {
+    "B": (
+        "steering_wheel_rad",
+        "steering_angular_velocity",
+        "sway",
+        "heave",
+        "surge",
+    ),
+    "~": (
+        "throttle_filtered",
+        "brake_filtered",
+        "torque_fl",
+        "torque_fr",
+        "torque_rl",
+        "torque_rr",
+        "energy_recovery",
+    ),
+    "C": (
+        "steer_fl_rad",
+        "steer_fr_rad",
+        "surface",
+    ),
+}
+SAMPLE_COLUMNS = CORE_SAMPLE_COLUMNS + tuple(
+    column for columns in OPTIONAL_SAMPLE_GROUPS.values() for column in columns
+)
+
+_PACKET_FORMAT_RANK = {"A": 0, "B": 1, "~": 2, "C": 3}
 
 
 def new_sample_store() -> dict[str, list[float]]:
+    """An empty complete store, convenient for analysis fixtures/import tools."""
     return {c: [] for c in SAMPLE_COLUMNS}
 
 
-def _time_weights(t: list[float]) -> list[float]:
-    """Per-sample durations from t deltas; uniform when too short to tell.
-
-    Metrics weight samples by how much time each one covered, so a sample
-    recorded after a dropped-frame gap counts for the whole gap instead of
-    skewing percentages toward whatever happened while packets flowed.
-    """
-    if len(t) < 2:
-        return [1.0] * len(t)
-    w = [max(t[i] - t[i - 1], 0.0) for i in range(1, len(t))]
-    return [w[0], *w]  # first sample inherits the first interval
+def new_recording_sample_store() -> dict[str, list[float]]:
+    """An empty live store; optional columns are enabled by the first tick."""
+    return {c: [] for c in CORE_SAMPLE_COLUMNS}
 
 
 @dataclass(slots=True)
@@ -114,6 +164,8 @@ class CompletedLap:
     clean_lap: bool | None = None
     # Static per lap: {"ratios": [...], "top_speed": float, "rpm_alert": float}
     gearing: dict[str, object] | None = None
+    # Static telemetry captured once rather than duplicated on every tick.
+    telemetry_meta: dict[str, object] | None = None
     events: list[dict[str, object]] = field(default_factory=list)
     # Partial-lap flags (see FULL_LAP_SPAN_RATIO): whether this lap may set
     # the session best, and whether it proved the previous best was partial.
@@ -145,7 +197,7 @@ class CompletedLap:
             return
         # Percentages are time-weighted: after a dropped-frame gap a sample
         # covers the whole gap, so drops don't skew the input metrics.
-        w = _time_weights(s["t"])
+        w = time_weights(s["t"])
         total_w = sum(w) or 1.0
 
         def pct(flags: list[bool]) -> float:
@@ -195,7 +247,9 @@ class LapProcessor:
 
     _session: SessionInfo | None = None
     _current_lap: int = -1
-    _samples: dict[str, list[float]] = field(default_factory=new_sample_store)
+    _samples: dict[str, list[float]] = field(default_factory=new_recording_sample_store)
+    _optional_enabled: dict[str, bool] | None = None
+    _telemetry_meta: dict[str, object] | None = None
     _distance: float = 0.0
     _elapsed_s: float = 0.0
     _last_pid: int = -1
@@ -223,6 +277,10 @@ class LapProcessor:
         return self._samples
 
     @property
+    def live_telemetry_meta(self) -> dict[str, object] | None:
+        return dict(self._telemetry_meta) if self._telemetry_meta is not None else None
+
+    @property
     def dropped_frames(self) -> int:
         return self._dropped_frames
 
@@ -245,9 +303,7 @@ class LapProcessor:
             log.info("car changed (%d -> %d): starting new session", self._session.car_id, p.car_id)
             self._session = None
 
-        lap_reset = (
-            self._current_lap > 0 and 0 <= p.current_lap < self._current_lap
-        )
+        lap_reset = self._current_lap > 0 and 0 <= p.current_lap < self._current_lap
         if self._session is None or lap_reset:
             self._session = SessionInfo(
                 car_id=p.car_id,
@@ -277,6 +333,7 @@ class LapProcessor:
             and len(self._samples["t"]) >= self.min_lap_ticks
         )
         finished_samples = self._samples
+        finished_meta = self._telemetry_meta
         fuel_start = self._fuel_start
         engine = (self._max_water, self._max_oil, self._min_oil_pressure)
 
@@ -284,7 +341,9 @@ class LapProcessor:
         # lap is persisted, and a stale _current_lap would re-trigger this
         # boundary once per packet (duplicate laps at ~60 Hz).
         self._current_lap = p.current_lap
-        self._samples = new_sample_store()
+        self._samples = new_recording_sample_store()
+        self._optional_enabled = None
+        self._telemetry_meta = None
         self._distance = 0.0
         self._elapsed_s = 0.0
         self._fuel_start = p.fuel_level
@@ -302,6 +361,7 @@ class LapProcessor:
                 fuel_start=fuel_start,
                 fuel_end=p.fuel_level,
                 tod_ms=p.day_progression_ms,
+                telemetry_meta=finished_meta,
             )
             lap.max_water_temp = round(engine[0], 1)
             lap.max_oil_temp = round(engine[1], 1)
@@ -342,8 +402,7 @@ class LapProcessor:
 
         reference = self._reference_span()
         ratio = (
-            FULL_LAP_SPAN_RATIO if len(self._laps) >= SPANS_FOR_MEDIAN
-            else PROVISIONAL_SPAN_RATIO
+            FULL_LAP_SPAN_RATIO if len(self._laps) >= SPANS_FOR_MEDIAN else PROVISIONAL_SPAN_RATIO
         )
         full_enough = reference * ratio
         # A lone lap has nothing to be compared with, so it counts — until a
@@ -364,9 +423,7 @@ class LapProcessor:
             self._partial = partial
 
         prior = [
-            time
-            for number, _, time in self._laps
-            if number not in partial and number != lap.number
+            time for number, _, time in self._laps if number not in partial and number != lap.number
         ]
         lap.session_best_before_ms = min(prior) if prior else -1
         valid = [time for number, _, time in self._laps if number not in partial]
@@ -395,6 +452,45 @@ class LapProcessor:
 
     def _append_sample(self, p: TelemetryPacket) -> None:
         s = self._samples
+        available = {
+            "B": p.wheel_rotation is not None and p.steering_angular_velocity is not None,
+            "~": (
+                p.throttle_filtered is not None
+                and p.brake_filtered is not None
+                and p.torque_vectors is not None
+                and p.energy_recovery is not None
+            ),
+            "C": p.wheel_steering_rad is not None and p.surface_types is not None,
+        }
+        if self._optional_enabled is None:
+            self._optional_enabled = available.copy()
+            for group, enabled in self._optional_enabled.items():
+                if enabled:
+                    for column in OPTIONAL_SAMPLE_GROUPS[group]:
+                        s[column] = []
+            self._telemetry_meta = {
+                "packet_format": p.packet_format,
+                "wheelbase_m": p.wheelbase_m,
+                "car_category": p.car_category,
+                "fuel_capacity": p.fuel_capacity,
+            }
+        else:
+            # Packet format is normally stable. If an extension unexpectedly
+            # disappears, remove the whole group rather than leave ragged data
+            # or pad it with values that look real.
+            for group, enabled in tuple(self._optional_enabled.items()):
+                if enabled and not available[group]:
+                    self._optional_enabled[group] = False
+                    for column in OPTIONAL_SAMPLE_GROUPS[group]:
+                        s.pop(column, None)
+            if self._telemetry_meta is not None:
+                current = str(self._telemetry_meta["packet_format"])
+                if _PACKET_FORMAT_RANK[p.packet_format] < _PACKET_FORMAT_RANK[current]:
+                    self._telemetry_meta["packet_format"] = p.packet_format
+                if self._telemetry_meta.get("wheelbase_m") is None and p.wheelbase_m is not None:
+                    self._telemetry_meta["wheelbase_m"] = p.wheelbase_m
+                if self._telemetry_meta.get("car_category") is None and p.car_category is not None:
+                    self._telemetry_meta["car_category"] = p.car_category
         dt_s = self._pending_dt * TICK_SECONDS
         if s["t"]:  # the lap's first sample anchors at t=0
             self._elapsed_s += dt_s
@@ -412,10 +508,15 @@ class LapProcessor:
         s["boost"].append(round(p.boost, 3))
         s["tire_slip"].append(round(p.tire_slip_ratio, 4))
         s["yaw_rate"].append(round(abs(p.angular_velocity_y), 4))
+        s["yaw_rate_signed"].append(round(p.angular_velocity_y, 4))
         s["pos_x"].append(round(p.position_x, 2))
         s["pos_z"].append(round(p.position_z, 2))
         s["body_height"].append(round(p.body_height * 1000, 1))  # mm
         s["fuel"].append(round(p.fuel_level, 3))
+        s["road_plane_x"].append(round(p.road_plane_x, 4))
+        s["road_plane_y"].append(round(p.road_plane_y, 4))
+        s["road_plane_z"].append(round(p.road_plane_z, 4))
+        s["road_plane_distance"].append(round(p.road_plane_distance, 4))
         slips = p.wheel_slips
         for i, w in enumerate(("fl", "fr", "rl", "rr")):
             s[f"slip_{w}"].append(round(slips[i], 4))
@@ -428,7 +529,29 @@ class LapProcessor:
         s["sus_rl"].append(round(p.suspension_rl * 1000, 1))
         s["sus_rr"].append(round(p.suspension_rr * 1000, 1))
         s["aids"].append(float(p.aids_bits))
-        s["surface"].append(float(encode_surface(p.surface_types)))
+        enabled_groups = self._optional_enabled or {}
+        if enabled_groups.get("B"):
+            assert p.wheel_rotation is not None
+            assert p.steering_angular_velocity is not None
+            assert p.sway is not None and p.heave is not None and p.surge is not None
+            s["steering_wheel_rad"].append(round(p.wheel_rotation, 4))
+            s["steering_angular_velocity"].append(round(p.steering_angular_velocity, 4))
+            s["sway"].append(round(p.sway, 4))
+            s["heave"].append(round(p.heave, 4))
+            s["surge"].append(round(p.surge, 4))
+        if enabled_groups.get("~"):
+            assert p.throttle_filtered is not None and p.brake_filtered is not None
+            assert p.torque_vectors is not None and p.energy_recovery is not None
+            s["throttle_filtered"].append(round(p.throttle_filtered / 2.55, 1))
+            s["brake_filtered"].append(round(p.brake_filtered / 2.55, 1))
+            for wheel, value in zip(("fl", "fr", "rl", "rr"), p.torque_vectors, strict=True):
+                s[f"torque_{wheel}"].append(round(value, 4))
+            s["energy_recovery"].append(round(p.energy_recovery, 4))
+        if enabled_groups.get("C"):
+            assert p.wheel_steering_rad is not None
+            s["steer_fl_rad"].append(round(p.wheel_steering_rad[0], 4))
+            s["steer_fr_rad"].append(round(p.wheel_steering_rad[1], 4))
+            s["surface"].append(float(encode_surface(p.surface_types)))
         # Engine-health aggregates (per-lap, not per-tick)
         self._max_water = max(self._max_water, p.water_temp)
         self._max_oil = max(self._max_oil, p.oil_temp)

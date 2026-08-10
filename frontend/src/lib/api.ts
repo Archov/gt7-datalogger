@@ -53,6 +53,12 @@ async function get<T>(url: string): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+async function getBlob(url: string): Promise<Blob> {
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (!resp.ok) await fail(url, resp);
+  return resp.blob();
+}
+
 async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
   const resp = await fetch(url, {
     method,
@@ -70,6 +76,8 @@ export const api = {
   status: () => get<ConnectionStatus>("/api/status"),
   sessions: () => get<SessionSummary[]>("/api/sessions"),
   sessionLaps: (id: number) => get<LapSummary[]>(`/api/sessions/${id}/laps`),
+  exportSessionForLlm: (id: number) =>
+    getBlob(`/api/sessions/${id}/export.llm.json?detail=standard&segment_m=100`),
   laps: () => get<LapSummary[]>("/api/laps"),
   lapDetail: (id: number, withSamples = true) =>
     get<LapSummary & Record<string, unknown>>(`/api/laps/${id}${withSamples ? "" : "?samples=0"}`),

@@ -1,6 +1,6 @@
 # Derived channels & metrics
 
-Every lap stores a full 60 Hz sample series. Some columns are raw packet values; others
+Every lap stores a full 60 Hz sample series for each available channel. Some columns are raw packet values; others
 are computed at capture time. This page lists every stored channel with its exact
 formula, then the per-lap aggregates, then the channels the frontend derives on the fly.
 
@@ -21,6 +21,8 @@ One value per column per tick (~60/s):
 | `boost` | `raw − 1.0` (packet stores bar + 1) | bar |
 | `tire_slip` | mean of the four wheel slips | ratio |
 | `yaw_rate` | `abs(angular_velocity_y)` | rad/s |
+| `yaw_rate_signed` | signed `angular_velocity_y` | rad/s |
+| `road_plane_x/y/z`, `road_plane_distance` | raw base-packet road-plane values | raw |
 | `pos_x`, `pos_z` | raw world coordinates | m |
 | `body_height` | `raw × 1000` | mm |
 | `fuel` | raw fuel level | L |
@@ -28,7 +30,16 @@ One value per column per tick (~60/s):
 | `tt_fl/fr/rl/rr` | raw tire temps | °C |
 | `sus_fl/fr/rl/rr` | `suspension_travel × 1000` | mm |
 | `aids` | bitmask: TCS=1, ASM=2, handbrake=4, rev limiter=8 | mask |
-| `surface` | per-wheel surface codes, 4 bits each, FL in the lowest nibble (0 = no data, 1 = tarmac, 2 = kerb, 3 = dirt, 4 = grass, 5 = sand, 6 = snow, 7 = other) — packet C only | mask |
+| `steering_wheel_rad`, `steering_angular_velocity` | Packet-B steering-wheel position and rate | rad, rad/s |
+| `sway`, `heave`, `surge` | Packet-B motion values | raw GT7 values |
+| `throttle_filtered`, `brake_filtered` | Packet-`~` filtered bytes ÷ 2.55 | % |
+| `torque_fl/fr/rl/rr`, `energy_recovery` | Packet-`~` values | raw GT7 values |
+| `steer_fl_rad`, `steer_fr_rad` | Packet-C front-wheel steering | rad |
+| `surface` | per-wheel surface codes, 4 bits each, FL in the lowest nibble (1 = tarmac, 2 = kerb, 3 = dirt, 4 = grass, 5 = sand, 6 = snow, 7 = other) — packet C only | mask |
+
+Packet B/`~`/C columns are absent when that extension was unavailable for the complete
+lap; they are not padded with zeros. Static packet format, wheelbase, car category, and
+fuel capacity are stored once in `telemetry_meta`, not repeated per tick.
 
 **Wheel slip** is a slip-ratio proxy: wheel surface speed divided by car speed. `< 1`
 under braking means the wheel is locking; `> 1` under power means it's spinning. Below

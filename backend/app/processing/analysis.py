@@ -17,7 +17,9 @@ DEFAULT_STEP_M = 5.0
 # Discrete per-tick columns (packed bitfields) where linear interpolation
 # would fabricate values that decode to nonsense — resampled with
 # nearest-neighbor instead.
-NEAREST_COLUMNS = frozenset({"surface"})
+NEAREST_COLUMNS = frozenset({"gear", "aids", "surface"})
+DEFAULT_BRAKE_SEARCH_M = 250.0
+DEFAULT_BRAKE_ON_PCT = 20.0
 
 
 def _interp(xs: list[float], ys: list[float], x: float) -> float:
@@ -66,6 +68,67 @@ def _nearest(xs: list[float], ys: list[float], x: float) -> float:
     if i >= len(xs):
         return ys[-1]
     return ys[i] if xs[i] - x < x - xs[i - 1] else ys[i - 1]
+
+
+def interp(xs: list[float], ys: list[float], x: float) -> float:
+    """Public interpolation helper shared by persisted-data analyses."""
+    return _interp(xs, ys, x)
+
+
+def nearest(xs: list[float], ys: list[float], x: float) -> float:
+    """Public nearest-neighbor helper for discrete persisted channels."""
+    return _nearest(xs, ys, x)
+
+
+def time_weights(t: list[float]) -> list[float]:
+    """Dropped-frame-aware duration represented by each stored sample."""
+    if len(t) < 2:
+        return [1.0] * len(t)
+    weights = [max(t[i] - t[i - 1], 0.0) for i in range(1, len(t))]
+    return [weights[0], *weights]
+
+
+def brake_point(
+    samples: Samples,
+    entry: float,
+    *,
+    search_m: float = DEFAULT_BRAKE_SEARCH_M,
+    threshold_pct: float = DEFAULT_BRAKE_ON_PCT,
+) -> float | None:
+    """First brake application in the approach window before a corner."""
+    dist = samples.get("dist") or []
+    brake = samples.get("brake") or []
+    start = entry - search_m
+    for d, value in zip(dist, brake, strict=False):
+        if d < start:
+            continue
+        if d > entry:
+            return None
+        if value >= threshold_pct:
+            return d
+    return None
+
+
+def brake_point_delta(
+    lap: Samples,
+    reference: Samples,
+    entry: float,
+    *,
+    search_m: float = DEFAULT_BRAKE_SEARCH_M,
+    threshold_pct: float = DEFAULT_BRAKE_ON_PCT,
+) -> float | None:
+    """Metres earlier (negative) or later (positive) than the reference."""
+    mine = brake_point(lap, entry, search_m=search_m, threshold_pct=threshold_pct)
+    theirs = brake_point(reference, entry, search_m=search_m, threshold_pct=threshold_pct)
+    return None if mine is None or theirs is None else mine - theirs
+
+
+def minimum_speed(samples: Samples, entry: float, exit_: float) -> float | None:
+    """Minimum recorded speed inside a non-wrapping distance window."""
+    dist = samples.get("dist") or []
+    speed = samples.get("speed") or []
+    values = [value for d, value in zip(dist, speed, strict=False) if entry <= d <= exit_]
+    return min(values) if values else None
 
 
 def time_delta_at(dist_m: float, t_s: float, ref: Samples) -> float | None:

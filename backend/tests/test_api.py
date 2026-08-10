@@ -135,6 +135,48 @@ async def test_export_import_roundtrip(client) -> None:
     assert len((await c.get("/api/laps")).json()) == 2
 
 
+async def test_llm_session_export_and_validation(client) -> None:
+    c, service = client
+    await drive_laps(service, laps=2)
+    sessions = (await c.get("/api/sessions")).json()
+    session_id = sessions[0]["id"]
+    laps = (await c.get(f"/api/sessions/{session_id}/laps")).json()
+    response = await c.get(f"/api/sessions/{session_id}/export.llm.json")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="gt7-session-{session_id}-llm.json"'
+    )
+    data = response.json()
+    assert data["format"] == "gt7-datalogger-llm-session"
+    assert data["version"] == 1
+    assert data["options"]["detail"] == "standard"
+
+    explicit = await c.get(
+        f"/api/sessions/{session_id}/export.llm.json?detail=compact"
+        f"&segment_m=50&ref={laps[0]['id']}"
+    )
+    assert explicit.status_code == 200
+    assert explicit.json()["reference"]["reason"] == "explicit"
+    assert "detail_traces" not in explicit.json()
+
+    assert (await c.get("/api/sessions/999/export.llm.json")).status_code == 404
+    assert (
+        await c.get(f"/api/sessions/{session_id}/export.llm.json?ref=999")
+    ).status_code == 404
+    for query in ("detail=huge", "segment_m=10", "segment_m=not-a-number", "ref=nope"):
+        assert (
+            await c.get(f"/api/sessions/{session_id}/export.llm.json?{query}")
+        ).status_code == 400
+
+    partial = await service.log_lap_now()
+    assert partial is not None
+    assert (
+        await c.get(
+            f"/api/sessions/{session_id}/export.llm.json?ref={partial['id']}"
+        )
+    ).status_code == 400
+
+
 async def test_import_rejects_bad_format(client) -> None:
     c, _ = client
     resp = await c.post(

@@ -59,6 +59,7 @@ def test_parse_core_fields() -> None:
         boost=0.8,
         flags=int(SimulatorFlags.CAR_ON_TRACK | SimulatorFlags.HAS_TURBO),
         car_id=3298,
+        road_plane=(0.1, -0.2, 0.95, 1.75),
     )
     p = parse_packet(plain)
     assert p.packet_id == 42
@@ -79,6 +80,11 @@ def test_parse_core_fields() -> None:
     assert p.is_on_track
     assert not p.is_paused
     assert p.car_id == 3298
+    assert p.packet_format == "A"
+    assert p.road_plane_x == pytest.approx(0.1)
+    assert p.road_plane_y == pytest.approx(-0.2)
+    assert p.road_plane_z == pytest.approx(0.95)
+    assert p.road_plane_distance == pytest.approx(1.75)
 
 
 def test_tire_slip_ratio() -> None:
@@ -106,8 +112,19 @@ def test_packet_a_has_no_extended_fields() -> None:
 
 
 def test_parse_packet_b_extension() -> None:
-    p = parse_packet(make_plain(fmt="B", wheel_rotation=0.5, sway=1.5, heave=-0.2, surge=2.0))
+    p = parse_packet(
+        make_plain(
+            fmt="B",
+            wheel_rotation=0.5,
+            steering_angular_velocity=-1.25,
+            sway=1.5,
+            heave=-0.2,
+            surge=2.0,
+        )
+    )
+    assert p.packet_format == "B"
     assert p.wheel_rotation is not None and abs(p.wheel_rotation - 0.5) < 1e-6
+    assert p.steering_angular_velocity == pytest.approx(-1.25)
     assert p.sway is not None and abs(p.sway - 1.5) < 1e-6
     assert p.heave is not None and abs(p.heave - -0.2) < 1e-6
     assert p.surge is not None and abs(p.surge - 2.0) < 1e-6

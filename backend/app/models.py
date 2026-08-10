@@ -40,6 +40,7 @@ class AidsBits(IntFlag):
 @dataclass(slots=True)
 class TelemetryPacket:
     packet_id: int
+    packet_format: str
 
     # Position / motion (meters, meters/second, radians/second)
     position_x: float
@@ -55,6 +56,10 @@ class TelemetryPacket:
     angular_velocity_x: float
     angular_velocity_y: float
     angular_velocity_z: float
+    road_plane_x: float
+    road_plane_y: float
+    road_plane_z: float
+    road_plane_distance: float
 
     body_height: float  # meters
     engine_rpm: float
@@ -117,6 +122,7 @@ class TelemetryPacket:
     # --- Extended formats (None when the console sends plain packet A) ------
     # Packet B (heartbeat "B") and up:
     wheel_rotation: float | None = None  # steering wheel angle, radians
+    steering_angular_velocity: float | None = None  # steering wheel, radians/second
     sway: float | None = None  # lateral acceleration
     heave: float | None = None  # vertical acceleration
     surge: float | None = None  # longitudinal acceleration

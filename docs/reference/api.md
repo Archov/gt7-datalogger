@@ -17,11 +17,12 @@ script can too. All REST routes live under `/api`; responses are JSON.
 | GET | `/api/sessions` | all sessions, newest first, with lap count and best lap |
 | DELETE | `/api/sessions/{id}` | delete a session and its laps |
 | GET | `/api/sessions/{id}/laps` | lap summaries for one session |
+| GET | `/api/sessions/{id}/export.llm.json` | compact LLM session analysis; `detail=compact\|standard\|deep`, `segment_m=25..1000`, optional `ref` ([schema](llm-session-export.md)) |
 | GET | `/api/laps` | all lap summaries, newest first |
 | GET | `/api/laps/{id}?samples=true` | full lap detail: metrics, events, gearing, and (optionally) the 60 Hz samples |
 | DELETE | `/api/laps/{id}` | delete a lap |
 | GET | `/api/laps/{id}/export` | JSON export envelope (see [Lap file format](lap-file-format.md)) |
-| GET | `/api/laps/{id}/export.csv` | MoTeC-compatible CSV (one row per tick, 27 channels with units) |
+| GET | `/api/laps/{id}/export.csv` | MoTeC-compatible CSV (one row per tick, recorded channels with units) |
 | POST | `/api/laps/import` | import an exported lap file |
 
 ## Tracks

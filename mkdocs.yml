@@ -83,4 +83,5 @@ nav:
   - Reference:
       - REST & WebSocket API: reference/api.md
       - Lap file format: reference/lap-file-format.md
+      - LLM session export: reference/llm-session-export.md
       - Troubleshooting: reference/troubleshooting.md

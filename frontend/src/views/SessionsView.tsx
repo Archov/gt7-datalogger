@@ -51,6 +51,20 @@ export function SessionsView() {
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
+  async function exportSessionForLlm(id: number) {
+    try {
+      const blob = await api.exportSessionForLlm(id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `gt7-session-${id}-llm.json`;
+      a.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      toast("Could not export session for LLM analysis", "error");
+    }
+  }
+
   async function importLap(file: File) {
     try {
       const payload = JSON.parse(await file.text());
@@ -170,6 +184,13 @@ export function SessionsView() {
                   </span>
                 </span>
               </div>
+              {s.lap_count > 0 && (
+                <Tip content="Download a compact whole-session file for ChatGPT or another LLM">
+                  <button className="btn shrink-0" onClick={() => exportSessionForLlm(s.id)}>
+                    Export for LLM
+                  </button>
+                </Tip>
+              )}
               {s.lap_count > 0 && (
                 <Tip content="Open this session in the Analysis view">
                   <button className="btn shrink-0" onClick={() => analyzeSession(s)}>

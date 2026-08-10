@@ -104,6 +104,7 @@ class LapRow(Base):
     clean_lap: Mapped[bool | None] = mapped_column(default=None)
     events_json: Mapped[str] = mapped_column(Text, default="[]")
     gearing_json: Mapped[str] = mapped_column(Text, default="")
+    telemetry_meta_json: Mapped[str] = mapped_column(Text, default="")
     samples_json: Mapped[str] = mapped_column(Text)
 
     session: Mapped[SessionRow] = relationship(back_populates="laps")
@@ -145,6 +146,7 @@ _SQLITE_MIGRATIONS = (
         ("min_oil_pressure", "FLOAT NOT NULL DEFAULT -1"),
         ("events_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("gearing_json", "TEXT NOT NULL DEFAULT ''"),
+        ("telemetry_meta_json", "TEXT NOT NULL DEFAULT ''"),
         ("off_track_count", "INTEGER NOT NULL DEFAULT -1"),
         ("clean_lap", "BOOLEAN"),
     )

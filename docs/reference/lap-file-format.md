@@ -3,12 +3,12 @@
 Laps export and import as JSON (**Sessions → json** / **Import lap…**) so they can be
 shared or backed up, and export as CSV for MoTeC i2 or Excel.
 
-## JSON export (v2)
+## JSON export (v3)
 
 ```json
 {
   "format": "gt7-datalogger-lap",
-  "version": 2,
+  "version": 3,
   "lap": {
     "number": 4,
     "time_ms": 92450,
@@ -20,6 +20,8 @@ shared or backed up, and export as CSV for MoTeC i2 or Excel.
                   "wheels": ["fl"], "severity": 0.71 } ],
     "gearing": { "ratios": [3.21, 2.44, 1.88, 1.51, 1.24, 1.03],
                  "top_speed": 289.0, "rpm_alert": 7500 },
+    "telemetry_meta": { "packet_format": "C", "wheelbase_m": 2.65,
+                        "car_category": "GR3", "fuel_capacity": 100.0 },
     "samples": { "t": [...], "dist": [...], "speed": [...], "...": "..." }
   }
 }
@@ -27,7 +29,7 @@ shared or backed up, and export as CSV for MoTeC i2 or Excel.
 
 The `samples` object holds the **full 60 Hz series** as parallel arrays, one per
 channel — see [Derived channels & metrics](../internals/derived-channels.md) for the
-complete column list with formulas and units (~28 columns: time, distance, speed,
+complete column list with formulas and units (time, distance, speed,
 inputs, gear, RPM, boost, per-wheel slip, per-corner tire temps and suspension travel,
 world position, fuel, driver-aids bitmask, …).
 
@@ -37,9 +39,9 @@ world position, fuel, driver-aids bitmask, …).
 
 - If no session is active, an `imported` session is created to hold the lap.
 - **Events and aid-usage metrics are recomputed** from the samples on import (so
-  imports benefit from detector improvements), while engine-health aggregates and
-  gearing are carried over verbatim.
-- **v1 files** (from older versions) import cleanly — the newer per-corner channels are
+  imports benefit from detector improvements), while engine-health aggregates,
+  gearing, partial-lap state, and v3 telemetry metadata are carried over.
+- **v1/v2 files** import cleanly — newer channels and telemetry metadata are
   simply absent and the charts skip them; events stay empty since the columns they need
   aren't there.
 
@@ -52,7 +54,7 @@ understands:
   `Sample Rate: 60.000`
 - Then a channel-name row and a unit row, followed by one row per tick
 
-27 channels with explicit units: Time (s), Distance (m), Ground Speed (km/h), Throttle
+Recorded channels have explicit units: Time (s), Distance (m), Ground Speed (km/h), Throttle
 Pos (%), Brake Pos (%), Gear, Engine RPM (rpm), Boost Pressure (bar), Tyre Slip Ratio,
 Yaw Rate (rad/s), Pos X/Z (m), Ride Height (mm), Fuel Level (L), Tyre Slip FL/FR/RL/RR,
 Tyre Temp FL/FR/RL/RR (C), Susp Travel FL/FR/RL/RR (mm), and Driver Aids (bitmask).

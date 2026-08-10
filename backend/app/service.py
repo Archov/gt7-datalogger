@@ -649,6 +649,8 @@ class TelemetryService:
             samples={k: list(v) for k, v in samples.items()},
             fuel_start=samples["fuel"][0],
             fuel_end=samples["fuel"][-1],
+            telemetry_meta=self.processor.live_telemetry_meta,
+            counts_for_best=False,
         )
         lap.compute_metrics()
         lap_id = await self.repo.save_lap(self.session_id, lap)

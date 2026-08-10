@@ -10,15 +10,21 @@ import re
 from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.auth import require_admin
 from app.processing import analysis
 from app.processing.laps import SAMPLE_COLUMNS
+from app.processing.llm_export import (
+    Detail,
+    ExportInputError,
+    ReferenceNotFoundError,
+    build_export,
+)
 from app.processing.tracks import signature_from_samples
 
 if TYPE_CHECKING:
@@ -48,6 +54,46 @@ async def status(request: Request) -> dict[str, Any]:
 @router.get("/sessions")
 async def sessions(request: Request) -> list[dict[str, Any]]:
     return await svc(request).repo.list_sessions()
+
+
+@router.get("/sessions/{session_id}/export.llm.json")
+async def export_session_for_llm(
+    request: Request,
+    session_id: int,
+    detail: str = Query("standard"),
+    segment_m: str = Query("100"),
+    ref: str | None = Query(None),
+) -> Response:
+    """Compact persisted-session analysis; never a full-session tick dump."""
+    try:
+        if detail not in ("compact", "standard", "deep"):
+            raise ValueError("detail must be compact, standard, or deep")
+        segment = float(segment_m)
+        reference = int(ref) if ref is not None else None
+    except ValueError as exc:
+        raise HTTPException(400, f"invalid export options: {exc}") from exc
+    bundle = await svc(request).repo.get_session_analysis_data(session_id)
+    if bundle is None:
+        raise HTTPException(404, "session not found")
+    try:
+        data = build_export(
+            bundle,
+            detail=cast(Detail, detail),
+            segment_m=segment,
+            explicit_ref=reference,
+        )
+    except ReferenceNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ExportInputError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    content = json.dumps(data, separators=(",", ":"), allow_nan=False, ensure_ascii=False)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (f'attachment; filename="gt7-session-{session_id}-llm.json"')
+        },
+    )
 
 
 @router.delete("/sessions/{session_id}", dependencies=[Depends(require_admin)])
@@ -113,10 +159,15 @@ CSV_CHANNELS = (
     ("boost", "Boost Pressure", "bar"),
     ("tire_slip", "Tyre Slip Ratio", ""),
     ("yaw_rate", "Yaw Rate", "rad/s"),
+    ("yaw_rate_signed", "Yaw Rate Signed", "rad/s"),
     ("pos_x", "Pos X", "m"),
     ("pos_z", "Pos Z", "m"),
     ("body_height", "Ride Height", "mm"),
     ("fuel", "Fuel Level", "L"),
+    ("road_plane_x", "Road Plane X", "raw"),
+    ("road_plane_y", "Road Plane Y", "raw"),
+    ("road_plane_z", "Road Plane Z", "raw"),
+    ("road_plane_distance", "Road Plane Distance", "raw"),
     ("slip_fl", "Tyre Slip FL", ""),
     ("slip_fr", "Tyre Slip FR", ""),
     ("slip_rl", "Tyre Slip RL", ""),
@@ -131,6 +182,20 @@ CSV_CHANNELS = (
     ("sus_rr", "Susp Travel RR", "mm"),
     ("aids", "Driver Aids", ""),
     ("surface", "Surface Mask", ""),
+    ("steering_wheel_rad", "Steering Wheel", "rad"),
+    ("steering_angular_velocity", "Steering Angular Velocity", "rad/s"),
+    ("sway", "Sway", "raw"),
+    ("heave", "Heave", "raw"),
+    ("surge", "Surge", "raw"),
+    ("throttle_filtered", "Filtered Throttle", "%"),
+    ("brake_filtered", "Filtered Brake", "%"),
+    ("torque_fl", "Torque Vector FL", "raw"),
+    ("torque_fr", "Torque Vector FR", "raw"),
+    ("torque_rl", "Torque Vector RL", "raw"),
+    ("torque_rr", "Torque Vector RR", "raw"),
+    ("energy_recovery", "Energy Recovery", "raw"),
+    ("steer_fl_rad", "Steering Angle FL", "rad"),
+    ("steer_fr_rad", "Steering Angle FR", "rad"),
 )
 
 
@@ -171,9 +236,7 @@ async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
     for i in range(n):
         # Guard against ragged legacy rows; values are numeric so
         # QUOTE_MINIMAL leaves them unquoted.
-        data.writerow(
-            [samples[key][i] if i < len(samples[key]) else "" for key, _, _ in cols]
-        )
+        data.writerow([samples[key][i] if i < len(samples[key]) else "" for key, _, _ in cols])
 
     return PlainTextResponse(
         buf.getvalue(),
@@ -249,8 +312,18 @@ class ImportPayload(BaseModel):
 # distance resampling, peak/valley detection). Everything else in
 # SAMPLE_COLUMNS is optional and degrades gracefully via .get.
 REQUIRED_IMPORT_COLUMNS = frozenset(
-    {"t", "dist", "speed", "throttle", "brake", "coast", "tire_slip",
-     "body_height", "pos_x", "pos_z"}
+    {
+        "t",
+        "dist",
+        "speed",
+        "throttle",
+        "brake",
+        "coast",
+        "tire_slip",
+        "body_height",
+        "pos_x",
+        "pos_z",
+    }
 )
 # ~33 min at 60 Hz — roughly twice the slowest plausible GT7 lap; also caps
 # the samples_json blob at a size SQLite handles comfortably.
@@ -268,10 +341,13 @@ class LapImportModel(BaseModel):
     car_id: int = 0
     fuel_start: float = 0.0
     fuel_end: float = 0.0
+    tod_ms: int = -1
+    counts_for_best: bool = True
     max_water_temp: float = 0.0
     max_oil_temp: float = 0.0
     min_oil_pressure: float = -1.0
     gearing: dict[str, Any] | None = None
+    telemetry_meta: dict[str, Any] | None = None
     samples: dict[str, list[float]]
 
 
@@ -310,9 +386,7 @@ async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]
         from app.processing.laps import SessionInfo
 
         info = SessionInfo(car_id=lap.car_id, started_at="imported")
-        service.session_id = await service.repo.create_session(
-            info, service.cars.name(info.car_id)
-        )
+        service.session_id = await service.repo.create_session(info, service.cars.name(info.car_id))
     clean = payload.model_dump()
     clean["lap"] = lap.model_dump()
     try:
@@ -327,14 +401,22 @@ async def import_lap(request: Request, payload: ImportPayload) -> dict[str, Any]
 # Default channel set — the pre-Tier-1 payload, so clients that never open the
 # newer channels pay nothing extra.
 COMPARE_COLUMNS = (
-    "t", "speed", "throttle", "brake", "coast", "gear", "rpm", "boost", "tire_slip", "yaw_rate",
-    "pos_x", "pos_z",
+    "t",
+    "speed",
+    "throttle",
+    "brake",
+    "coast",
+    "gear",
+    "rpm",
+    "boost",
+    "tire_slip",
+    "yaw_rate",
+    "pos_x",
+    "pos_z",
 )
 
 # Columns the channels= param may request beyond the defaults.
-EXTRA_COMPARE_COLUMNS = tuple(
-    c for c in SAMPLE_COLUMNS if c not in COMPARE_COLUMNS and c != "dist"
-)
+EXTRA_COMPARE_COLUMNS = tuple(c for c in SAMPLE_COLUMNS if c not in COMPARE_COLUMNS and c != "dist")
 
 
 @router.get("/analysis/compare")
@@ -414,9 +496,7 @@ async def fuel(request: Request, lap_id: int) -> dict[str, Any]:
     if lap is None:
         raise HTTPException(404, "lap not found")
     service = svc(request)
-    fuel_level = (
-        service.latest_packet.fuel_level if service.latest_packet else lap["fuel_end"]
-    )
+    fuel_level = service.latest_packet.fuel_level if service.latest_packet else lap["fuel_end"]
     rows = analysis.fuel_map(fuel_level, lap["fuel_consumed"], lap["time_ms"])
     return {
         "fuel_level": fuel_level,

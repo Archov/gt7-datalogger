@@ -27,7 +27,7 @@ the datagram length, so whatever the console answers is decoded correctly:
 | Heartbeat | Size | Adds |
 | --- | --- | --- |
 | `A` | 296 B | base telemetry (everything in the table below) |
-| `B` | 316 B | steering wheel rotation, sway / heave / surge accelerations |
+| `B` | 316 B | steering wheel rotation/angular velocity, sway / heave / surge values |
 | `~` | 344 B | filtered throttle & brake, per-wheel torque vectors, energy recovery |
 | `C` | 368 B | per-wheel surface type, live lap timer, front-wheel steering angles, wheelbase, car category (needs GT7 **v1.68+**) |
 
@@ -75,6 +75,7 @@ Every packet decodes to a typed structure with ~50 fields. The important ones:
 | 0x8E | flags | bitmask, see below |
 | 0x90 | current gear (low nibble) / suggested gear (high nibble) | 15 = neutral |
 | 0x91 | throttle / brake | 0–255 → % via ÷2.55 |
+| 0x94 | road plane X/Y/Z + distance | raw road-plane values |
 | 0xA4 | wheel angular speed FL/FR/RL/RR | rad/s, signed |
 | 0xB4 | tire radius FL/FR/RL/RR | m |
 | 0xC4 | suspension travel FL/FR/RL/RR | m |

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.processing.analysis import time_delta_series
+from app.processing.analysis import (
+    brake_point,
+    brake_point_delta,
+    minimum_speed,
+    time_delta_series,
+)
 from app.race_engineer.detectors.base import Detector
 from app.race_engineer.formatter import (
     spoken_corner,
@@ -296,37 +301,29 @@ def _brake_point(samples: dict[str, list[float]], entry: float) -> float | None:
     Looked for in a window before the corner's entry: braking belongs to the
     approach, and a fast corner may have none at all.
     """
-    dist = samples.get("dist") or []
-    brake = samples.get("brake") or []
-    start = entry - CORNER_BRAKE_SEARCH_M
-    for i in range(min(len(dist), len(brake))):
-        if dist[i] < start:
-            continue
-        if dist[i] > entry:
-            return None
-        if brake[i] >= CORNER_BRAKE_ON_PCT:
-            return dist[i]
-    return None
+    return brake_point(
+        samples,
+        entry,
+        search_m=CORNER_BRAKE_SEARCH_M,
+        threshold_pct=CORNER_BRAKE_ON_PCT,
+    )
 
 
 def _brake_point_delta(
     lap: dict[str, list[float]], ref: dict[str, list[float]], entry: float
 ) -> float | None:
     """Metres earlier (negative) or later (positive) than the reference lap."""
-    mine = _brake_point(lap, entry)
-    theirs = _brake_point(ref, entry)
-    if mine is None or theirs is None:
-        return None
-    return mine - theirs
+    return brake_point_delta(
+        lap,
+        ref,
+        entry,
+        search_m=CORNER_BRAKE_SEARCH_M,
+        threshold_pct=CORNER_BRAKE_ON_PCT,
+    )
 
 
 def _min_speed(samples: dict[str, list[float]], entry: float, exit_: float) -> float | None:
-    dist = samples.get("dist") or []
-    speed = samples.get("speed") or []
-    window = [
-        speed[i] for i in range(min(len(dist), len(speed))) if entry <= dist[i] <= exit_
-    ]
-    return min(window) if window else None
+    return minimum_speed(samples, entry, exit_)
 
 
 def _apex_speed_delta(

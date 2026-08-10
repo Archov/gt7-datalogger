@@ -72,7 +72,7 @@ _HEAD = struct.Struct(
 
 assert _HEAD.size == PACKET_SIZE_A
 
-# Packet "B" extension at 0x128: wheel rotation, filler, sway, heave, surge.
+# Packet "B" extension at 0x128: wheel rotation/angular velocity and motion.
 _EXT_B = struct.Struct("<5f")
 # Packet "~" extension at 0x13C: filtered throttle/brake, 2 unknown bytes,
 # 4 torque-vector floats, energy recovery, 1 unknown float.
@@ -93,31 +93,65 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
     v = _HEAD.unpack_from(plain)
     (
         _magic,
-        pos_x, pos_y, pos_z,
-        vel_x, vel_y, vel_z,
-        rot_pitch, rot_yaw, rot_roll,
+        pos_x,
+        pos_y,
+        pos_z,
+        vel_x,
+        vel_y,
+        vel_z,
+        rot_pitch,
+        rot_yaw,
+        rot_roll,
         rel_north,
-        ang_x, ang_y, ang_z,
+        ang_x,
+        ang_y,
+        ang_z,
         body_height,
         rpm,
         _iv,
-        fuel_level, fuel_capacity,
-        speed_mps, boost,
-        oil_pressure, water_temp, oil_temp,
-        tt_fl, tt_fr, tt_rl, tt_rr,
+        fuel_level,
+        fuel_capacity,
+        speed_mps,
+        boost,
+        oil_pressure,
+        water_temp,
+        oil_temp,
+        tt_fl,
+        tt_fr,
+        tt_rl,
+        tt_rr,
         packet_id,
-        current_lap, total_laps,
-        best_lap, last_lap,
+        current_lap,
+        total_laps,
+        best_lap,
+        last_lap,
         day_progression,
-        race_pos, total_pos,
-        rpm_min, rpm_max,
+        race_pos,
+        total_pos,
+        rpm_min,
+        rpm_max,
         calc_max_speed,
         flags,
-        gear_bits, throttle, brake, _pad,
-        _rp0, _rp1, _rp2, _rp3,
-        w_fl, w_fr, w_rl, w_rr,
-        tr_fl, tr_fr, tr_rl, tr_rr,
-        sus_fl, sus_fr, sus_rl, sus_rr,
+        gear_bits,
+        throttle,
+        brake,
+        _pad,
+        road_plane_x,
+        road_plane_y,
+        road_plane_z,
+        road_plane_distance,
+        w_fl,
+        w_fr,
+        w_rl,
+        w_rr,
+        tr_fl,
+        tr_fr,
+        tr_rl,
+        tr_rr,
+        sus_fl,
+        sus_fr,
+        sus_rl,
+        sus_rr,
         *rest,
     ) = v
     # rest = 8 reserved floats, clutch, clutch engagement, rpm after clutch,
@@ -129,7 +163,7 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
     gear_ratios = tuple(rest[12:20])
     car_id = rest[20]
 
-    wheel_rotation = sway = heave = surge = None
+    wheel_rotation = steering_angular_velocity = sway = heave = surge = None
     throttle_f: int | None = None
     brake_f: int | None = None
     torque_vectors: tuple[float, ...] | None = None
@@ -140,19 +174,26 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
     wheelbase: float | None = None
     car_category: str | None = None
     if len(plain) >= PACKET_SIZE_B:
-        wheel_rotation, _filler, sway, heave, surge = _EXT_B.unpack_from(
+        wheel_rotation, steering_angular_velocity, sway, heave, surge = _EXT_B.unpack_from(
             plain, PACKET_SIZE_A
         )
     if len(plain) >= PACKET_SIZE_TILDE:
         (
-            throttle_f, brake_f, _u1, _u2,
-            tv0, tv1, tv2, tv3,
-            energy_recovery, _u3,
+            throttle_f,
+            brake_f,
+            _u1,
+            _u2,
+            tv0,
+            tv1,
+            tv2,
+            tv3,
+            energy_recovery,
+            _u3,
         ) = _EXT_TILDE.unpack_from(plain, PACKET_SIZE_B)
         torque_vectors = (tv0, tv1, tv2, tv3)
     if len(plain) >= PACKET_SIZE_C:
-        surface, lap_time_ms, steer_l, steer_r, wheelbase, category = (
-            _EXT_C.unpack_from(plain, PACKET_SIZE_TILDE)
+        surface, lap_time_ms, steer_l, steer_r, wheelbase, category = _EXT_C.unpack_from(
+            plain, PACKET_SIZE_TILDE
         )
         surface_types = surface.decode("ascii", errors="replace")
         wheel_steering = (steer_l, steer_r)
@@ -160,40 +201,91 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
 
     return TelemetryPacket(
         packet_id=packet_id,
-        position_x=pos_x, position_y=pos_y, position_z=pos_z,
-        velocity_x=vel_x, velocity_y=vel_y, velocity_z=vel_z,
-        rotation_pitch=rot_pitch, rotation_yaw=rot_yaw, rotation_roll=rot_roll,
+        packet_format=(
+            "C"
+            if len(plain) >= PACKET_SIZE_C
+            else "~"
+            if len(plain) >= PACKET_SIZE_TILDE
+            else "B"
+            if len(plain) >= PACKET_SIZE_B
+            else "A"
+        ),
+        position_x=pos_x,
+        position_y=pos_y,
+        position_z=pos_z,
+        velocity_x=vel_x,
+        velocity_y=vel_y,
+        velocity_z=vel_z,
+        rotation_pitch=rot_pitch,
+        rotation_yaw=rot_yaw,
+        rotation_roll=rot_roll,
         rel_orientation_to_north=rel_north,
-        angular_velocity_x=ang_x, angular_velocity_y=ang_y, angular_velocity_z=ang_z,
+        angular_velocity_x=ang_x,
+        angular_velocity_y=ang_y,
+        angular_velocity_z=ang_z,
+        road_plane_x=road_plane_x,
+        road_plane_y=road_plane_y,
+        road_plane_z=road_plane_z,
+        road_plane_distance=road_plane_distance,
         body_height=body_height,
         engine_rpm=rpm,
-        fuel_level=fuel_level, fuel_capacity=fuel_capacity,
+        fuel_level=fuel_level,
+        fuel_capacity=fuel_capacity,
         speed_mps=speed_mps,
         boost=boost - 1.0,
-        oil_pressure=oil_pressure, water_temp=water_temp, oil_temp=oil_temp,
-        tire_temp_fl=tt_fl, tire_temp_fr=tt_fr, tire_temp_rl=tt_rl, tire_temp_rr=tt_rr,
-        current_lap=current_lap, total_laps=total_laps,
-        best_lap_time_ms=best_lap, last_lap_time_ms=last_lap,
+        oil_pressure=oil_pressure,
+        water_temp=water_temp,
+        oil_temp=oil_temp,
+        tire_temp_fl=tt_fl,
+        tire_temp_fr=tt_fr,
+        tire_temp_rl=tt_rl,
+        tire_temp_rr=tt_rr,
+        current_lap=current_lap,
+        total_laps=total_laps,
+        best_lap_time_ms=best_lap,
+        last_lap_time_ms=last_lap,
         day_progression_ms=day_progression,
-        race_position=race_pos, total_positions=total_pos,
-        rpm_alert_min=float(rpm_min), rpm_alert_max=float(rpm_max),
+        race_position=race_pos,
+        total_positions=total_pos,
+        rpm_alert_min=float(rpm_min),
+        rpm_alert_max=float(rpm_max),
         calculated_max_speed=calc_max_speed,
         flags=flags,
         current_gear=gear_bits & 0x0F,
         suggested_gear=gear_bits >> 4,
-        throttle=throttle, brake=brake,
-        wheel_rps_fl=w_fl, wheel_rps_fr=w_fr, wheel_rps_rl=w_rl, wheel_rps_rr=w_rr,
-        tire_radius_fl=tr_fl, tire_radius_fr=tr_fr, tire_radius_rl=tr_rl, tire_radius_rr=tr_rr,
-        suspension_fl=sus_fl, suspension_fr=sus_fr, suspension_rl=sus_rl, suspension_rr=sus_rr,
-        clutch=clutch, clutch_engagement=clutch_engagement, rpm_after_clutch=rpm_after_clutch,
+        throttle=throttle,
+        brake=brake,
+        wheel_rps_fl=w_fl,
+        wheel_rps_fr=w_fr,
+        wheel_rps_rl=w_rl,
+        wheel_rps_rr=w_rr,
+        tire_radius_fl=tr_fl,
+        tire_radius_fr=tr_fr,
+        tire_radius_rl=tr_rl,
+        tire_radius_rr=tr_rr,
+        suspension_fl=sus_fl,
+        suspension_fr=sus_fr,
+        suspension_rl=sus_rl,
+        suspension_rr=sus_rr,
+        clutch=clutch,
+        clutch_engagement=clutch_engagement,
+        rpm_after_clutch=rpm_after_clutch,
         transmission_top_speed=top_speed,
         gear_ratios=gear_ratios,
         car_id=car_id,
-        wheel_rotation=wheel_rotation, sway=sway, heave=heave, surge=surge,
-        throttle_filtered=throttle_f, brake_filtered=brake_f,
-        torque_vectors=torque_vectors, energy_recovery=energy_recovery,
-        surface_types=surface_types, lap_time_ms=lap_time_ms,
-        wheel_steering_rad=wheel_steering, wheelbase_m=wheelbase,
+        wheel_rotation=wheel_rotation,
+        steering_angular_velocity=steering_angular_velocity,
+        sway=sway,
+        heave=heave,
+        surge=surge,
+        throttle_filtered=throttle_f,
+        brake_filtered=brake_f,
+        torque_vectors=torque_vectors,
+        energy_recovery=energy_recovery,
+        surface_types=surface_types,
+        lap_time_ms=lap_time_ms,
+        wheel_steering_rad=wheel_steering,
+        wheelbase_m=wheelbase,
         car_category=car_category,
     )
 
@@ -204,6 +296,7 @@ def build_packet(
     position: tuple[float, float, float] = (0.0, 0.0, 0.0),
     velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
     angular_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    road_plane: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
     body_height: float = 0.1,
     engine_rpm: float = 0.0,
     iv: int = 0xDEADCAFE,
@@ -235,6 +328,7 @@ def build_packet(
     car_id: int = 0,
     fmt: str = "A",
     wheel_rotation: float = 0.0,
+    steering_angular_velocity: float = 0.0,
     sway: float = 0.0,
     heave: float = 0.0,
     surge: float = 0.0,
@@ -256,39 +350,53 @@ def build_packet(
         MAGIC,
         *position,
         *velocity,
-        0.0, 0.0, 0.0,  # rotation
+        0.0,
+        0.0,
+        0.0,  # rotation
         0.0,  # rel north
         *angular_velocity,
         body_height,
         engine_rpm,
         struct.pack("<I", iv),
-        fuel_level, fuel_capacity,
-        speed_mps, boost + 1.0,
-        oil_pressure, water_temp, oil_temp,
+        fuel_level,
+        fuel_capacity,
+        speed_mps,
+        boost + 1.0,
+        oil_pressure,
+        water_temp,
+        oil_temp,
         *tire_temps,
         packet_id,
-        current_lap, total_laps,
-        best_lap_time_ms, last_lap_time_ms,
+        current_lap,
+        total_laps,
+        best_lap_time_ms,
+        last_lap_time_ms,
         day_progression_ms,
-        race_position, total_positions,
-        1000, 9000,  # rpm alerts
+        race_position,
+        total_positions,
+        1000,
+        9000,  # rpm alerts
         300,  # calc max speed
         flags,
         (suggested_gear << 4) | (current_gear & 0x0F),
-        throttle, brake, 0,
-        0.0, 0.0, 0.0, 0.0,  # road plane
+        throttle,
+        brake,
+        0,
+        *road_plane,
         *wheel_rps,
         *tire_radius,
         *suspension,
         *([0.0] * 8),  # reserved
-        0.0, 1.0, 0.0,  # clutch, engagement, rpm after clutch
+        0.0,
+        1.0,
+        0.0,  # clutch, engagement, rpm after clutch
         transmission_top_speed,
         *ratios,
         car_id,
     )
     if fmt == "A":
         return head
-    out = head + _EXT_B.pack(wheel_rotation, 0.0, sway, heave, surge)
+    out = head + _EXT_B.pack(wheel_rotation, steering_angular_velocity, sway, heave, surge)
     if fmt == "B":
         return out
     out += _EXT_TILDE.pack(

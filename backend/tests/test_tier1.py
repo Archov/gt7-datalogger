@@ -8,7 +8,7 @@ from app.main import create_app
 from app.models import AidsBits, SimulatorFlags
 from app.processing.cars import CarDatabase
 from app.processing.events import detect_events
-from app.processing.laps import SAMPLE_COLUMNS, CompletedLap, new_sample_store
+from app.processing.laps import CORE_SAMPLE_COLUMNS, CompletedLap, new_sample_store
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
 from app.storage.repository import Repository
@@ -90,8 +90,13 @@ def test_old_samples_without_new_columns() -> None:
     s.pop("aids", None)
     assert detect_events(s) == []
     lap = CompletedLap(
-        number=1, time_ms=60_000, finished_at="", car_id=0,
-        samples=s, fuel_start=10.0, fuel_end=9.0,
+        number=1,
+        time_ms=60_000,
+        finished_at="",
+        car_id=0,
+        samples=s,
+        fuel_start=10.0,
+        fuel_end=9.0,
     )
     lap.compute_metrics()  # must not raise
     assert lap.tcs_active_pct == 0.0
@@ -101,8 +106,13 @@ def test_aid_metrics() -> None:
     s = _base_samples(100)
     s["aids"] = [float(AidsBits.TCS)] * 25 + [float(AidsBits.ASM | AidsBits.TCS)] * 25 + [0.0] * 50
     lap = CompletedLap(
-        number=1, time_ms=60_000, finished_at="", car_id=0,
-        samples=s, fuel_start=10.0, fuel_end=9.0,
+        number=1,
+        time_ms=60_000,
+        finished_at="",
+        car_id=0,
+        samples=s,
+        fuel_start=10.0,
+        fuel_end=9.0,
     )
     lap.compute_metrics()
     assert lap.tcs_active_pct == pytest.approx(50.0)
@@ -150,7 +160,9 @@ async def drive_laps(service: TelemetryService, laps: int = 2) -> None:
                         # FL locks while braking
                         wheel_rps=(
                             40.0 / 0.33 * (0.7 if braking else 1.0),
-                            40.0 / 0.33, 40.0 / 0.33, 40.0 / 0.33,
+                            40.0 / 0.33,
+                            40.0 / 0.33,
+                            40.0 / 0.33,
                         ),
                         suspension=(0.05 if braking else 0.03, 0.03, 0.03, 0.03),
                         oil_pressure=5.5,
@@ -166,9 +178,14 @@ async def drive_laps(service: TelemetryService, laps: int = 2) -> None:
     await service._on_packet(
         parse_packet(
             build_packet(
-                packet_id=9999, current_lap=laps + 1, last_lap_time_ms=59_000,
-                speed_mps=40.0, flags=ON_TRACK, fuel_level=100.0 - laps,
-                gear_ratios=(3.2, 2.3, 1.8), transmission_top_speed=290.0,
+                packet_id=9999,
+                current_lap=laps + 1,
+                last_lap_time_ms=59_000,
+                speed_mps=40.0,
+                flags=ON_TRACK,
+                fuel_level=100.0 - laps,
+                gear_ratios=(3.2, 2.3, 1.8),
+                transmission_top_speed=290.0,
             )
         )
     )
@@ -189,8 +206,9 @@ async def test_lap_has_new_columns_and_metrics(client) -> None:
     detail = (await c.get(f"/api/laps/{lap['id']}")).json()
     assert detail["gearing"]["ratios"] == [3.2, 2.3, 1.8]
     assert any(e["type"] == "lockup" and "fl" in e["wheels"] for e in detail["events"])
-    for col in SAMPLE_COLUMNS:
+    for col in CORE_SAMPLE_COLUMNS:
         assert col in detail["samples"], col
+    assert "steering_wheel_rad" not in detail["samples"]
 
 
 async def test_compare_channels_param(client) -> None:
@@ -222,18 +240,19 @@ async def test_compare_channels_param(client) -> None:
     assert resp.status_code == 400
 
 
-async def test_export_import_roundtrip_v2(client) -> None:
+async def test_export_import_roundtrip_v3(client) -> None:
     c, service = client
     await drive_laps(service)
     lap_id = (await c.get("/api/laps")).json()[0]["id"]
     exported = (await c.get(f"/api/laps/{lap_id}/export")).json()
-    assert exported["version"] == 2
+    assert exported["version"] == 3
 
     imported = (await c.post("/api/laps/import", json=exported)).json()
     detail = (await c.get(f"/api/laps/{imported['id']}")).json()
     assert detail["max_oil_temp"] == pytest.approx(95.0)
     assert detail["gearing"]["top_speed"] == pytest.approx(290.0)
     assert detail["event_counts"].get("lockup", 0) >= 1
+    assert detail["telemetry_meta"]["packet_format"] == "A"
 
 
 async def test_import_v1_file_without_new_columns(client) -> None:
@@ -247,7 +266,8 @@ async def test_import_v1_file_without_new_columns(client) -> None:
     for key in ("events", "gearing", "max_water_temp", "max_oil_temp", "min_oil_pressure"):
         lap.pop(key, None)
     lap["samples"] = {
-        k: v for k, v in lap["samples"].items()
+        k: v
+        for k, v in lap["samples"].items()
         if not k.startswith(("slip_", "tt_", "sus_")) and k != "aids"
     }
     imported = (await c.post("/api/laps/import", json=exported)).json()

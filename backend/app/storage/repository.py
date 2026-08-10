@@ -13,9 +13,9 @@ from app.processing.laps import CompletedLap, SessionInfo
 from app.processing.tracks import TrackSignature, matches
 from app.storage.db import LapRow, LayoutRow, SessionRow, SettingRow, TrackRow
 
-# v2 (Tier 1): per-corner sample columns, events, aid/engine metrics, gearing.
-# v1 files import fine — missing columns stay absent and charts skip them.
-EXPORT_VERSION = 2
+# v3: extended packet channels plus per-lap static telemetry metadata.
+# v1/v2 files import fine — missing fields stay absent and consumers skip them.
+EXPORT_VERSION = 3
 
 
 def lap_summary(row: LapRow) -> dict[str, Any]:
@@ -46,6 +46,9 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "off_track_count": row.off_track_count,
         "clean_lap": row.clean_lap,
         "event_counts": _event_counts(row.events_json),
+        "telemetry_meta": (
+            json.loads(row.telemetry_meta_json) if row.telemetry_meta_json else None
+        ),
     }
 
 
@@ -99,6 +102,11 @@ class Repository:
                 min_oil_pressure=lap.min_oil_pressure,
                 events_json=json.dumps(lap.events, separators=(",", ":")),
                 gearing_json=json.dumps(lap.gearing, separators=(",", ":")) if lap.gearing else "",
+                telemetry_meta_json=(
+                    json.dumps(lap.telemetry_meta, separators=(",", ":"))
+                    if lap.telemetry_meta
+                    else ""
+                ),
                 samples_json=json.dumps(lap.samples, separators=(",", ":")),
             )
             db.add(row)
@@ -208,6 +216,40 @@ class Repository:
                 )
             ).all()
             return {lap_id: json.loads(ev or "[]") for lap_id, ev in rows}
+
+    async def get_session_analysis_data(self, session_id: int) -> dict[str, Any] | None:
+        """Load one session and all persisted lap analysis inputs.
+
+        The endpoint intentionally needs the sample blobs, but the number of
+        database round trips stays constant rather than growing per lap.
+        """
+        async with self._sf() as db:
+            session = await db.get(SessionRow, session_id)
+            if session is None:
+                return None
+            rows = (
+                await db.execute(
+                    select(LapRow).where(LapRow.session_id == session_id).order_by(LapRow.id)
+                )
+            ).scalars()
+            laps: list[dict[str, Any]] = []
+            for row in rows:
+                lap = lap_summary(row)
+                lap["events"] = json.loads(row.events_json or "[]")
+                lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
+                lap["samples"] = json.loads(row.samples_json)
+                laps.append(lap)
+            return {
+                "session": {
+                    "id": session.id,
+                    "started_at": session.started_at,
+                    "car_id": session.car_id,
+                    "car_name": session.car_name,
+                    "note": session.note,
+                    "track_name": session.track_name,
+                },
+                "laps": laps,
+            }
 
     async def delete_session(self, session_id: int) -> None:
         async with self._sf() as db:
@@ -398,6 +440,8 @@ class Repository:
             samples=lap["samples"],
             fuel_start=float(lap.get("fuel_start", 0)),
             fuel_end=float(lap.get("fuel_end", 0)),
+            tod_ms=int(lap.get("tod_ms", -1)),
+            counts_for_best=bool(lap.get("counts_for_best", True)),
         )
         # Aid metrics and events are recomputed from samples; engine-health
         # aggregates and gearing aren't derivable, so carry them from v2 files
@@ -407,5 +451,7 @@ class Repository:
         completed.min_oil_pressure = float(lap.get("min_oil_pressure", -1.0))
         gearing = lap.get("gearing")
         completed.gearing = gearing if isinstance(gearing, dict) else None
+        telemetry_meta = lap.get("telemetry_meta")
+        completed.telemetry_meta = telemetry_meta if isinstance(telemetry_meta, dict) else None
         completed.compute_metrics()
         return await self.save_lap(session_id, completed)
