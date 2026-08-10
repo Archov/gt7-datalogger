@@ -100,6 +100,60 @@ TRACE_CHANNELS = (
     "surface",
     "aids",
 )
+STANDARD_TRACE_CORE = frozenset(("speed", "throttle", "brake", "gear"))
+STANDARD_BRAKING_CHANNELS = frozenset(
+    ("brake_filtered", "surge", "slip_fl", "slip_fr", "slip_rl", "slip_rr", "aids")
+)
+STANDARD_WHEELSPIN_CHANNELS = frozenset(
+    (
+        "throttle_filtered",
+        "slip_fl",
+        "slip_fr",
+        "slip_rl",
+        "slip_rr",
+        "torque_fl",
+        "torque_fr",
+        "torque_rl",
+        "torque_rr",
+        "aids",
+    )
+)
+STANDARD_CHASSIS_CHANNELS = frozenset(
+    (
+        "body_height",
+        "sus_fl",
+        "sus_fr",
+        "sus_rl",
+        "sus_rr",
+        "heave",
+        "road_plane_distance",
+    )
+)
+STANDARD_STEERING_CHANNELS = frozenset(
+    (
+        "steer_fl_rad",
+        "steer_fr_rad",
+        "steering_wheel_rad",
+        "steering_angular_velocity",
+        "yaw_rate_signed",
+        "sway",
+    )
+)
+STANDARD_SURFACE_CHANNELS = frozenset(
+    ("surface", "body_height", "sus_fl", "sus_fr", "sus_rl", "sus_rr")
+)
+STANDARD_SEGMENT_LOSS_CHANNELS = frozenset(
+    (
+        "steer_fl_rad",
+        "steer_fr_rad",
+        "yaw_rate_signed",
+        "slip_fl",
+        "slip_fr",
+        "slip_rl",
+        "slip_rr",
+        "aids",
+    )
+)
 
 
 class ExportInputError(ValueError):
@@ -584,17 +638,25 @@ def _timing_table(
             continue
         samples = _samples(lap)
         lap_zero = _elapsed_at(samples, 0.0)
-        for start, end in boundaries:
-            if samples["dist"][-1] + 1e-6 < end:
+        for boundary_index, (start, end) in enumerate(boundaries):
+            finish_segment = boundary_index == len(boundaries) - 1
+            required_distance = start if finish_segment else end
+            if samples["dist"][-1] + 1e-6 < required_distance:
                 continue
             lap_start = _elapsed_at(samples, start) - lap_zero
-            lap_end = _elapsed_at(samples, end) - lap_zero
             ref_start = _elapsed_at(ref_samples, start) - ref_zero
-            ref_end = _elapsed_at(ref_samples, end) - ref_zero
+            if finish_segment:
+                lap_end = float(lap["time_ms"]) / 1000
+                ref_end = float(ref["time_ms"]) / 1000
+                speed_end = samples["dist"][-1]
+            else:
+                lap_end = _elapsed_at(samples, end) - lap_zero
+                ref_end = _elapsed_at(ref_samples, end) - ref_zero
+                speed_end = end
             segment_time = (lap_end - lap_start) * 1000
             segment_delta = ((lap_end - lap_start) - (ref_end - ref_start)) * 1000
             cumulative_delta = (lap_end - ref_end) * 1000
-            speeds = _window_values(samples, "speed", start, end)
+            speeds = _window_values(samples, "speed", start, speed_end)
             average_speed = (
                 (end - start) / (lap_end - lap_start) * 3.6 if lap_end > lap_start else None
             )
@@ -1121,15 +1183,164 @@ def _anomaly_candidates(laps: list[dict[str, Any]], ref: dict[str, Any]) -> list
     return candidates
 
 
-def _bounded_candidate(candidate: dict[str, Any], total: float) -> dict[str, Any]:
+def _padded_candidate(candidate: dict[str, Any], total: float) -> dict[str, Any]:
     start = max(0.0, float(candidate["start"]) - RANGE_PADDING_M)
     end = min(total, float(candidate["end"]) + RANGE_PADDING_M)
-    if end - start > MAX_RANGE_M:
-        centre = (float(candidate["start"]) + float(candidate["end"])) / 2
-        start = max(0.0, centre - MAX_RANGE_M / 2)
-        end = min(total, start + MAX_RANGE_M)
-        start = max(0.0, end - MAX_RANGE_M)
     return {**candidate, "start": start, "end": end}
+
+
+def _corner_segments(corner: dict[str, Any], total: float) -> list[tuple[float, float]]:
+    entry = float(corner["entry_dist"])
+    exit_ = float(corner["exit_dist"])
+    return [(entry, exit_)] if entry <= exit_ else [(entry, total), (0.0, exit_)]
+
+
+def _corner_overlap(corner: dict[str, Any], start: float, end: float, total: float) -> float:
+    return sum(
+        max(0.0, min(end, segment_end) - max(start, segment_start))
+        for segment_start, segment_end in _corner_segments(corner, total)
+    )
+
+
+def _corner_intersects(corner: dict[str, Any], start: float, end: float, total: float) -> bool:
+    return any(
+        max(start, segment_start) <= min(end, segment_end) + 1e-6
+        for segment_start, segment_end in _corner_segments(corner, total)
+    )
+
+
+def _corner_midpoint_distance(
+    corner: dict[str, Any], start: float, end: float, total: float
+) -> float:
+    direct = abs(float(corner["apex_dist"]) - (start + end) / 2)
+    return min(direct, max(0.0, total - direct))
+
+
+def _primary_corner(
+    candidates: list[dict[str, Any]],
+    corners: list[dict[str, Any]],
+    start: float,
+    end: float,
+    total: float,
+) -> int | None:
+    corner_by_number = {int(corner["n"]): corner for corner in corners}
+    source_rank = {"segment_loss": 1, "event": 2, "recurring": 3}
+    evidence: dict[int, tuple[int, int]] = {}
+    for candidate in candidates:
+        corner_number = candidate.get("corner")
+        rank = source_rank.get(str(candidate.get("corner_source", "")), 0)
+        if corner_number is None or rank == 0:
+            continue
+        number = int(corner_number)
+        previous_rank, previous_count = evidence.get(number, (0, 0))
+        if rank > previous_rank:
+            evidence[number] = (rank, 1)
+        elif rank == previous_rank:
+            evidence[number] = (rank, previous_count + 1)
+    if evidence:
+        best_rank = max(rank for rank, _count in evidence.values())
+        eligible = [number for number, (rank, _count) in evidence.items() if rank == best_rank]
+
+        def evidence_key(number: int) -> tuple[int, float, float, int]:
+            corner = corner_by_number.get(number)
+            overlap = _corner_overlap(corner, start, end, total) if corner else 0.0
+            midpoint_distance = (
+                _corner_midpoint_distance(corner, start, end, total) if corner else math.inf
+            )
+            return (-evidence[number][1], -overlap, midpoint_distance, number)
+
+        return min(eligible, key=evidence_key)
+
+    intersecting = [
+        corner for corner in corners if _corner_intersects(corner, start, end, total)
+    ]
+    if not intersecting:
+        return None
+    selected = min(
+        intersecting,
+        key=lambda corner: (
+            -_corner_overlap(corner, start, end, total),
+            _corner_midpoint_distance(corner, start, end, total),
+            int(corner["n"]),
+        ),
+    )
+    return int(selected["n"])
+
+
+def _candidate_intersects_window(candidate: dict[str, Any], start: float, end: float) -> bool:
+    return max(start, float(candidate["start"])) < min(end, float(candidate["end"])) - 1e-6
+
+
+def _finalize_ranges(
+    candidates: list[dict[str, Any]], total: float, corners: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    padded = sorted(
+        (_padded_candidate(candidate, total) for candidate in candidates),
+        key=lambda item: (float(item["start"]), float(item["end"]), -int(item["priority"])),
+    )
+    components: list[dict[str, Any]] = []
+    for candidate in padded:
+        previous = components[-1] if components else None
+        if previous and float(candidate["start"]) <= float(previous["end"]) + RANGE_MERGE_GAP_M:
+            previous["end"] = max(float(previous["end"]), float(candidate["end"]))
+            previous["members"].append(candidate)
+        else:
+            components.append(
+                {
+                    "start": float(candidate["start"]),
+                    "end": float(candidate["end"]),
+                    "members": [candidate],
+                }
+            )
+
+    windows: list[dict[str, Any]] = []
+    for component in components:
+        window_start = float(component["start"])
+        component_end = float(component["end"])
+        while window_start < component_end - 1e-6:
+            window_end = min(window_start + MAX_RANGE_M, component_end)
+            members = [
+                candidate
+                for candidate in component["members"]
+                if _candidate_intersects_window(candidate, window_start, window_end)
+            ]
+            windows.append(
+                {
+                    "start": window_start,
+                    "end": window_end,
+                    "reasons": sorted(
+                        {str(reason) for candidate in members for reason in candidate["reasons"]}
+                    ),
+                    "lap_ids": sorted(
+                        {int(lap_id) for candidate in members for lap_id in candidate["lap_ids"]}
+                    ),
+                    "priority": max(int(candidate["priority"]) for candidate in members),
+                    "corner": _primary_corner(
+                        members, corners, window_start, window_end, total
+                    ),
+                    "suppress_start": False,
+                }
+            )
+            window_start = window_end
+
+    selected = sorted(
+        windows,
+        key=lambda item: (
+            -int(item["priority"]),
+            float(item["start"]),
+            float(item["end"]),
+            tuple(item["reasons"]),
+            tuple(item["lap_ids"]),
+        ),
+    )[:MAX_INTERESTING_RANGES]
+    for item in selected:
+        item["suppress_start"] = any(
+            other is not item
+            and float(other["start"]) < float(item["start"])
+            and abs(float(other["end"]) - float(item["start"])) <= 1e-6
+            for other in selected
+        )
+    return [{**item, "id": i + 1} for i, item in enumerate(selected)]
 
 
 def _interesting_ranges(
@@ -1153,6 +1364,7 @@ def _interesting_ranges(
                     "lap_ids": [int(lap["id"])],
                     "priority": 2,
                     "corner": _corner_at(start, corners, str(event.get("type", ""))),
+                    "corner_source": "event",
                 }
             )
     for cluster in recurring:
@@ -1165,6 +1377,7 @@ def _interesting_ranges(
                 "lap_ids": cluster["lap_ids"],
                 "priority": 3,
                 "corner": cluster["corner"],
+                "corner_source": "recurring",
             }
         )
     by_lap: dict[int, list[dict[str, Any]]] = {}
@@ -1183,38 +1396,11 @@ def _interesting_ranges(
                     "lap_ids": [lap_id],
                     "priority": 2,
                     "corner": _corner_at(midpoint, corners),
+                    "corner_source": "segment_loss",
                 }
             )
     candidates += _anomaly_candidates(laps, ref)
-    bounded = sorted(
-        (_bounded_candidate(candidate, total) for candidate in candidates),
-        key=lambda item: (float(item["start"]), float(item["end"]), -int(item["priority"])),
-    )
-    merged: list[dict[str, Any]] = []
-    for candidate in bounded:
-        previous = merged[-1] if merged else None
-        if (
-            previous
-            and float(candidate["start"]) <= float(previous["end"]) + RANGE_MERGE_GAP_M
-            and max(float(previous["end"]), float(candidate["end"]))
-            - min(float(previous["start"]), float(candidate["start"]))
-            <= MAX_RANGE_M
-        ):
-            previous["start"] = min(float(previous["start"]), float(candidate["start"]))
-            previous["end"] = max(float(previous["end"]), float(candidate["end"]))
-            previous["reasons"] = sorted(set(previous["reasons"]) | set(candidate["reasons"]))
-            previous["lap_ids"] = sorted(set(previous["lap_ids"]) | set(candidate["lap_ids"]))
-            previous["priority"] = max(int(previous["priority"]), int(candidate["priority"]))
-            previous["corner"] = (
-                previous["corner"] if previous["corner"] == candidate["corner"] else None
-            )
-        else:
-            merged.append(dict(candidate))
-    selected = sorted(
-        merged,
-        key=lambda item: (-int(item["priority"]), float(item["start"]), tuple(item["reasons"])),
-    )[:MAX_INTERESTING_RANGES]
-    return [{**item, "id": i + 1} for i, item in enumerate(selected)]
+    return _finalize_ranges(candidates, total, corners)
 
 
 def _ranges_table(ranges: list[dict[str, Any]]) -> Table:
@@ -1251,7 +1437,7 @@ def _round_channel(channel: str, value: float) -> int | float:
     return round(value, 4)
 
 
-def _trace_columns(samples: Samples) -> list[str]:
+def _full_trace_columns(samples: Samples) -> list[str]:
     return [
         column
         for column in TRACE_CHANNELS
@@ -1260,12 +1446,43 @@ def _trace_columns(samples: Samples) -> list[str]:
     ]
 
 
+def _standard_requested_channels(reasons: list[str]) -> set[str]:
+    requested = set(STANDARD_TRACE_CORE)
+    for reason in reasons:
+        normalized = reason.lower().replace("-", "_")
+        if normalized.startswith("recurring_"):
+            normalized = normalized.removeprefix("recurring_")
+        if normalized in ("braking", "lockup"):
+            requested.update(STANDARD_BRAKING_CHANNELS)
+        if normalized in ("wheelspin", "wheel_slip_anomaly"):
+            requested.update(STANDARD_WHEELSPIN_CHANNELS)
+        if normalized in ("bottoming", "suspension_anomaly", "body_height_anomaly"):
+            requested.update(STANDARD_CHASSIS_CHANNELS)
+        if normalized in ("front_steering_anomaly", "yaw_anomaly"):
+            requested.update(STANDARD_STEERING_CHANNELS)
+        if any(token in normalized for token in ("surface", "off_track", "kerb")):
+            requested.update(STANDARD_SURFACE_CHANNELS)
+        if normalized.startswith("segment_loss_"):
+            requested.update(STANDARD_SEGMENT_LOSS_CHANNELS)
+    return requested
+
+
+def _standard_trace_columns(samples: Samples, reasons: list[str]) -> list[str]:
+    requested = _standard_requested_channels(reasons)
+    return [column for column in _full_trace_columns(samples) if column in requested]
+
+
 def _distance_trace(
-    samples: Samples, start: float, end: float
+    samples: Samples,
+    start: float,
+    end: float,
+    reasons: list[str],
+    *,
+    include_start: bool = True,
 ) -> tuple[list[str], list[list[Any]]]:
-    channels = _trace_columns(samples)
+    channels = _standard_trace_columns(samples, reasons)
     grid: list[float] = []
-    point = start
+    point = start if include_start else start + TRACE_STEP_M
     while point <= end + 1e-6:
         grid.append(point)
         point += TRACE_STEP_M
@@ -1296,14 +1513,26 @@ def _standard_traces(
             end = min(float(item["end"]), samples["dist"][-1])
             if end <= float(item["start"]):
                 continue
-            columns, trace_rows = _distance_trace(samples, float(item["start"]), end)
+            columns, trace_rows = _distance_trace(
+                samples,
+                float(item["start"]),
+                end,
+                list(item["reasons"]),
+                include_start=not bool(item.get("suppress_start")),
+            )
             rows.append([item["id"], lap_id, columns, trace_rows])
     return table(("range_id", "lap_id", "columns", "rows"), rows)
 
 
-def _source_trace(samples: Samples, start: float, end: float) -> tuple[list[str], list[list[Any]]]:
-    channels = _trace_columns(samples)
-    indices = [i for i, value in enumerate(samples["dist"]) if start <= value <= end]
+def _source_trace(
+    samples: Samples, start: float, end: float, *, include_start: bool = True
+) -> tuple[list[str], list[list[Any]]]:
+    channels = _full_trace_columns(samples)
+    indices = [
+        i
+        for i, value in enumerate(samples["dist"])
+        if (start <= value if include_start else start < value) and value <= end
+    ]
     rows: list[list[Any]] = []
     for i in indices:
         row: list[Any] = [_number(samples["dist"][i], 1), _number(samples["t"][i] * 1000, 0)]
@@ -1330,7 +1559,9 @@ def _deep_traces(ranges: list[dict[str, Any]], laps: list[dict[str, Any]], ref_i
             end = min(float(item["end"]), samples["dist"][-1], start + remaining)
             if end <= start:
                 continue
-            columns, trace_rows = _source_trace(samples, start, end)
+            columns, trace_rows = _source_trace(
+                samples, start, end, include_start=not bool(item.get("suppress_start"))
+            )
             if trace_rows:
                 rows.append([item["id"], lap_id, columns, trace_rows])
                 used[lap_id] = used.get(lap_id, 0.0) + end - start
