@@ -359,6 +359,24 @@ function ConnectionForm({
             className="px-2 py-1.5 text-xs"
           />
         </div>
+        <div>
+          <span className="mb-1 block text-xs text-ink-dim">Raw packet archive</span>
+          <SegmentedControl
+            ariaLabel="Raw packet archive"
+            value={settings.raw_archive ? "on" : "off"}
+            disabled={busy !== null}
+            onValueChange={(value) =>
+              onApply({ raw_archive: value === "on" }, "Raw archive")
+            }
+            options={[
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]}
+          />
+          <p className="mt-1 text-[11px] text-ink-dim">
+            Applies at the next session; archives lossless packet payloads beside the database.
+          </p>
+        </div>
       </div>
 
       <div>

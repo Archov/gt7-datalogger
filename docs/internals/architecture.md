@@ -2,7 +2,8 @@
 
 ```
 PlayStation (GT7) ──UDP 33740──▶ Telemetry service (FastAPI, Python 3.12)
-       ▲                          ├─ Salsa20 decrypt + typed packet parser
+       ▲                          ├─ Salsa20 decrypt + lossless raw packet archive
+       │                          ├─ Typed packet parser
        └──heartbeat 33739──────── ├─ Lap detection, session grouping, metrics
                                   ├─ SQLite storage (SQLAlchemy async)
                                   ├─ REST API  (/api/…)  – history & analysis
@@ -20,7 +21,10 @@ The whole backend is a **single-process, single-threaded asyncio** application
 
 ```
 UdpTelemetrySource (or SimTelemetrySource)
-        │  decrypt + parse (~60 Hz)
+        │  decrypt/build (~60 Hz)
+        ├──▶ buffered .gt7r archive (before the lossy queue)
+        │
+        │  parse
         ▼
    asyncio.Queue (600 packets ≈ 10 s buffer)
         │  single consumer task — strictly ordered
@@ -65,6 +69,10 @@ Four tables:
 
 Schema evolution is handled with an idempotent additive-column migration list — on
 startup, missing columns are added with `ALTER TABLE`, so old databases upgrade in place.
+
+The sessions table also holds compact raw-archive metadata and a relative path. Packet
+bodies stay in append-only `.gt7r` files under the data directory rather than creating a
+SQLite row per 60 Hz packet. See the [raw archive reference](../reference/raw-telemetry-archive.md).
 
 **No downsampling on write**: every 60 Hz tick of a lap is stored. Downsampling happens
 at *read* time — the analysis endpoints resample onto a uniform distance grid (default

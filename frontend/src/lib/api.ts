@@ -164,6 +164,7 @@ export const api = {
           | "webhook_url"
           | "webhook_events"
           | "packet_format"
+          | "raw_archive"
           | "race_engineer"
           | "race_engineer_verbosity"
           | "race_engineer_categories"

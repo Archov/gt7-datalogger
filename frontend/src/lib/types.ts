@@ -331,6 +331,7 @@ export interface AdminSettings {
   webhook_url: string;
   webhook_events: WebhookEvent[];
   packet_format: "A" | "B" | "~" | "C";
+  raw_archive: boolean;
   race_engineer: boolean;
   race_engineer_verbosity: Verbosity;
   race_engineer_categories: CalloutCategory[];

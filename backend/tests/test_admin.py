@@ -119,6 +119,16 @@ async def test_log_level_change(client) -> None:
     await c.put("/api/admin/settings", json={"log_level": "INFO"})
 
 
+async def test_raw_archive_setting_applies_at_next_session_and_persists(client) -> None:
+    c, service = client
+    assert (await c.get("/api/admin/settings")).json()["raw_archive"] is True
+    resp = await c.put("/api/admin/settings", json={"raw_archive": False})
+    assert resp.status_code == 200
+    assert resp.json()["raw_archive"] is False
+    assert service.settings.raw_archive is False
+    assert (await service.repo.get_settings())["raw_archive"] == "false"
+
+
 async def test_race_engineer_settings_apply_and_persist(client) -> None:
     c, service = client
     resp = await c.put(

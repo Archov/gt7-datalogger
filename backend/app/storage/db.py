@@ -27,6 +27,7 @@ class SessionRow(Base):
     car_name: Mapped[str]
     note: Mapped[str] = mapped_column(default="")
     track_name: Mapped[str] = mapped_column(default="")
+    raw_archive_meta_json: Mapped[str] = mapped_column(Text, default="")
 
     laps: Mapped[list[LapRow]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
@@ -129,6 +130,11 @@ _SQLITE_MIGRATIONS = (
         "sessions",
         "track_name",
         "ALTER TABLE sessions ADD COLUMN track_name VARCHAR NOT NULL DEFAULT ''",
+    ),
+    (
+        "sessions",
+        "raw_archive_meta_json",
+        "ALTER TABLE sessions ADD COLUMN raw_archive_meta_json TEXT NOT NULL DEFAULT ''",
     ),
     ("laps", "tod_ms", "ALTER TABLE laps ADD COLUMN tod_ms INTEGER NOT NULL DEFAULT -1"),
     (

@@ -73,6 +73,63 @@ class Repository:
             await db.commit()
             return row.id
 
+    async def set_session_archive_metadata(
+        self, session_id: int, metadata: dict[str, object]
+    ) -> None:
+        async with self._sf() as db:
+            row = await db.get(SessionRow, session_id)
+            if row is not None:
+                row.raw_archive_meta_json = json.dumps(metadata, separators=(",", ":"))
+                await db.commit()
+
+    async def get_session_archive_metadata(
+        self, session_id: int
+    ) -> dict[str, object] | None:
+        async with self._sf() as db:
+            row = await db.get(SessionRow, session_id)
+            if row is None or not row.raw_archive_meta_json:
+                return None
+            value = json.loads(row.raw_archive_meta_json)
+            return value if isinstance(value, dict) else None
+
+    async def list_recording_archive_metadata(self) -> list[tuple[int, dict[str, object]]]:
+        async with self._sf() as db:
+            rows = (
+                await db.execute(
+                    select(SessionRow.id, SessionRow.raw_archive_meta_json).where(
+                        SessionRow.raw_archive_meta_json != ""
+                    )
+                )
+            ).all()
+        result: list[tuple[int, dict[str, object]]] = []
+        for session_id, raw in rows:
+            try:
+                metadata = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(metadata, dict) and metadata.get("status") == "recording":
+                result.append((session_id, metadata))
+        return result
+
+    async def list_session_archive_metadata(self) -> list[tuple[int, dict[str, object]]]:
+        async with self._sf() as db:
+            rows = (
+                await db.execute(
+                    select(SessionRow.id, SessionRow.raw_archive_meta_json).where(
+                        SessionRow.raw_archive_meta_json != ""
+                    )
+                )
+            ).all()
+        result: list[tuple[int, dict[str, object]]] = []
+        for session_id, raw in rows:
+            try:
+                metadata = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(metadata, dict):
+                result.append((session_id, metadata))
+        return result
+
     async def save_lap(self, session_id: int, lap: CompletedLap) -> int:
         async with self._sf() as db:
             row = LapRow(

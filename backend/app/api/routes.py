@@ -103,7 +103,7 @@ async def export_session_for_llm(
 
 @router.delete("/sessions/{session_id}", dependencies=[Depends(require_admin)])
 async def delete_session(request: Request, session_id: int) -> dict[str, str]:
-    await svc(request).repo.delete_session(session_id)
+    await svc(request).delete_session(session_id)
     return {"status": "deleted"}
 
 

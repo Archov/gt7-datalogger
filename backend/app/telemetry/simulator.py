@@ -11,11 +11,13 @@ import asyncio
 import logging
 import math
 import random
+import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.models import SimulatorFlags, TelemetryPacket
 from app.telemetry.packet import build_packet, parse_packet
+from app.telemetry.raw_archive import CapturedPayload, RawPacketCallback
 
 log = logging.getLogger(__name__)
 
@@ -76,10 +78,12 @@ def _speed_profile(s: float, jitter: float) -> float:
 class SimTelemetrySource:
     def __init__(
         self,
-        on_packet: Callable[[TelemetryPacket], Awaitable[None]],
+        on_packet: Callable[[TelemetryPacket, str | None], Awaitable[None]],
         scenario: SimScenario | None = None,
+        on_raw_packet: RawPacketCallback | None = None,
     ) -> None:
         self._on_packet = on_packet
+        self._on_raw_packet = on_raw_packet
         self._scenario = scenario or SCENARIOS["practice"]
         self._task: asyncio.Task[None] | None = None
         self._packet_count = 0
@@ -257,7 +261,18 @@ class SimTelemetrySource:
                 wheelbase_m=2.7,
                 car_category="GRX",
             )
+            capture = CapturedPayload(
+                payload=plain,
+                received_monotonic_ns=time.monotonic_ns(),
+                received_unix_ns=time.time_ns(),
+                receiver_order=self._packet_count,
+                source="sim",
+            )
+            packet = parse_packet(plain)
+            token = None
+            if self._on_raw_packet is not None:
+                token = self._on_raw_packet(replace(capture, packet=packet))
             self._packet_count += 1
-            await self._on_packet(parse_packet(plain))
+            await self._on_packet(packet, token)
             tick += 1
             await asyncio.sleep(TICK)

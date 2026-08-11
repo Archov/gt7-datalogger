@@ -50,6 +50,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.source = stored["source"]
     if stored.get("packet_format") in ("A", "B", "~", "C"):
         settings.packet_format = stored["packet_format"]
+    if "raw_archive" in stored:
+        settings.raw_archive = stored["raw_archive"] == "true"
     if "log_level" in stored:
         logging.getLogger().setLevel(stored["log_level"])
     if "webhook_url" in stored:

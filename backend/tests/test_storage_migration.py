@@ -70,5 +70,5 @@ async def test_old_lap_row_without_telemetry_metadata_is_readable(tmp_path) -> N
     lap = await repo.get_lap(1)
     assert lap is not None
     assert lap["telemetry_meta"] is None
+    assert await repo.get_session_archive_metadata(1) is None
     await engine.dispose()
-

@@ -49,6 +49,7 @@ async def get_settings(request: Request) -> dict[str, Any]:
         "webhook_url": s.webhook_url,
         "webhook_events": [e for e in ALL_EVENTS if e in s.enabled_webhook_events()],
         "packet_format": s.packet_format,
+        "raw_archive": s.raw_archive,
         "race_engineer": s.race_engineer,
         "race_engineer_verbosity": s.race_engineer_verbosity,
         "race_engineer_categories": [
@@ -68,6 +69,7 @@ class SettingsPayload(BaseModel):
         | None
     ) = None
     packet_format: Literal["A", "B", "~", "C"] | None = None
+    raw_archive: bool | None = None
     race_engineer: bool | None = None
     race_engineer_verbosity: Literal["minimal", "race", "coach"] | None = None
     # Validated against app.race_engineer.CATEGORIES below rather than a
@@ -100,6 +102,13 @@ async def put_settings(request: Request, payload: SettingsPayload) -> dict[str, 
         service.settings.packet_format = payload.packet_format
         await service.repo.set_setting("packet_format", payload.packet_format)
         log.info("packet format set to %s", payload.packet_format)
+    if payload.raw_archive is not None and payload.raw_archive != service.settings.raw_archive:
+        service.set_raw_archive_enabled(payload.raw_archive)
+        await service.repo.set_setting("raw_archive", str(payload.raw_archive).lower())
+        log.info(
+            "raw telemetry archival %s for the next session",
+            "enabled" if payload.raw_archive else "disabled",
+        )
     if payload.webhook_url is not None:
         url = payload.webhook_url.strip()
         if url and not url.startswith(("http://", "https://")):
@@ -268,8 +277,7 @@ async def restart_source(request: Request) -> dict[str, Any]:
 @router.post("/clear-data")
 async def clear_data(request: Request) -> dict[str, str]:
     service = svc(request)
-    await service.repo.clear_all()
-    service.session_id = None
+    await service.clear_recorded_data()
     log.warning("all recorded sessions and laps deleted via admin")
     return {"status": "cleared"}
 

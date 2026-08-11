@@ -14,26 +14,41 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 
 from app.config import Settings
 from app.models import TelemetryPacket
 from app.telemetry.crypto import decrypt_packet
 from app.telemetry.packet import HEARTBEAT_FORMATS, parse_packet
+from app.telemetry.raw_archive import CapturedPayload
 
 log = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 1.6
 STALE_AFTER = 5.0  # seconds without packets -> report disconnected
 
-PacketCallback = Callable[[TelemetryPacket], Awaitable[None]]
+PacketCallback = Callable[[TelemetryPacket, str | None], Awaitable[None]]
+RawPacketCallback = Callable[[CapturedPayload], str | None]
+
+
+@dataclass(slots=True, frozen=True)
+class _QueuedPacket:
+    packet: TelemetryPacket
+    archive_token: str | None
 
 
 class UdpTelemetrySource:
     """Async UDP source. Calls `on_packet` for every decoded packet."""
 
-    def __init__(self, settings: Settings, on_packet: PacketCallback) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        on_packet: PacketCallback,
+        on_raw_packet: RawPacketCallback | None = None,
+    ) -> None:
         self._settings = settings
         self._on_packet = on_packet
+        self._on_raw_packet = on_raw_packet
         self._transport: asyncio.DatagramTransport | None = None
         self._console_addr: tuple[str, int] | None = None
         self._last_packet_at: float = 0.0
@@ -45,7 +60,8 @@ class UdpTelemetrySource:
         # Packets are consumed by ONE task so processing stays strictly
         # ordered and never overlaps — overlapping feeds corrupt lap
         # detection (duplicate lap saves while a DB write is in flight).
-        self._queue: asyncio.Queue[TelemetryPacket] = asyncio.Queue(maxsize=600)
+        self._queue: asyncio.Queue[_QueuedPacket] = asyncio.Queue(maxsize=600)
+        self._receive_order = 0
 
     @property
     def connected(self) -> bool:
@@ -114,21 +130,37 @@ class UdpTelemetrySource:
         if self._console_addr is None or self._console_addr[0] != addr[0]:
             log.info("telemetry source discovered at %s", addr[0])
         self._console_addr = addr
-        self._last_packet_at = time.monotonic()
+        received_monotonic_ns = time.monotonic_ns()
+        received_unix_ns = time.time_ns()
+        self._last_packet_at = received_monotonic_ns / 1e9
         plain = decrypt_packet(data)
         if plain is None:
             self._decode_errors += 1
             if self._decode_errors in (1, 100):
                 log.warning("failed to decrypt packet from %s (bad key/format?)", addr[0])
             return
+        capture = CapturedPayload(
+            payload=plain,
+            received_monotonic_ns=received_monotonic_ns,
+            received_unix_ns=received_unix_ns,
+            receiver_order=self._receive_order,
+            source="udp",
+        )
+        packet: TelemetryPacket | None
         try:
             packet = parse_packet(plain)
         except ValueError:
+            packet = None
+        token = None
+        if self._on_raw_packet is not None:
+            token = self._on_raw_packet(replace(capture, packet=packet))
+        self._receive_order += 1
+        if packet is None:
             self._decode_errors += 1
             return
         self._packet_count += 1
         try:
-            self._queue.put_nowait(packet)
+            self._queue.put_nowait(_QueuedPacket(packet, token))
         except asyncio.QueueFull:
             # Consumer is behind (e.g. slow disk); drop the oldest to keep live.
             self._dropped += 1
@@ -136,13 +168,14 @@ class UdpTelemetrySource:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            self._queue.put_nowait(packet)
+            self._queue.put_nowait(_QueuedPacket(packet, token))
 
     async def _consume_loop(self) -> None:
         while True:
-            packet = await self._queue.get()
+            queued = await self._queue.get()
+            packet = queued.packet
             try:
-                await self._on_packet(packet)
+                await self._on_packet(packet, queued.archive_token)
             except Exception as exc:  # noqa: BLE001
                 log.error(
                     "error processing telemetry packet %d: %s",

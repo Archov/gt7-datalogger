@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
@@ -26,6 +27,7 @@ from app.race_engineer import CATEGORIES, VoiceCallout
 from app.race_engineer.manager import RaceEngineerManager
 from app.storage.repository import Repository, lap_summary  # noqa: F401  (re-export)
 from app.telemetry.listener import UdpTelemetrySource
+from app.telemetry.raw_archive import CapturedPayload, RawArchiveManager, scan_archive
 from app.telemetry.simulator import SimTelemetrySource, scenario_for
 
 log = logging.getLogger(__name__)
@@ -78,15 +80,20 @@ class TelemetryService:
         self.cars = cars
         self.started_at = time.time()
         self.processor = LapProcessor(on_lap=self._on_lap, on_session=self._on_session)
+        self.recording = True
+        self.archive = RawArchiveManager(settings.db_path.parent, enabled=settings.raw_archive)
+        self._processing_archive_token: str | None = None
+        self._session_archive_token: str | None = None
         self.source: UdpTelemetrySource | SimTelemetrySource
         if settings.source == "sim":
             self.source = SimTelemetrySource(
-                self._on_packet, scenario_for(settings.sim_scenario)
+                self._on_packet,
+                scenario_for(settings.sim_scenario),
+                on_raw_packet=self._on_raw_packet,
             )
         else:
-            self.source = UdpTelemetrySource(settings, self._on_packet)
+            self.source = UdpTelemetrySource(settings, self._on_packet, self._on_raw_packet)
 
-        self.recording = True
         self.session_id: int | None = None
         self.track_name: str = ""
         self.latest_packet: TelemetryPacket | None = None
@@ -119,10 +126,12 @@ class TelemetryService:
         self._ws_interval = 1.0 / settings.ws_rate
 
     async def start(self) -> None:
+        await self._recover_interrupted_archives()
         await self.source.start()
 
     async def stop(self) -> None:
         await self.source.stop()
+        await self._finalize_current_archive()
         self.survey.stop()
         tasks = [c.task for c in self._clients.values() if c.task]
         for t in tasks:
@@ -136,10 +145,14 @@ class TelemetryService:
         self.settings.source = kind
         if kind == "sim":
             self.source = SimTelemetrySource(
-                self._on_packet, scenario_for(self.settings.sim_scenario)
+                self._on_packet,
+                scenario_for(self.settings.sim_scenario),
+                on_raw_packet=self._on_raw_packet,
             )
         else:
-            self.source = UdpTelemetrySource(self.settings, self._on_packet)
+            self.source = UdpTelemetrySource(
+                self.settings, self._on_packet, self._on_raw_packet
+            )
         await self.source.start()
         log.info("telemetry source switched to %s", kind)
         self._publish({"type": "status", "data": await self.status()})
@@ -168,10 +181,21 @@ class TelemetryService:
             c.voice_enabled for c in self._clients.values()
         )
 
-    async def _on_packet(self, p: TelemetryPacket) -> None:
+    def _on_raw_packet(self, capture: CapturedPayload) -> str | None:
+        return self.archive.capture(capture, recording=self.recording)
+
+    async def _on_packet(
+        self, p: TelemetryPacket, archive_token: str | None = None
+    ) -> None:
         self.latest_packet = p
-        if self.recording:
-            await self.processor.feed(p)
+        self._processing_archive_token = archive_token
+        try:
+            if self.recording:
+                await self.processor.feed(p)
+        finally:
+            self._processing_archive_token = None
+        for session_id, metadata in self.archive.dirty_metadata():
+            await self.repo.set_session_archive_metadata(session_id, metadata)
         for event in self.event_watcher.feed(p):
             self._notify_live_event(event, p)
         if self.survey.active:
@@ -210,6 +234,10 @@ class TelemetryService:
         self.event_watcher.reset()
         await self._close_previous_session()
         self.session_id = await self.repo.create_session(info, self.cars.name(info.car_id))
+        self._session_archive_token = self._processing_archive_token
+        metadata = self.archive.bind(self._session_archive_token, self.session_id)
+        if metadata is not None:
+            await self.repo.set_session_archive_metadata(self.session_id, metadata)
         # A survey spanning a restart keeps labeling its records with the
         # session its transitions actually belong to. An auto-filled track
         # label goes back to unknown too — the new session may be a
@@ -235,11 +263,12 @@ class TelemetryService:
         """
         if self.session_id is None:
             return
+        await self._finalize_current_archive()
         stats = await self.repo.session_lap_stats(self.session_id)
         if stats["count"] == 0:
             # Menu visits and race restarts open sessions that never get a
             # lap; drop them so they don't pile up.
-            await self.repo.delete_session(self.session_id)
+            await self.delete_session(self.session_id)
             log.info("dropped empty session %s", self.session_id)
             return
         self.notifier.session_summary(
@@ -249,6 +278,84 @@ class TelemetryService:
             best_ms=stats["best_ms"],
             fuel_used=stats["fuel_used"],
         )
+
+    async def _finalize_current_archive(self) -> None:
+        token = self._session_archive_token
+        session_id = self.session_id
+        if token is None or session_id is None:
+            return
+        metadata = await self.archive.finalize(token)
+        if metadata is not None:
+            await self.repo.set_session_archive_metadata(session_id, metadata)
+        self._session_archive_token = None
+
+    async def _recover_interrupted_archives(self) -> None:
+        for session_id, metadata in await self.repo.list_recording_archive_metadata():
+            path = self._validated_archive_path(metadata.get("path"))
+            if path is None or not path.exists() or path.suffix == ".zip":
+                continue
+            try:
+                count, payload_bytes, last_offset, truncated = scan_archive(path)
+            except (OSError, ValueError) as exc:
+                metadata["status"] = "read_failed"
+                metadata["error"] = str(exc)
+            else:
+                metadata.update(
+                    {
+                        "status": "interrupted",
+                        "complete": False,
+                        "packet_count": count,
+                        "payload_bytes": payload_bytes,
+                        "container_bytes": path.stat().st_size,
+                        "stored_bytes": path.stat().st_size,
+                        "last_monotonic_offset_ns": last_offset if count else None,
+                        "truncated_tail": truncated,
+                    }
+                )
+            await self.repo.set_session_archive_metadata(session_id, metadata)
+
+    def _validated_archive_path(self, value: object) -> Path | None:
+        if not isinstance(value, str) or not value:
+            return None
+        candidate = (self.archive.data_root / value).resolve()
+        return candidate if candidate.is_relative_to(self.archive.data_root) else None
+
+    async def delete_session(self, session_id: int) -> None:
+        metadata = await self.repo.get_session_archive_metadata(session_id)
+        paths: list[Path] = []
+        if session_id == self.session_id:
+            paths.extend(self.archive.detach(self._session_archive_token))
+            self._session_archive_token = None
+            self.session_id = None
+        path = self._validated_archive_path((metadata or {}).get("path"))
+        if path is not None:
+            paths.append(path)
+        await self.repo.delete_session(session_id)
+        self._remove_archive_paths(paths)
+
+    async def clear_recorded_data(self) -> None:
+        metadata = await self.repo.list_session_archive_metadata()
+        paths = self.archive.detach(self._session_archive_token)
+        self._session_archive_token = None
+        self.session_id = None
+        for _, item in metadata:
+            path = self._validated_archive_path(item.get("path"))
+            if path is not None:
+                paths.append(path)
+        await self.repo.clear_all()
+        self._remove_archive_paths(paths)
+
+    @staticmethod
+    def _remove_archive_paths(paths: list[Path]) -> None:
+        for path in dict.fromkeys(paths):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                log.error("could not delete raw archive %s: %s", path, exc)
+
+    def set_raw_archive_enabled(self, enabled: bool) -> None:
+        self.settings.raw_archive = enabled
+        self.archive.schedule_enabled(enabled)
 
     async def _on_lap(self, lap: CompletedLap) -> None:
         if self.session_id is None:
