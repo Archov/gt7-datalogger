@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.api.auth import require_admin
 from app.processing import analysis
@@ -210,6 +210,10 @@ async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any
     await service.repo.set_session_track(lap["session_id"], name)
     if service.session_id == lap["session_id"]:
         service.track_name = name
+        # Naming the circuit you are on labels a survey running on it, unless
+        # the driver already named it themselves.
+        if service.survey.active and not service.survey.track_locked:
+            service.survey.set_track(name)
     return {"id": track_id, "name": name}
 
 
@@ -429,6 +433,25 @@ async def fuel(request: Request, lap_id: int) -> dict[str, Any]:
 # --- surface survey (issue #37) ----------------------------------------------
 
 
+class SurveyTrackPayload(BaseModel):
+    track: str = Field(..., min_length=1, max_length=80)
+
+    @field_validator("track")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Reject a name that is only whitespace.
+
+        `min_length` passes "   ", which strips to nothing — and assigning an
+        empty label would LOCK the survey against auto-identification while
+        still leaving it unlabeled. That is strictly worse than the bug this
+        endpoint exists to fix: the run could then never be rescued at all.
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("track name cannot be blank")
+        return stripped
+
+
 class SurveyStartPayload(BaseModel):
     # Track width isn't broadcast by GT7; the survey applies this assumption
     # to derive wheel-contact points and measures how far off it lands.
@@ -460,6 +483,29 @@ async def survey_start(request: Request, payload: SurveyStartPayload) -> dict[st
 async def survey_stop(request: Request) -> dict[str, Any]:
     svc(request).survey.stop()
     return svc(request).survey.status()
+
+
+@router.post("/survey/track", dependencies=[Depends(require_admin)])
+async def survey_set_track(request: Request, payload: SurveyTrackPayload) -> dict[str, Any]:
+    """Name the circuit a running survey is describing.
+
+    A run started before the track was known accumulates border evidence
+    against no circuit at all, and a survey with no label saves no bundle —
+    so without this, an hour of driving can only be recovered from its JSONL.
+    Assigning a label to an unlabeled run keeps everything it has gathered
+    and merges it into that circuit's bundle.
+
+    Re-assigning an ALREADY labeled run is a circuit change, not a
+    correction: the accumulated evidence is flushed to the previous circuit
+    first, so one track's driving can never land in another's bundle. To fix
+    a wrong label, rebuild from the JSONL instead
+    (`scripts/jsonl_to_bundle.py`).
+    """
+    survey = svc(request).survey
+    if not survey.active:
+        raise HTTPException(409, "no survey is running")
+    survey.set_track(payload.track, lock=True)
+    return survey.status()
 
 
 @router.get("/survey/status")
