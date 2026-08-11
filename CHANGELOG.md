@@ -46,6 +46,93 @@ Notable changes to GT7 Datalogger. The format follows
   axle width, which replaces the assumption once three rides agree. Live
   frames now carry the packed `surface` value. (#37)
 
+- **Car category is a first-class dimension.** Packet C broadcasts the
+  category ("Gr.3", "Gr.4", "N300"…) and it was decoded and thrown away.
+  It is now stored on the session and, denormalised like `car_id`, on every
+  lap — so grouping by it never needs a join — and served by the sessions
+  and laps APIs. The Sessions list shows it as a badge and offers category
+  filter chips, which appear only when a category is actually present, so a
+  history recorded before packet C looks unchanged. Laps without packet C
+  keep a blank category rather than being lumped into a real one. (#19)
+
+- **Border records carry elevation, and measured axle track is remembered
+  per car.** GT7 broadcasts position on all three axes and the car id
+  (`carCode`), both of which were being thrown away by the survey. Bundles
+  are now format v3 with a `y` on every border record — without it a bundle
+  can only ever describe a flat track, and there is no reconstructing it
+  later for straddle and manual points, which are the overwhelming majority.
+  Records mapped before v3 carry `null` and are filled in by re-driving that
+  metre, so it is recoverable rather than lost; v1 and v2 bundles upgrade in
+  place on load. Axle track measured from cornering is now saved per car to
+  `data/car-widths.json` and applied from the first tick of the next run in
+  that car, instead of every run laying its opening points at the 1.6 m
+  assumption until the first corner. Swapping cars mid-run discards the
+  previous car's samples, and a short run never overwrites a
+  better-evidenced measurement. (#38)
+
+- **Axle track width now measures itself from ordinary cornering.** Every
+  corner is a measurement: the outer wheels cover a larger arc, so their
+  rolling speeds differ by exactly the yaw rate times the axle track
+  (`|v_outer - v_inner| = |yaw| * width`, from the broadcast `wheel_rps`,
+  `tire_radius` and `angular_velocity_y`). It needs no deliberate driving and
+  settles in seconds — on real hardware it reached a trusted figure of
+  **1.74 m within ~12 seconds of normal laps**, where the existing
+  ride-an-edge-out-and-back estimator had accepted **zero** samples across an
+  entire session of heavy edge riding. Both axles are offered each tick and
+  the plausible range decides which one spoke, so a spool or locked
+  differential — this test car's rear wheels report identical speeds even
+  coasting — costs nothing and no drivetrain layout has to be declared.
+  Braking ticks are skipped (ABS modulates wheels individually and threw up
+  1.22 / 2.03 / 4.87 m readings); throttle is not gated, because wheelspin
+  already shows up as an axle mean that disagrees with the car's speed, and
+  gating it would have discarded most of a racing lap. The Survey view says
+  which number it is serving — cornering, edge ride, or assumption — and
+  when nothing has landed yet it names the gate doing the rejecting instead
+  of sitting silently on the assumption. (#38)
+
+### Fixed
+
+- **Survey coverage no longer invents gaps on ground that is already
+  mapped.** Border evidence recorded travelling the opposite direction was
+  ignored at any distance, on the theory that it had to belong to the other
+  leg of a hairpin. On a real East End run that put a 127 m "go touch this"
+  gap on *both* borders while the car drove down the middle of a fully
+  mapped 12.7 m road, with evidence 5.6 m to starboard and 7.8 m to port. A
+  border belongs to the road, not to the direction it was first seen from,
+  so opposite-heading evidence now counts within a short radius — closer
+  than anything on a neighbouring leg can be, so the ghost gaps that gate
+  was guarding against stay guarded. The same run's gaps drop from 127 m to
+  6 m, below the drawing threshold. (#39)
+- **Gap beacons point at the border instead of at tarmac.** They were drawn
+  a fixed 4 m off the driven line, which on a 13 m road placed them ~2.5 m
+  *inside* the road, between the two borders. The offset now follows the
+  road's own half-width, measured from where evidence actually sits on the
+  stretches that have it. (#39)
+- **Hand-marked boundaries no longer lose to the surface reader.** Track
+  bundles keyed evidence by kind as well as position, so marking a meter as
+  a run-off limit stored a second point beside the automatic one instead of
+  correcting it — and because the map only drops `runoff` points from the
+  road fill, the surviving twin kept that meter drawn as road. The mark
+  looked accepted and changed nothing. Across the author's real bundles this
+  hit 105 meters at Lago Maggiore Centre and 6 at East End. (#38)
+
+### Changed
+
+- **Track bundles are now format v3: one voted record per meter of border.**
+  Kinds observed at a meter are votes on what it is, resolved with
+  hand-marked kinds beating inferred ones (the surface chars cannot see a
+  wall or paved run-off, so an automatic point there is not evidence against
+  a mark) and majority inside each tier — which is also how a mis-mark is
+  undone. Re-driving mapped ground can now correct the map instead of only
+  extending it. Votes count runs rather than samples, so the periodic
+  autosave cannot inflate them. Records carry provenance (`run`, and the
+  axle track width `tw` they were derived with), which leaves the door open
+  to correcting straddle points offline once a better width is known.
+  Existing bundles upgrade in place the first time they are read; nothing
+  needs re-driving. (v2 introduced the voting; v3 added the elevation
+  field above — they ship together.) Files grow roughly 30% for the added
+  evidence. (#38)
+
 ## [0.4.1] - 2026-08-07
 
 ### Fixed

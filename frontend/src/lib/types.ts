@@ -149,13 +149,22 @@ export interface SurveyTransition {
 // while one side's wheels are held off the tarmac (the border traces itself
 // as you drive along it); "edge"/"runoff"/"wall" come from the driver
 // holding a marking button while driving the boundary.
+export type SurveyKind = "auto" | "straddle" | "edge" | "runoff" | "wall";
+
 export interface SurveyEdge {
   x: number;
   z: number;
   hx: number; // travel-direction unit at the moment of evidence
   hz: number;
   side: "L" | "R";
-  kind: "auto" | "straddle" | "edge" | "runoff" | "wall";
+  // One metre of border is one record; `kind` is what its votes settled on
+  // (hand-marked kinds beat inferred ones — the surface chars cannot see a
+  // wall or paved run-off). Resolved server-side, so consumers can just read
+  // it; `votes` is the evidence behind it as [count, last run] per kind.
+  kind: SurveyKind;
+  votes?: Partial<Record<SurveyKind, [number, number]>>;
+  run?: number; // run ordinal that first evidenced this metre
+  tw?: number | null; // axle track width in use when it was laid
 }
 
 // Start/finish line located from lap rollovers (GT7 increments current_lap
@@ -190,6 +199,17 @@ export interface SurveyStatus {
   width_estimate_m: number | null; // median of measured edge crossings
   width_samples: number; // accepted crossing measurements so far
   width_in_use_m: number; // what contact derivation actually uses
+  // Axle track measured from cornering — every corner is a sample, so this
+  // normally settles long before a deliberate edge ride produces anything.
+  width_source: "cornering" | "car-memory" | "edge-ride" | "assumed";
+  car_id: number | null;
+  remembered_width_m: number | null; // measured for this car on an earlier run
+  yaw_width_m: number | null;
+  yaw_samples: number;
+  yaw_needed: number;
+  yaw_rejects: Partial<Record<
+    "slow" | "straight" | "on_pedals" | "slip" | "implausible", number
+  >>;
   trail_points: number;
   trail_epoch: number;
   edge_points: number;
@@ -236,6 +256,7 @@ export interface SessionSummary {
   started_at: string;
   car_id: number;
   car_name: string;
+  car_category: string; // packet C: "Gr.3", "Gr.4", "N300"...; "" when unknown
   note: string;
   track_name: string;
   lap_count: number;

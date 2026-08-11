@@ -67,15 +67,51 @@ Open questions to answer while driving:
 ## 2. Wheel-contact derivation (fill in)
 
 Contact point = car position + heading rotation of (±wheelbase/2, ±track/2).
-Wheelbase is broadcast in packet C; **track width is not** — the survey
-starts from an assumption (the input next to Start survey, default 1.6 m)
-and then **measures** it: ride all four wheels over one edge and back. The
-same wheel's out/back crossings pin the edge's direction, opposite-side
+Wheelbase is broadcast in packet C; **track width is not broadcast directly
+— but it is derivable, and every corner derives it.** The outer wheels of an
+axle cover a larger arc than the inner ones, so their rolling speeds differ
+by exactly the yaw rate times the axle track:
+
+```
+|v_outer - v_inner| = |yaw rate| * track_width       v = wheel_rps * tire_radius
+```
+
+`wheel_rps`, `tire_radius` and `angular_velocity_y` are all broadcast and
+were already decoded, so this costs nothing and needs no special driving. It
+reached a trusted 1.74 m within ~12 seconds of ordinary laps on real
+hardware. Taking magnitudes means GT7's yaw sign convention never has to be
+pinned down.
+
+Two things learned doing it on hardware:
+
+- **A locked/spool differential makes its axle useless here.** The test car's
+  rear wheels report identical speeds to the centimetre even coasting
+  (`-82.31 / -82.31` at zero throttle), so the rear axle answers ~0. Both
+  axles are therefore offered each tick and the plausible range picks the
+  free one — no drivetrain layout ever has to be declared, and a locked axle
+  self-rejects.
+- **Braking corrupts it; throttle does not.** ABS modulates wheels
+  individually: the same capture that gave a steady 1.7–1.8 m produced 1.22,
+  2.03 and 4.87 m under brake pressure. Throttle needs no gate, because
+  wheelspin lifts an axle's *mean* off the car's speed and is caught by the
+  slip check — gating throttle would discard most of a racing lap.
+
+The older fallback still exists: ride all four wheels over one edge and back.
+The same wheel's out/back crossings pin the edge's direction, opposite-side
 crossings of the same line fix the width, and remaining same-side crossings
 must agree the points are collinear (which rejects two-edged strips, curved
-kerbs and mid-corner crossings). Once three rides agree, the measured median
-replaces the assumption for contact derivation — the status line shows which
-is in force, and every JSONL record carries the `tw_m` it was derived with.
+kerbs and mid-corner crossings). It is exact when it fires, but it demands a
+deliberate manoeuvre and across a full real session of heavy edge riding it
+accepted **zero** samples — which is why cornering outranks it. The status
+line names whichever is in force, and every JSONL record carries the `tw_m`
+it was derived with.
+
+**Scale check, before anyone plans a backfill:** the measured 1.74 m against
+the 1.6 m assumption is a 0.14 m width error, so points laid under the
+assumption sit **7 cm** off laterally — 7% of the 1 m dedup cell. Recording
+`tw` per point keeps correction possible, but at this magnitude the grid
+cannot represent the correction and re-deriving old points is not worth
+doing. It would take a width error above ~2 m to move a point a full cell.
 Heading comes from ground-plane velocity; the raw rotation floats +
 `rel_orientation_to_north` are logged for offline comparison.
 
@@ -112,7 +148,7 @@ always has everything).
 
 Track knowledge also outlives the run: each circuit's perimeter evidence and
 finish crossings merge into a **track bundle**
-(`data/track-bundles/<slug>.json`, grid-deduped to one point per meter so it
+(`data/track-bundles/<slug>.json`, one record per meter per side so it
 converges instead of growing). A new survey on the same circuit resumes from
 its bundle — the map opens with everything ever mapped — and saves back on
 stop and on circuit changes (a run's evidence is flushed and cleared when
@@ -121,6 +157,39 @@ Bundles are versioned, self-describing documents downloadable via
 `/api/track-bundles/{slug}`, designed to graduate into their own repo and be
 imported at build time like `data/tracks.json`. Width calibration stays out:
 it belongs to the car, not the circuit.
+
+A meter of border is **one fact, voted on** (format v2). Each record carries
+`votes[kind] = [count, last_run]`, and the kind it resolves to follows one
+rule: **hand-marked kinds beat inferred ones outright**, majority inside
+each tier. That is not a tie-break preference — the surface chars are
+*blind* to walls and paved run-off (both read as plain `T`), so an
+auto/straddle point at a marked meter is not evidence against the mark, only
+evidence that the char stream could not see it. Majority within the manual
+tier is the way back from a mis-mark (mark it correctly twice and it wins).
+
+Format v1 keyed on kind as well, so contradictions were stored side by side
+instead of resolved, and the consumer kept both: it drops `runoff` points
+from the road fill, but the co-located twin survived the filter and held the
+meter in the road anyway. Measured on the author's real bundles, v1 →v2
+found 892 of 4634 contested cells at Lago Centre (19%), including **105
+meters where a hand-marked run-off limit had been silently overruled** by an
+auto/straddle point. Bundles upgrade in place on load, voting everything v1
+recorded as run 0 so the next real run outranks it.
+
+Votes count **runs, not samples** — the ~60 s autosave re-merges the same
+run's evidence repeatedly, and without the run stamp a long session would
+inflate its own votes by however many times it happened to autosave.
+(Open for [#40](https://github.com/jbhoorasingh/gt7-datalogger/issues/40):
+run ordinals are local to one installation, so merging two people's bundles
+needs a source id before these counts mean anything across them.)
+
+Records also carry the provenance needed to second-guess them: `run` (which
+run first evidenced the meter) and `tw` (the axle track width in use when it
+was laid). `tw` earns its bytes because straddle points — 52% of Lago
+Centre, 88% of East End — sit at ±tw/2 from the car centre and carry the
+whole width-estimate error; recording it keeps open the option of correcting
+their lateral offset offline once a better width is known. Position itself
+stays first-seen, which keeps file diffs small.
 
 The **Track completeness** card answers "is it ready?": per-border coverage
 of the driven loop (percent + the largest remaining gap, i.e. where to

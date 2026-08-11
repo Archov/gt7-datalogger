@@ -150,3 +150,60 @@ async def test_fuel_endpoint(client) -> None:
     resp = await c.get(f"/api/analysis/fuel?lap_id={laps[0]['id']}")
     assert resp.status_code == 200
     assert len(resp.json()["rows"]) == 11
+
+
+async def test_survey_edges_serve_the_shape_the_map_draws(client, tmp_path) -> None:
+    """/survey/edges is the map's only source of border geometry.
+
+    It must carry a resolved `kind` per metre — the frontend colours ticks and
+    excludes run-off from the road fill by it, and must never have to reduce
+    votes itself — with the evidence alongside for the raw inspector.
+    """
+    c, service = client
+    survey = service.survey
+    survey.start(tmp_path, track_width_m=1.6, track="Ring", track_user_set=True)
+    survey._append_edge(x=10.0, z=5.0, hx=1.0, hz=0.0, side="L", kind="straddle", pid=1)
+    survey._append_edge(x=10.2, z=5.0, hx=1.0, hz=0.0, side="L", kind="runoff", pid=2)
+
+    body = (await c.get("/api/survey/edges")).json()
+    assert body["total"] == 1  # one metre of border, not two points
+    point = body["points"][0]
+    assert point["kind"] == "runoff"  # the hand mark, resolved server-side
+    assert point["votes"] == {"straddle": [1, 1], "runoff": [1, 1]}
+    assert point["run"] == 1 and point["tw"] == 1.6
+    assert {"x", "z", "hx", "hz", "side"} <= set(point)
+    survey.stop()
+
+
+async def test_car_category_is_persisted_and_served(client) -> None:
+    """Packet C broadcasts the category ("Gr.3", "Gr.4"...) and it was being
+    dropped. It is the free grouping key for "best in a Gr.3 car here" (#19),
+    so it has to survive onto the session AND the lap — denormalised like
+    car_id, so filtering never needs a join.
+    """
+    c, service = client
+    for lap in range(1, 3):
+        for tick in range(60):
+            await service.processor.feed(
+                parse_packet(build_packet(
+                    fmt="C", car_id=42, car_category="Gr.3", current_lap=lap,
+                    last_lap_time_ms=61_000 if lap > 1 else -1,
+                    flags=ON_TRACK, packet_id=lap * 100 + tick,
+                    position=(float(tick), 0.0, 0.0), surface_types="TTTT",
+                ))
+            )
+
+    sessions = (await c.get("/api/sessions")).json()
+    assert sessions, "a session should have been created"
+    assert sessions[0]["car_category"] == "Gr.3"
+
+    laps = (await c.get("/api/laps")).json()
+    assert laps and laps[0]["car_category"] == "Gr.3"
+
+
+async def test_laps_without_packet_c_have_a_blank_category(client) -> None:
+    """Format A carries no category; blank must not read as a real one."""
+    c, service = client
+    await drive_laps(service, laps=1)
+    laps = (await c.get("/api/laps")).json()
+    assert laps[0]["car_category"] == ""
