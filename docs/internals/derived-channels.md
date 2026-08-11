@@ -23,7 +23,7 @@ One value per column per tick (~60/s):
 | `yaw_rate` | `abs(angular_velocity_y)` | rad/s |
 | `yaw_rate_signed` | signed `angular_velocity_y` | rad/s |
 | `road_plane_x/y/z`, `road_plane_distance` | raw base-packet road-plane values | raw |
-| `pos_x`, `pos_z` | raw world coordinates | m |
+| `pos_x`, `pos_y`, `pos_z` | raw world coordinates (Y is elevation) | m |
 | `body_height` | `raw × 1000` | mm |
 | `fuel` | raw fuel level | L |
 | `slip_fl/fr/rl/rr` | `abs(wheel_rad_per_s) × tire_radius ÷ speed_mps` | ratio |

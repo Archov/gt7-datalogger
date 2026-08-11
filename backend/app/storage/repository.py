@@ -142,6 +142,20 @@ class Repository:
                 for s, count, best in rows
             ]
 
+    async def get_session_metadata(self, session_id: int) -> dict[str, Any] | None:
+        """Load lightweight session fields without materializing any lap samples."""
+        async with self._sf() as db:
+            row = await db.get(SessionRow, session_id)
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "started_at": row.started_at,
+                "car_id": row.car_id,
+                "car_name": row.car_name,
+                "track_name": row.track_name,
+            }
+
     async def session_lap_stats(self, session_id: int) -> dict[str, Any]:
         """Aggregates for a session without materializing lap rows.
 

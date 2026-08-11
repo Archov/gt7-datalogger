@@ -107,6 +107,7 @@ async def test_csv_export(client) -> None:
     lines = resp.text.strip().splitlines()
     assert lines[0] == '"Format","MoTeC CSV File"'
     header_idx = next(i for i, line in enumerate(lines) if line.startswith('"Time"'))
+    assert '"Pos Y"' in lines[header_idx]
     channels = lines[header_idx].count(",") + 1
     units = lines[header_idx + 1].count(",") + 1
     first_row = lines[header_idx + 2].count(",") + 1

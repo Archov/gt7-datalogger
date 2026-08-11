@@ -8,6 +8,10 @@ panel.
 Each event records its type, start/end distance, the wheels involved, and a severity
 score.
 
+The LLM session exporter additionally derives `reverse_motion` against its selected
+reference lap. This fifth event is export-time evidence rather than a persisted chassis
+event, because its direction depends on that reference.
+
 ## Lockup
 
 A wheel turning slower than the car is moving, under braking:
@@ -54,6 +58,23 @@ compression:
 - Laps imported from old (v1) files that lack per-corner columns simply produce no
   events instead of erroring; events are **recomputed** on import when the data is
   present.
+
+## Reverse motion in LLM exports
+
+Signed along-track speed is calculated from a five-sample centered world-position
+difference and the local selected-reference tangent before monotonic spatial progress is
+coalesced. It uses XYZ when both paths provide elevation, otherwise X/Z.
+
+- Enter below **-2.0 km/h** and exit at **-0.5 km/h**.
+- Require at least **500 ms** accumulated below the enter threshold.
+- Bridge near-zero interruptions up to **200 ms** while forward motion stays at or below
+  **0.5 km/h**.
+- Cap output at 40 events per lap.
+
+The event reports elapsed start/end/duration, reference-progress start/end, its
+most-negative `peak_along_track_speed_kmh`, and integrated `backward_distance_m`.
+`severity` is deliberately `null`: reverse speed and distance are event-specific
+magnitude evidence and are not comparable with slip or suspension severity.
 
 ## How events are displayed
 

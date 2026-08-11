@@ -33,9 +33,14 @@ Row actions:
 | --- | --- |
 | **compare** | opens Analysis with this lap vs the session's best (best as reference) |
 | **set ref** | opens Analysis with this lap as the reference |
-| **json** | downloads the lap as `gt7-lap-<id>.json` — the full 60 Hz recording, shareable and re-importable |
-| **csv** | downloads a **MoTeC-compatible CSV** for MoTeC i2 or Excel |
+| **json** | downloads the full 60 Hz recording, shareable and re-importable |
+| **csv** | downloads the same lap as a **MoTeC-compatible CSV** for MoTeC i2 or Excel |
 | **delete** | removes the lap and its telemetry (confirmed, irreversible) |
+
+JSON and CSV lap files share the metadata-rich base name
+`<LapID>-Session-<SessionID>-<date-time>-<car>-<track>-Lap-<race-lap-number>`.
+For example, lap 4 may download as
+`42-Session-8-2026-08-10_14-38-12-Porsche-911-GT3-Laguna-Seca-Lap-4.json`.
 
 **Delete session** at the bottom of an expanded session removes the session and all its
 laps.
@@ -51,7 +56,13 @@ laps.
 - **Export for LLM** — download one token-efficient whole-session analysis file. It uses
   fixed-distance timing, common reference-lap corners, event context, and bounded detail
   traces rather than concatenating every lap's 60 Hz samples. See the
-  [LLM session export schema](../reference/llm-session-export.md).
+  [LLM session export schema](../reference/llm-session-export.md). Its filename is
+  `<SessionID>-<date-time>-<car>-<track>-<lap-count>-Laps-llm.json`.
+
+Export timestamps use the machine running GT7 Datalogger's local time. Car and track
+names are converted to filesystem-safe, hyphen-separated components; missing metadata
+uses an explicit `Unknown-*` component. A missing lap finish time falls back to the
+session start; if neither timestamp is usable, the filename uses `Unknown-Date-Time`.
 
 ## Recording control
 

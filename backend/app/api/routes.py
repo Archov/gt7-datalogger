@@ -17,6 +17,11 @@ from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.auth import require_admin
+from app.export_filenames import (
+    attachment_header,
+    lap_export_filename,
+    session_export_filename,
+)
 from app.processing import analysis
 from app.processing.laps import SAMPLE_COLUMNS
 from app.processing.llm_export import (
@@ -87,12 +92,12 @@ async def export_session_for_llm(
     except ExportInputError as exc:
         raise HTTPException(400, str(exc)) from exc
     content = json.dumps(data, separators=(",", ":"), allow_nan=False, ensure_ascii=False)
+    session = cast(dict[str, Any], bundle["session"])
+    filename = session_export_filename(session, len(bundle.get("laps") or []))
     return Response(
         content=content,
         media_type="application/json",
-        headers={
-            "Content-Disposition": (f'attachment; filename="gt7-session-{session_id}-llm.json"')
-        },
+        headers={"Content-Disposition": attachment_header(filename)},
     )
 
 
@@ -140,10 +145,14 @@ async def delete_lap(request: Request, lap_id: int) -> dict[str, str]:
 
 
 @router.get("/laps/{lap_id}/export")
-async def export_lap(request: Request, lap_id: int) -> dict[str, Any]:
+async def export_lap(request: Request, response: Response, lap_id: int) -> dict[str, Any]:
     data = await svc(request).repo.export_lap(lap_id)
     if data is None:
         raise HTTPException(404, "lap not found")
+    lap = cast(dict[str, Any], data["lap"])
+    session = await svc(request).repo.get_session_metadata(int(lap["session_id"]))
+    filename = lap_export_filename(lap, session, "json")
+    response.headers["Content-Disposition"] = attachment_header(filename)
     return data
 
 
@@ -161,6 +170,7 @@ CSV_CHANNELS = (
     ("yaw_rate", "Yaw Rate", "rad/s"),
     ("yaw_rate_signed", "Yaw Rate Signed", "rad/s"),
     ("pos_x", "Pos X", "m"),
+    ("pos_y", "Pos Y", "m"),
     ("pos_z", "Pos Z", "m"),
     ("body_height", "Ride Height", "mm"),
     ("fuel", "Fuel Level", "L"),
@@ -219,6 +229,8 @@ async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
     time_ms = lap["time_ms"]
     duration = f"{time_ms // 60000}:{(time_ms % 60000) / 1000:06.3f}"
     car = svc(request).cars.name(lap["car_id"])
+    session = await svc(request).repo.get_session_metadata(int(lap["session_id"]))
+    filename = lap_export_filename(lap, session, "csv")
 
     buf = io.StringIO()
     meta = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\n")
@@ -241,7 +253,7 @@ async def export_lap_csv(request: Request, lap_id: int) -> PlainTextResponse:
     return PlainTextResponse(
         buf.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="gt7-lap-{lap_id}.csv"'},
+        headers={"Content-Disposition": attachment_header(filename)},
     )
 
 

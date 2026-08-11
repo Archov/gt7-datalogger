@@ -68,6 +68,7 @@ CORE_SAMPLE_COLUMNS = (
     "yaw_rate",
     "yaw_rate_signed",
     "pos_x",
+    "pos_y",
     "pos_z",
     "body_height",
     "fuel",
@@ -510,6 +511,7 @@ class LapProcessor:
         s["yaw_rate"].append(round(abs(p.angular_velocity_y), 4))
         s["yaw_rate_signed"].append(round(p.angular_velocity_y, 4))
         s["pos_x"].append(round(p.position_x, 2))
+        s["pos_y"].append(round(p.position_y, 2))
         s["pos_z"].append(round(p.position_z, 2))
         s["body_height"].append(round(p.body_height * 1000, 1))  # mm
         s["fuel"].append(round(p.fuel_level, 3))

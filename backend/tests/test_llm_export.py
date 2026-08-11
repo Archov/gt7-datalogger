@@ -227,6 +227,12 @@ def test_recurring_events_merge_ranges_and_detail_modes() -> None:
     compact = llm_export.build_export(bundle(laps), detail="compact")
     assert "detail_traces" not in compact
     assert len(compact["recurring_events"]["rows"]) == 1
+    event_columns = compact["events"]["columns"]
+    bottoming = dict(zip(event_columns, compact["events"]["rows"][0], strict=True))
+    assert bottoming["start_progress_m"] is None
+    assert bottoming["end_progress_m"] is None
+    assert bottoming["peak_along_track_speed_kmh"] is None
+    assert bottoming["backward_distance_m"] is None
 
     standard = llm_export.build_export(bundle(laps), detail="standard")
     assert len(standard["interesting_ranges"]["rows"]) == 1
@@ -480,3 +486,152 @@ def test_finish_segment_reconciles_shorter_and_longer_full_laps() -> None:
         assert final["cumulative_delta_vs_reference_ms"] == expected_delta
         segment_sum = sum(row["segment_delta_vs_reference_ms"] for row in lap_rows)
         assert segment_sum == pytest.approx(expected_delta, abs=len(lap_rows))
+
+
+def test_spatial_outputs_projection_quality_and_detail_grids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corner = {
+        "n": 3,
+        "direction": "R",
+        "entry_dist": 50.0,
+        "apex_dist": 100.0,
+        "exit_dist": 150.0,
+        "angle_deg": 45.0,
+        "min_speed": 100.0,
+    }
+    monkeypatch.setattr(analysis, "detect_corners", lambda _samples: [corner])
+    reference = make_lap(1, 50.0, sample_count=101)
+    alternate = make_lap(2, 45.0, sample_count=17)
+    alternate["samples"]["pos_z"] = [2.0] * 17
+    alternate["samples"].pop("steering_wheel_rad")
+    alternate["samples"].pop("yaw_rate_signed")
+
+    compact = llm_export.build_export(bundle([reference, alternate]), detail="compact")
+    assert "corner_line_analysis" in compact
+    assert "spatial_reference" not in compact
+    assert "line_traces" not in compact
+    assert "detail_traces" not in compact
+    assert "source_traces" not in compact
+    corner_table = compact["corner_line_analysis"]
+    assert "projection_distance_rms_m" in corner_table["columns"]
+    assert "projection_distance_peak_m" in corner_table["columns"]
+    corner_rows = [
+        dict(zip(corner_table["columns"], row, strict=True))
+        for row in corner_table["rows"]
+    ]
+    alternate_corner = next(row for row in corner_rows if row["lap_id"] == 2)
+    assert alternate_corner["projection_distance_rms_m"] == pytest.approx(2.0)
+    assert alternate_corner["projection_distance_peak_m"] == pytest.approx(2.0)
+
+    standard = llm_export.build_export(bundle([reference, alternate]), detail="standard")
+    assert len(standard["spatial_reference"]["rows"]) == 26
+    assert "y_m" not in standard["spatial_reference"]["columns"]
+    standard_traces = {
+        row[0]: {"columns": row[1], "rows": row[2]}
+        for row in standard["line_traces"]["rows"]
+    }
+    assert len(standard_traces[1]["rows"]) == 26
+    assert len(standard_traces[2]["rows"]) == 26
+    assert "projection_distance_m" in standard_traces[2]["columns"]
+    assert "y_m" not in standard_traces[2]["columns"]
+    assert "steering_wheel_rad" not in standard_traces[2]["columns"]
+    assert "yaw_rate_signed" not in standard_traces[2]["columns"]
+
+    deep = llm_export.build_export(bundle([reference, alternate]), detail="deep")
+    assert len(deep["spatial_reference"]["rows"]) == 51
+    deep_traces = {row[0]: row[2] for row in deep["line_traces"]["rows"]}
+    assert len(deep_traces[1]) == 51
+    assert len(deep_traces[2]) == 51
+
+
+def test_missing_reference_geometry_omits_spatial_tables_without_failing() -> None:
+    lap = make_lap(1, 50.0)
+    lap["samples"].pop("pos_x")
+    result = llm_export.build_export(bundle([lap]), detail="standard")
+    assert result["corner_line_analysis"]["rows"] == []
+    assert "spatial_reference" not in result
+    assert "line_traces" not in result
+
+
+def test_spatial_tables_include_recorded_elevation() -> None:
+    lap = make_lap(1, 50.0)
+    lap["samples"]["pos_y"] = [5.0] * len(lap["samples"]["t"])
+    result = llm_export.build_export(bundle([lap]), detail="standard")
+    assert "y_m" in result["spatial_reference"]["columns"]
+    line_columns = result["line_traces"]["rows"][0][1]
+    assert "y_m" in line_columns
+
+
+def test_reverse_motion_is_in_compact_events_and_spatial_line_evidence() -> None:
+    reference = make_lap(1, 50.0, total_m=100.0, sample_count=101)
+    positions = [float(x) for x in range(51)]
+    positions += [float(x) for x in range(49, 34, -1)]
+    positions += [float(x) for x in range(36, 101)]
+    reverse = make_lap(
+        2,
+        20.0,
+        total_m=100.0,
+        sample_count=len(positions),
+        time_ms=6500,
+    )
+    samples = reverse["samples"]
+    samples["t"] = [index * 0.05 for index in range(len(positions))]
+    samples["dist"] = [0.0]
+    for left, right in zip(positions, positions[1:], strict=False):
+        samples["dist"].append(samples["dist"][-1] + abs(right - left))
+    samples["pos_x"] = positions
+    samples["pos_z"] = [0.0] * len(positions)
+    samples["speed"] = [72.0] * len(positions)
+
+    compact = llm_export.build_export(bundle([reference, reverse]), detail="compact")
+    assert compact == llm_export.build_export(
+        bundle([reference, reverse]), detail="compact"
+    )
+    json.dumps(compact, allow_nan=False, separators=(",", ":"))
+    assert "line_traces" not in compact
+    event_table = compact["events"]
+    event_rows = [
+        dict(zip(event_table["columns"], row, strict=True))
+        for row in event_table["rows"]
+    ]
+    reverse_event = next(row for row in event_rows if row["type"] == "reverse_motion")
+    assert reverse_event["lap_id"] == 2
+    assert reverse_event["severity"] is None
+    assert reverse_event["duration_ms"] >= 500
+    assert reverse_event["start_progress_m"] == pytest.approx(50.0, abs=1.0)
+    assert reverse_event["end_progress_m"] == pytest.approx(50.0, abs=1.0)
+    assert reverse_event["peak_along_track_speed_kmh"] == pytest.approx(-72.0, abs=0.1)
+    assert reverse_event["backward_distance_m"] > 10.0
+
+    standard = llm_export.build_export(bundle([reference, reverse]), detail="standard")
+    traces = {row[0]: (row[1], row[2]) for row in standard["line_traces"]["rows"]}
+    columns, rows = traces[2]
+    assert columns == [
+        "progress_m",
+        "time_ms",
+        "x_m",
+        "z_m",
+        "lateral_offset_m",
+        "projection_distance_m",
+        "heading_error_deg",
+        "curvature_1_per_m",
+        "speed_kmh",
+        "along_track_speed_kmh",
+        "throttle_pct",
+        "brake_pct",
+        "gear",
+        "steering_wheel_rad",
+        "yaw_rate_signed",
+    ]
+    trace_rows = [dict(zip(columns, row, strict=True)) for row in rows]
+    at_reversal = next(row for row in trace_rows if row["progress_m"] == 50.0)
+    assert at_reversal["time_ms"] >= 3900
+    assert at_reversal["along_track_speed_kmh"] == pytest.approx(-72.0, abs=0.1)
+    assert trace_rows[-1]["time_ms"] == 6500
+    assert any("reverse_motion" in row[3] for row in standard["interesting_ranges"]["rows"])
+
+    deep = llm_export.build_export(bundle([reference, reverse]), detail="deep")
+    deep_rows = next(row[2] for row in deep["line_traces"]["rows"] if row[0] == 2)
+    assert len(rows) == 11
+    assert len(deep_rows) == 21

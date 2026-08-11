@@ -13,7 +13,7 @@ from statistics import median
 from typing import Any, Literal, TypeGuard, cast
 
 from app.models import AidsBits
-from app.processing import analysis
+from app.processing import analysis, events, spatial
 from app.processing.surface import (
     LOOSE_CODES,
     SURFACE_KERB,
@@ -729,6 +729,14 @@ def _corner_indices(samples: Samples, entry: float, exit_: float) -> list[int]:
     return [i for i, value in enumerate(dist) if value >= entry or value <= exit_]
 
 
+def _event_start_m(event: dict[str, Any]) -> float:
+    return float(event.get("start_progress_m", event.get("start_dist", 0)))
+
+
+def _event_end_m(event: dict[str, Any]) -> float:
+    return float(event.get("end_progress_m", event.get("end_dist", _event_start_m(event))))
+
+
 def _associated_events(
     events: list[dict[str, Any]], entry: float, exit_: float
 ) -> list[dict[str, Any]]:
@@ -736,12 +744,11 @@ def _associated_events(
         return [
             event
             for event in events
-            if float(event.get("start_dist", 0)) >= entry
-            or float(event.get("start_dist", 0)) <= exit_
+            if _event_start_m(event) >= entry or _event_start_m(event) <= exit_
         ]
     out: list[dict[str, Any]] = []
     for event in events:
-        distance = float(event.get("start_dist", 0))
+        distance = _event_start_m(event)
         kind = str(event.get("type", ""))
         if kind in ("lockup", "bottoming"):
             matched = entry - CORNER_ASSOCIATION_M <= distance <= exit_
@@ -941,6 +948,10 @@ def _event_table(laps: list[dict[str, Any]]) -> Table:
         "surface_end",
         "kerb_contact_pct",
         "loose_surface_contact_pct",
+        "start_progress_m",
+        "end_progress_m",
+        "peak_along_track_speed_kmh",
+        "backward_distance_m",
     )
     rows: list[list[Any]] = []
     for lap in laps:
@@ -954,6 +965,21 @@ def _event_table(laps: list[dict[str, Any]]) -> Table:
             start = float(event.get("start_dist", 0))
             end = float(event.get("end_dist", start))
             start_t, end_t = _elapsed_at(samples, start), _elapsed_at(samples, end)
+            start_time_ms = (
+                float(event["start_time_ms"])
+                if _finite(event.get("start_time_ms"))
+                else start_t * 1000
+            )
+            end_time_ms = (
+                float(event["end_time_ms"])
+                if _finite(event.get("end_time_ms"))
+                else end_t * 1000
+            )
+            duration_ms = (
+                float(event["duration_ms"])
+                if _finite(event.get("duration_ms"))
+                else max(0.0, end_time_ms - start_time_ms)
+            )
 
             speeds = _window_values(samples, "speed", start, end)
             body = _window_values(samples, "body_height", start, end)
@@ -989,9 +1015,9 @@ def _event_table(laps: list[dict[str, Any]]) -> Table:
                     _number(end, 1),
                     wheels,
                     _number(event.get("severity"), 4),
-                    _number(start_t * 1000, 0),
-                    _number(end_t * 1000, 0),
-                    _number(max(0.0, end_t - start_t) * 1000, 0),
+                    _number(start_time_ms, 0),
+                    _number(end_time_ms, 0),
+                    _number(duration_ms, 0),
                     _number(_sample_at(samples, "speed", start), 1),
                     _number(min(speeds), 1) if speeds else None,
                     _number(_sample_at(samples, "speed", end), 1),
@@ -1007,6 +1033,10 @@ def _event_table(laps: list[dict[str, Any]]) -> Table:
                     _number(_sample_at(samples, "surface", end, discrete=True), 0),
                     shares[1] if shares else None,
                     shares[2] if shares else None,
+                    _number(event.get("start_progress_m"), 1),
+                    _number(event.get("end_progress_m"), 1),
+                    _number(event.get("peak_along_track_speed_kmh"), 1),
+                    _number(event.get("backward_distance_m"), 1),
                 ]
             )
     return table(columns, rows)
@@ -1354,8 +1384,8 @@ def _interesting_ranges(
     candidates: list[dict[str, Any]] = []
     for lap in laps:
         for event in lap.get("events") or []:
-            start = float(event.get("start_dist", 0))
-            end = float(event.get("end_dist", start))
+            start = _event_start_m(event)
+            end = _event_end_m(event)
             candidates.append(
                 {
                     "start": start,
@@ -1568,6 +1598,143 @@ def _deep_traces(ranges: list[dict[str, Any]], laps: list[dict[str, Any]], ref_i
     return table(("range_id", "lap_id", "columns", "rows"), rows)
 
 
+def _corner_line_table(
+    laps: list[dict[str, Any]],
+    path: spatial.ReferencePath | None,
+    trajectories: dict[int, spatial.ProjectedTrajectory],
+    corners: list[dict[str, Any]],
+) -> Table:
+    columns = (
+        "lap_id",
+        "corner",
+        "entry_lateral_offset_m",
+        "apex_lateral_offset_m",
+        "exit_lateral_offset_m",
+        "entry_heading_error_deg",
+        "apex_heading_error_deg",
+        "exit_heading_error_deg",
+        "line_rms_offset_m",
+        "line_peak_offset_m",
+        "projection_distance_rms_m",
+        "projection_distance_peak_m",
+        "corner_path_length_m",
+        "mean_abs_curvature_1_per_m",
+        "peak_abs_curvature_1_per_m",
+        "peak_curvature_progress_m",
+    )
+    if path is None:
+        return table(columns, [])
+    rows: list[list[Any]] = []
+    for lap in laps:
+        trajectory = trajectories.get(int(lap["id"]))
+        if trajectory is None:
+            continue
+        for metrics in spatial.corner_line_metrics(path, trajectory, corners):
+            rows.append(
+                [
+                    lap["id"],
+                    metrics["corner"],
+                    _number(metrics["entry_lateral_offset"], 1),
+                    _number(metrics["apex_lateral_offset"], 1),
+                    _number(metrics["exit_lateral_offset"], 1),
+                    _number(metrics["entry_heading_error"], 1),
+                    _number(metrics["apex_heading_error"], 1),
+                    _number(metrics["exit_heading_error"], 1),
+                    _number(metrics["line_rms_offset"], 1),
+                    _number(metrics["line_peak_offset"], 1),
+                    _number(metrics["projection_distance_rms"], 1),
+                    _number(metrics["projection_distance_peak"], 1),
+                    _number(metrics["corner_path_length"], 1),
+                    _number(metrics["mean_abs_curvature"], 6),
+                    _number(metrics["peak_abs_curvature"], 6),
+                    _number(metrics["peak_curvature_progress"], 1),
+                ]
+            )
+    return table(columns, rows)
+
+
+def _spatial_reference_table(path: spatial.ReferencePath, step: float) -> Table:
+    geometry = spatial.reference_geometry(path, step)
+    columns = ["progress_m", "x_m"]
+    if "y" in geometry:
+        columns.append("y_m")
+    columns += ["z_m", "heading_deg", "curvature_1_per_m"]
+    rows: list[list[Any]] = []
+    for i, progress in enumerate(geometry["progress"]):
+        row: list[Any] = [_number(progress, 1), _number(geometry["x"][i], 1)]
+        if "y" in geometry:
+            row.append(_number(geometry["y"][i], 1))
+        row += [
+            _number(geometry["z"][i], 1),
+            _number(math.degrees(geometry["heading"][i]), 1),
+            _number(geometry["curvature"][i], 6),
+        ]
+        rows.append(row)
+    return table(columns, rows)
+
+
+def _line_traces_table(
+    laps: list[dict[str, Any]],
+    path: spatial.ReferencePath,
+    trajectories: dict[int, spatial.ProjectedTrajectory],
+    step: float,
+) -> Table:
+    rows: list[list[Any]] = []
+    for lap in laps:
+        trajectory = trajectories.get(int(lap["id"]))
+        if trajectory is None:
+            continue
+        trace = spatial.resample_projected(path, trajectory, step)
+        if not trace["progress"]:
+            continue
+        columns = ["progress_m", "time_ms", "x_m"]
+        if "y" in trace:
+            columns.append("y_m")
+        columns += [
+            "z_m",
+            "lateral_offset_m",
+            "projection_distance_m",
+            "heading_error_deg",
+            "curvature_1_per_m",
+        ]
+        source_columns = [
+            (column, public_name)
+            for column, public_name in (
+                ("speed", "speed_kmh"),
+                ("along_track_speed_kmh", "along_track_speed_kmh"),
+                ("throttle", "throttle_pct"),
+                ("brake", "brake_pct"),
+                ("gear", "gear"),
+                ("steering_wheel_rad", "steering_wheel_rad"),
+                ("yaw_rate_signed", "yaw_rate_signed"),
+            )
+            if column in trace
+        ]
+        columns += [public_name for _column, public_name in source_columns]
+        trace_rows: list[list[Any]] = []
+        for i, progress in enumerate(trace["progress"]):
+            row: list[Any] = [
+                _number(progress, 1),
+                _number(trace["time_ms"][i], 0),
+                _number(trace["x"][i], 1),
+            ]
+            if "y" in trace:
+                row.append(_number(trace["y"][i], 1))
+            row += [
+                _number(trace["z"][i], 1),
+                _number(trace["lateral_offset"][i], 1),
+                _number(trace["projection_distance"][i], 1),
+                _number(trace["heading_error"][i], 1),
+                _number(trace["curvature"][i], 6),
+            ]
+            for column, _public_name in source_columns:
+                digits = 0 if column == "gear" else 4 if column.endswith(("_rad", "_signed")) else 1
+                row.append(_number(trace[column][i], digits))
+            trace_rows.append(row)
+        rows.append([lap["id"], columns, trace_rows])
+    return table(("lap_id", "columns", "rows"), rows)
+
+
 def build_export(
     bundle: dict[str, Any],
     *,
@@ -1586,6 +1753,25 @@ def build_export(
     corners = analysis.detect_corners(ref_samples)
     timing, losses = _timing_table(laps, ref, segment_m)
     recurring_table, recurring = _recurring_events(laps, corners)
+    spatial_path = spatial.build_reference_path(ref_samples)
+    spatial_trajectories: dict[int, spatial.ProjectedTrajectory] = {}
+    if spatial_path is not None:
+        for lap in laps:
+            if _usable(lap):
+                trajectory = spatial.project_lap(
+                    spatial_path,
+                    _samples(lap),
+                    completed_time_ms=int(lap["time_ms"]),
+                )
+                if trajectory is not None:
+                    spatial_trajectories[int(lap["id"])] = trajectory
+    event_laps: list[dict[str, Any]] = []
+    for lap in laps:
+        trajectory = spatial_trajectories.get(int(lap["id"]))
+        reverse_events = events.detect_reverse_motion(trajectory.dense) if trajectory else []
+        event_laps.append(
+            {**lap, "events": [*(lap.get("events") or []), *reverse_events]}
+        )
     all_channels = sorted(
         {channel for lap in laps for channel in _available_channels(_samples(lap))}
     )
@@ -1618,6 +1804,9 @@ def build_export(
                 "slip": "wheel surface speed / vehicle speed",
                 "sway_heave_surge": "raw GT7 acceleration values; physical unit not established",
                 "torque_energy_road_plane": "raw GT7 values unless a table field states otherwise",
+                "world_position_and_lateral_offset": "m",
+                "heading_and_heading_error": "degrees",
+                "path_curvature": "1/m",
             },
             "notes": [
                 "Missing channels are unavailable, not zero.",
@@ -1625,6 +1814,37 @@ def build_export(
                 "aids is a bitmask: TCS=1, ASM=2, handbrake=4, rev_limiter=8.",
                 "powered_corner_rear_slip is an analysis heuristic, not an official GT7 metric.",
                 "Steering/yaw signs are preserved; their mutual convention is not assumed.",
+                "The spatial reference is the selected reference lap path, not a track centerline.",
+                "Positive lateral offset is left of the reference path in its direction of travel.",
+                (
+                    "Projection distance is diagnostic confidence evidence, not driving quality "
+                    "by itself."
+                ),
+                "Large projection distances may represent off-line driving, spins, or excursions.",
+                "Spatial projection uses X/Y/Z when both laps provide Y, otherwise X/Z.",
+                "Spatial heading and curvature are planar X/Z measurements.",
+                (
+                    "Corner-line metrics use a 2 m internal grid; standard line tables use "
+                    "10 m and deep line tables use 5 m."
+                ),
+                "Line-trace time_ms is elapsed lap time at spatial reference progress.",
+                (
+                    "speed_kmh is unsigned; along_track_speed_kmh is signed along the "
+                    "selected reference path from a five-sample centered position difference."
+                ),
+                (
+                    "Negative along-track speed means opposite physical motion, not "
+                    "necessarily reverse gear; reference progress remains monotonic."
+                ),
+                (
+                    "reverse_motion is derived from dense world-position motion before "
+                    "progress coalescing; its severity is null and magnitude is carried by "
+                    "peak_along_track_speed_kmh and backward_distance_m."
+                ),
+                (
+                    "reverse_motion enters below -2.0 km/h, exits at -0.5 km/h, requires "
+                    "500 ms, and bridges near-zero gaps up to 200 ms."
+                ),
             ],
         },
         "session": session,
@@ -1637,14 +1857,25 @@ def build_export(
         "whole_lap_chassis": _chassis_table(laps),
         "timing_segments": timing,
         "reference_corners": _corner_definitions(corners),
-        "events": _event_table(laps),
+        "events": _event_table(event_laps),
         "recurring_events": recurring_table,
+        "corner_line_analysis": _corner_line_table(
+            laps, spatial_path, spatial_trajectories, corners
+        ),
     }
     if detail != "compact":
-        ranges = _interesting_ranges(laps, ref, corners, losses, recurring)
-        output["corner_analysis"] = _corner_analysis(laps, ref, corners)
+        ranges = _interesting_ranges(event_laps, ref, corners, losses, recurring)
+        output["corner_analysis"] = _corner_analysis(event_laps, ref, corners)
         output["interesting_ranges"] = _ranges_table(ranges)
-        output["detail_traces"] = _standard_traces(ranges, laps, int(ref["id"]))
+        output["detail_traces"] = _standard_traces(ranges, event_laps, int(ref["id"]))
+        if spatial_path is not None:
+            spatial_step = 5.0 if detail == "deep" else 10.0
+            output["spatial_reference"] = _spatial_reference_table(spatial_path, spatial_step)
+            output["line_traces"] = _line_traces_table(
+                event_laps, spatial_path, spatial_trajectories, spatial_step
+            )
         if detail == "deep":
-            output["source_traces"] = _deep_traces(ranges, laps, int(ref["id"]))
+            output["source_traces"] = _deep_traces(
+                ranges, event_laps, int(ref["id"])
+            )
     return cast(dict[str, Any], strict_json_value(output))

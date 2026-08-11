@@ -8,6 +8,9 @@ dict so it JSON-serializes into the lap row:
 
 Severity is the worst slip ratio for slip events (min for lockups, max for
 wheelspin) and the compression fraction for suspension events.
+
+Reference-dependent reverse-motion events are derived only for the LLM export.
+They use this shared module but are not persisted with the lap.
 """
 
 from __future__ import annotations
@@ -28,6 +31,11 @@ BOTTOM_FRACTION = 0.98  # of the lap's max compression
 MIN_BOTTOM_TICKS = 3
 KERB_SPIKE_FRACTION = 0.35  # of the wheel's travel range, single-tick jump
 MAX_EVENTS_PER_TYPE = 40  # noisy data guard — keep the payload bounded
+REVERSE_ENTER_KMH = -2.0
+REVERSE_EXIT_KMH = -0.5
+REVERSE_MIN_ACTIVE_MS = 500.0
+REVERSE_GAP_TOLERANCE_MS = 200.0
+REVERSE_GAP_MAX_FORWARD_KMH = 0.5
 
 
 def _runs(active: list[bool], min_ticks: int) -> list[tuple[int, int]]:
@@ -140,6 +148,95 @@ def _suspension_events(s: Samples) -> list[Event]:
                     }
                 )
                 kerb_count += 1
+    return events
+
+
+def _meaningful_reverse_ms(times: list[float], speeds: list[float], start: int, end: int) -> float:
+    return sum(
+        max(0.0, times[i + 1] - times[i])
+        for i in range(start, end)
+        if min(speeds[i], speeds[i + 1]) < REVERSE_ENTER_KMH
+    )
+
+
+def _backward_distance_m(times: list[float], speeds: list[float], start: int, end: int) -> float:
+    distance = 0.0
+    for i in range(start, end):
+        dt_s = max(0.0, times[i + 1] - times[i]) / 1000
+        reverse_left = max(0.0, -speeds[i]) / 3.6
+        reverse_right = max(0.0, -speeds[i + 1]) / 3.6
+        distance += (reverse_left + reverse_right) * 0.5 * dt_s
+    return distance
+
+
+def detect_reverse_motion(dense_motion: Samples) -> list[Event]:
+    """Find physical travel opposite a selected reference path's direction.
+
+    ``dense_motion`` comes from spatial projection before progress coalescing.
+    Its progress remains monotonic for location stability, while its signed speed
+    is derived directly from world-position displacement and can be negative.
+    """
+    times = dense_motion.get("time_ms") or []
+    distance = dense_motion.get("dist") or []
+    progress = dense_motion.get("progress") or []
+    speeds = dense_motion.get("along_track_speed_kmh") or []
+    n = len(times)
+    if n < 2 or any(len(values) != n for values in (distance, progress, speeds)):
+        return []
+
+    events: list[Event] = []
+    i = 0
+    while i < n and len(events) < MAX_EVENTS_PER_TYPE:
+        while i < n and speeds[i] >= REVERSE_ENTER_KMH:
+            i += 1
+        if i >= n:
+            break
+        start = i
+        last_reverse = i
+        interruption_start: int | None = None
+        i += 1
+        while i < n:
+            speed = speeds[i]
+            if speed < REVERSE_EXIT_KMH:
+                if (
+                    interruption_start is not None
+                    and times[i] - times[interruption_start] > REVERSE_GAP_TOLERANCE_MS
+                ):
+                    break
+                last_reverse = i
+                interruption_start = None
+                i += 1
+                continue
+            if interruption_start is None:
+                interruption_start = i
+            gap_ms = times[i] - times[interruption_start]
+            if speed > REVERSE_GAP_MAX_FORWARD_KMH or gap_ms > REVERSE_GAP_TOLERANCE_MS:
+                break
+            i += 1
+
+        end = last_reverse
+        if _meaningful_reverse_ms(times, speeds, start, end) >= REVERSE_MIN_ACTIVE_MS:
+            peak = min(speeds[start : end + 1])
+            events.append(
+                {
+                    "type": "reverse_motion",
+                    "start_dist": round(distance[start], 2),
+                    "end_dist": round(distance[end], 2),
+                    "wheels": [],
+                    "severity": None,
+                    "start_time_ms": round(times[start]),
+                    "end_time_ms": round(times[end]),
+                    "duration_ms": round(max(0.0, times[end] - times[start])),
+                    "start_progress_m": round(progress[start], 3),
+                    "end_progress_m": round(progress[end], 3),
+                    "peak_along_track_speed_kmh": round(peak, 3),
+                    "backward_distance_m": round(
+                        _backward_distance_m(times, speeds, start, end), 3
+                    ),
+                }
+            )
+        if i <= end:
+            i = end + 1
     return events
 
 

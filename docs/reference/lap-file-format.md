@@ -32,6 +32,8 @@ channel — see [Derived channels & metrics](../internals/derived-channels.md) f
 complete column list with formulas and units (time, distance, speed,
 inputs, gear, RPM, boost, per-wheel slip, per-corner tire temps and suspension travel,
 world position, fuel, driver-aids bitmask, …).
+New captures retain all three world-position axes as `pos_x`, `pos_y`, and `pos_z`.
+Older v1/v2/v3 files without `pos_y` remain valid and use X/Z for spatial analysis.
 
 ### Importing
 
@@ -56,7 +58,7 @@ understands:
 
 Recorded channels have explicit units: Time (s), Distance (m), Ground Speed (km/h), Throttle
 Pos (%), Brake Pos (%), Gear, Engine RPM (rpm), Boost Pressure (bar), Tyre Slip Ratio,
-Yaw Rate (rad/s), Pos X/Z (m), Ride Height (mm), Fuel Level (L), Tyre Slip FL/FR/RL/RR,
+Yaw Rate (rad/s), Pos X/Y/Z (m), Ride Height (mm), Fuel Level (L), Tyre Slip FL/FR/RL/RR,
 Tyre Temp FL/FR/RL/RR (C), Susp Travel FL/FR/RL/RR (mm), and Driver Aids (bitmask).
 
 !!! tip

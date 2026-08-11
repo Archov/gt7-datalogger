@@ -4,6 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
+from app.export_filenames import attachment_header, lap_export_filename, session_export_filename
 from app.main import create_app
 from app.models import SimulatorFlags
 from app.processing.cars import CarDatabase
@@ -127,8 +128,18 @@ async def test_export_import_roundtrip(client) -> None:
     c, service = client
     await drive_laps(service, laps=1)
     laps = (await c.get("/api/laps")).json()
-    exported = (await c.get(f"/api/laps/{laps[0]['id']}/export")).json()
+    sessions = (await c.get("/api/sessions")).json()
+    export_response = await c.get(f"/api/laps/{laps[0]['id']}/export")
+    assert export_response.headers["content-disposition"] == attachment_header(
+        lap_export_filename(laps[0], sessions[0], "json")
+    )
+    exported = export_response.json()
     assert exported["format"] == "gt7-datalogger-lap"
+
+    csv_response = await c.get(f"/api/laps/{laps[0]['id']}/export.csv")
+    assert csv_response.headers["content-disposition"] == attachment_header(
+        lap_export_filename(laps[0], sessions[0], "csv")
+    )
 
     resp = await c.post("/api/laps/import", json=exported)
     assert resp.status_code == 200
@@ -143,8 +154,8 @@ async def test_llm_session_export_and_validation(client) -> None:
     laps = (await c.get(f"/api/sessions/{session_id}/laps")).json()
     response = await c.get(f"/api/sessions/{session_id}/export.llm.json")
     assert response.status_code == 200
-    assert response.headers["content-disposition"] == (
-        f'attachment; filename="gt7-session-{session_id}-llm.json"'
+    assert response.headers["content-disposition"] == attachment_header(
+        session_export_filename(sessions[0], len(laps))
     )
     data = response.json()
     assert data["format"] == "gt7-datalogger-llm-session"

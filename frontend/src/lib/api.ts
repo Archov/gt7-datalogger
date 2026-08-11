@@ -53,10 +53,24 @@ async function get<T>(url: string): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
-async function getBlob(url: string): Promise<Blob> {
+export interface DownloadFile {
+  blob: Blob;
+  filename: string | null;
+}
+
+function downloadFilename(resp: Response): string | null {
+  const disposition = resp.headers.get("Content-Disposition");
+  if (!disposition) return null;
+  const quoted = /filename="([^"]+)"/i.exec(disposition);
+  if (quoted) return quoted[1];
+  const bare = /filename=([^;]+)/i.exec(disposition);
+  return bare?.[1]?.trim() || null;
+}
+
+async function getBlob(url: string): Promise<DownloadFile> {
   const resp = await fetch(url, { headers: authHeaders() });
   if (!resp.ok) await fail(url, resp);
-  return resp.blob();
+  return { blob: await resp.blob(), filename: downloadFilename(resp) };
 }
 
 async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
@@ -83,7 +97,7 @@ export const api = {
     get<LapSummary & Record<string, unknown>>(`/api/laps/${id}${withSamples ? "" : "?samples=0"}`),
   deleteSession: (id: number) => send<{ status: string }>(`/api/sessions/${id}`, "DELETE"),
   deleteLap: (id: number) => send<{ status: string }>(`/api/laps/${id}`, "DELETE"),
-  exportLap: (id: number) => get<Record<string, unknown>>(`/api/laps/${id}/export`),
+  exportLap: (id: number) => getBlob(`/api/laps/${id}/export`),
   importLap: (payload: unknown) => send<{ id: number }>("/api/laps/import", "POST", payload),
   compare: (lapIds: number[], ref: number, channels?: string[]) =>
     get<CompareResult>(

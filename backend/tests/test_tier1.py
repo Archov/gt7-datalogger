@@ -246,6 +246,7 @@ async def test_export_import_roundtrip_v3(client) -> None:
     lap_id = (await c.get("/api/laps")).json()[0]["id"]
     exported = (await c.get(f"/api/laps/{lap_id}/export")).json()
     assert exported["version"] == 3
+    assert exported["lap"]["samples"]["pos_y"]
 
     imported = (await c.post("/api/laps/import", json=exported)).json()
     detail = (await c.get(f"/api/laps/{imported['id']}")).json()
@@ -255,23 +256,26 @@ async def test_export_import_roundtrip_v3(client) -> None:
     assert detail["telemetry_meta"]["packet_format"] == "A"
 
 
-async def test_import_v1_file_without_new_columns(client) -> None:
+@pytest.mark.parametrize("version", [1, 2, 3])
+async def test_import_file_without_new_columns(client, version: int) -> None:
     c, service = client
     await drive_laps(service)
     lap_id = (await c.get("/api/laps")).json()[0]["id"]
     exported = (await c.get(f"/api/laps/{lap_id}/export")).json()
     # Strip to a v1-era file
-    exported["version"] = 1
+    exported["version"] = version
     lap = exported["lap"]
     for key in ("events", "gearing", "max_water_temp", "max_oil_temp", "min_oil_pressure"):
         lap.pop(key, None)
     lap["samples"] = {
         k: v
         for k, v in lap["samples"].items()
-        if not k.startswith(("slip_", "tt_", "sus_")) and k != "aids"
+        if not k.startswith(("slip_", "tt_", "sus_"))
+        and k not in {"aids", "pos_y"}
     }
     imported = (await c.post("/api/laps/import", json=exported)).json()
     detail = (await c.get(f"/api/laps/{imported['id']}")).json()
     assert detail["min_oil_pressure"] == -1.0
     assert detail["gearing"] is None
     assert detail["events"] == []
+    assert "pos_y" not in detail["samples"]

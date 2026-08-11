@@ -24,6 +24,8 @@ export function SessionsView() {
   const [naming, setNaming] = useState<number | null>(null); // session id
   const [deletingSession, setDeletingSession] = useState<number | null>(null);
   const [deletingLap, setDeletingLap] = useState<{ sessionId: number; lapId: number } | null>(null);
+  const [exportingSessions, setExportingSessions] = useState<Set<number>>(() => new Set());
+  const exportingSessionsRef = useRef(new Set<number>());
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
@@ -39,29 +41,33 @@ export function SessionsView() {
     api.sessionLaps(expanded).then((ls) => setLaps((cur) => ({ ...cur, [expanded]: ls })));
   }, [expanded, lapEpoch]);
 
-  async function exportLap(id: number) {
-    const data = await api.exportLap(id);
-    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+  function downloadBlob(blob: Blob, filename: string | null, fallback: string) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `gt7-lap-${id}.json`;
+    a.download = filename ?? fallback;
     a.click();
     // Revoking synchronously can cancel the download in some browsers.
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
+  async function exportLap(id: number) {
+    const file = await api.exportLap(id);
+    downloadBlob(file.blob, file.filename, `gt7-lap-${id}.json`);
+  }
+
   async function exportSessionForLlm(id: number) {
+    if (exportingSessionsRef.current.has(id)) return;
+    exportingSessionsRef.current.add(id);
+    setExportingSessions(new Set(exportingSessionsRef.current));
     try {
-      const blob = await api.exportSessionForLlm(id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `gt7-session-${id}-llm.json`;
-      a.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      const file = await api.exportSessionForLlm(id);
+      downloadBlob(file.blob, file.filename, `gt7-session-${id}-llm.json`);
     } catch {
       toast("Could not export session for LLM analysis", "error");
+    } finally {
+      exportingSessionsRef.current.delete(id);
+      setExportingSessions(new Set(exportingSessionsRef.current));
     }
   }
 
@@ -185,9 +191,26 @@ export function SessionsView() {
                 </span>
               </div>
               {s.lap_count > 0 && (
-                <Tip content="Download a compact whole-session file for ChatGPT or another LLM">
-                  <button className="btn shrink-0" onClick={() => exportSessionForLlm(s.id)}>
-                    Export for LLM
+                <Tip
+                  content={
+                    exportingSessions.has(s.id)
+                      ? "Preparing the session export…"
+                      : "Download a compact whole-session file for ChatGPT or another LLM"
+                  }
+                >
+                  <button
+                    className="btn flex shrink-0 items-center gap-1.5"
+                    onClick={() => exportSessionForLlm(s.id)}
+                    disabled={exportingSessions.has(s.id)}
+                    aria-busy={exportingSessions.has(s.id)}
+                  >
+                    {exportingSessions.has(s.id) && (
+                      <span
+                        className="h-3 w-3 animate-spin rounded-full border-2 border-ink-dim border-t-accent"
+                        aria-hidden="true"
+                      />
+                    )}
+                    {exportingSessions.has(s.id) ? "Exporting…" : "Export for LLM"}
                   </button>
                 </Tip>
               )}
