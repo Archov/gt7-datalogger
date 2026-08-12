@@ -49,10 +49,12 @@ class TelemetryPacket:
     velocity_x: float
     velocity_y: float
     velocity_z: float
-    rotation_pitch: float
-    rotation_yaw: float
-    rotation_roll: float
-    rel_orientation_to_north: float
+    # Native vehicle-local to world quaternion (x, y, z, w). The vehicle's
+    # nose is local -Z and its up vector is local +Y.
+    orientation_x: float
+    orientation_y: float
+    orientation_z: float
+    orientation_w: float
     angular_velocity_x: float
     angular_velocity_y: float
     angular_velocity_z: float

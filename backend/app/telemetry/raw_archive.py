@@ -507,6 +507,7 @@ async def replay_archive(
     *,
     preserve_timing: bool = False,
     speed: float = 1.0,
+    strict_truncation: bool = False,
 ) -> None:
     """Parse archived payloads and deliver them without a UDP transport."""
     if speed <= 0:
@@ -514,7 +515,7 @@ async def replay_archive(
     from app.telemetry.packet import parse_packet
 
     previous_ns: int | None = None
-    for record in RawArchiveReader(path):
+    for record in RawArchiveReader(path, strict_truncation=strict_truncation):
         if preserve_timing and previous_ns is not None:
             delay = max(0, record.monotonic_offset_ns - previous_ns) / 1e9 / speed
             if delay:

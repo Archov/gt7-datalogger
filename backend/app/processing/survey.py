@@ -11,8 +11,7 @@ transitions are single-tick events, and the ~30 Hz live WebSocket stream
 would miss half of them. The Survey view is a window onto this state —
 transitions are pushed to it as they happen, a breadcrumb trail of the path
 driven shows coverage, and the full record is written to a JSONL file for
-offline analysis (raw rotation floats included, so the euler-vs-quaternion
-question can be settled after the drive).
+offline analysis (including the native vehicle-orientation quaternion).
 
 Track width is NOT broadcast by GT7, but it can be MEASURED: riding all four
 wheels over one surface edge and back pins the crossing contact points onto
@@ -613,9 +612,12 @@ class SurfaceSurvey:
             "vel": [round(p.velocity_x, 3), round(p.velocity_y, 3), round(p.velocity_z, 3)],
             "speed_mps": round(speed, 2),
             "heading_rad": round(heading, 5) if heading is not None else None,
-            # Raw orientation fields, for settling euler-vs-quaternion offline.
-            "rotation": [p.rotation_pitch, p.rotation_yaw, p.rotation_roll],
-            "rel_north": p.rel_orientation_to_north,
+            "orientation": [
+                p.orientation_x,
+                p.orientation_y,
+                p.orientation_z,
+                p.orientation_w,
+            ],
             "wheelbase_m": p.wheelbase_m,
             # Raw flags, so undocumented bits can be correlated with
             # off-track moments offline (no track-limits field is known).

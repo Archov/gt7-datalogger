@@ -73,6 +73,24 @@ for record in RawArchiveReader(Path("data/raw/session-8.gt7r.zip")):
 `replay_archive(path, callback, preserve_timing=True)` provides an async transport-free
 replay path and can scale delays with its `speed` argument.
 
+## Historical channel recovery
+
+The Standard/Deep LLM export can request normalized channels that were not understood
+when an older session was recorded. Persisted aligned channels are used first. If any
+requested channel is missing and the session has a complete archive, the archive is
+opened once for that request and replayed through the current production parser and lap
+processor. Reconstructed laps match persisted laps by the unique tuple of car ID, GT7
+lap number, and completed time; persisted lap IDs, time, distance, and existing channels
+remain authoritative. Continuous values interpolate onto the persisted time grid,
+discrete values use nearest-neighbor, and quaternion orientation uses shortest-path
+spherical interpolation.
+
+Hydration exists only in memory for the request. It never rewrites historical lap JSON
+or the archive. Export `channel_provenance` reports which channels came from
+`persisted`, `archive_replay`, or remain `unavailable`. Any missing, interrupted,
+truncated, corrupt, or ambiguous archive fails closed without preventing the ordinary
+export.
+
 The normal reader stops before a truncated final header or payload and then reports
 `truncated_tail = True`. Strict mode raises `TruncatedArchiveError`. Bad magic, CRC,
 unsupported versions, and unreasonable lengths always raise an archive error. Earlier

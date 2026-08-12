@@ -59,6 +59,7 @@ Every packet decodes to a typed structure with ~50 fields. The important ones:
 | --- | --- | --- |
 | 0x04 | position X/Y/Z | m, GT7 world coordinates |
 | 0x10 | velocity X/Y/Z | m/s |
+| 0x1C | orientation X/Y/Z/W | unit quaternion, vehicle-local to world |
 | 0x2C | angular velocity X/Y/Z | rad/s (Y = yaw rate) |
 | 0x38 | body height | m |
 | 0x3C | engine RPM | rpm |
@@ -86,6 +87,12 @@ Every packet decodes to a typed structure with ~50 fields. The important ones:
 **Flags bitmask** — `CAR_ON_TRACK` (bit 0), `PAUSED` (1), `LOADING` (2), `IN_GEAR` (3),
 `HAS_TURBO` (4), `REV_LIMITER` (5), `HANDBRAKE` (6), lights (7–9), `ASM_ACTIVE` (10),
 `TCS_ACTIVE` (11).
+
+The orientation quaternion uses `(x, y, z, w)` ordering. Vehicle-local `-Z` points
+through the chassis nose and local `+Y` points upward; world `Y` is elevation. These
+conventions were checked against archived on-track velocity and road-plane normals.
+The native quaternion is retained because it is less ambiguous than inventing
+yaw/pitch/roll labels.
 
 For storage, the aid flags are remapped into a stable, compact **aids bitmask** persisted
 with every sample: `TCS=1`, `ASM=2`, `HANDBRAKE=4`, `REV_LIMITER=8`. This keeps recorded

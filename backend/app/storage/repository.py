@@ -62,6 +62,14 @@ def _event_counts(events_json: str) -> dict[str, int]:
     return counts
 
 
+def _json_object(raw: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 class Repository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -320,6 +328,7 @@ class Repository:
                     "track_name": session.track_name,
                 },
                 "laps": laps,
+                "raw_archive_meta": _json_object(session.raw_archive_meta_json),
             }
 
     async def delete_session(self, session_id: int) -> None:

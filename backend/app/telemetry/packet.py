@@ -27,8 +27,7 @@ _HEAD = struct.Struct(
     "<i"  # 0x00 magic
     "3f"  # 0x04 position
     "3f"  # 0x10 velocity
-    "3f"  # 0x1C rotation (pitch, yaw, roll)
-    "f"  # 0x28 relative orientation to north
+    "4f"  # 0x1C vehicle-local to world quaternion (x, y, z, w)
     "3f"  # 0x2C angular velocity
     "f"  # 0x38 body height
     "f"  # 0x3C engine rpm
@@ -99,10 +98,10 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
         vel_x,
         vel_y,
         vel_z,
-        rot_pitch,
-        rot_yaw,
-        rot_roll,
-        rel_north,
+        orientation_x,
+        orientation_y,
+        orientation_z,
+        orientation_w,
         ang_x,
         ang_y,
         ang_z,
@@ -216,10 +215,10 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
         velocity_x=vel_x,
         velocity_y=vel_y,
         velocity_z=vel_z,
-        rotation_pitch=rot_pitch,
-        rotation_yaw=rot_yaw,
-        rotation_roll=rot_roll,
-        rel_orientation_to_north=rel_north,
+        orientation_x=orientation_x,
+        orientation_y=orientation_y,
+        orientation_z=orientation_z,
+        orientation_w=orientation_w,
         angular_velocity_x=ang_x,
         angular_velocity_y=ang_y,
         angular_velocity_z=ang_z,
@@ -295,6 +294,7 @@ def build_packet(
     packet_id: int = 0,
     position: tuple[float, float, float] = (0.0, 0.0, 0.0),
     velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    orientation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
     angular_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
     road_plane: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
     body_height: float = 0.1,
@@ -350,10 +350,7 @@ def build_packet(
         MAGIC,
         *position,
         *velocity,
-        0.0,
-        0.0,
-        0.0,  # rotation
-        0.0,  # rel north
+        *orientation,
         *angular_velocity,
         body_height,
         engine_rpm,

@@ -172,6 +172,11 @@ class SimTelemetrySource:
             angle = s * 2 * math.pi
             px = 500 * math.cos(angle) + 80 * math.cos(3 * angle)
             pz = 300 * math.sin(angle) + 40 * math.sin(2 * angle)
+            tangent_x = -500 * math.sin(angle) - 240 * math.sin(3 * angle)
+            tangent_z = 300 * math.cos(angle) + 80 * math.cos(2 * angle)
+            heading = math.atan2(tangent_z, tangent_x)
+            yaw = heading - math.pi / 2
+            orientation = (0.0, math.sin(yaw / 2), 0.0, math.cos(yaw / 2))
 
             gear = min(6, max(1, int(speed / 11) + 1))
             rpm = 2000 + (speed * 3.6 % 60) / 60 * 5500 + gear * 100
@@ -220,6 +225,7 @@ class SimTelemetrySource:
                 packet_id=tick,
                 position=(px, 10.0, pz),
                 velocity=(speed, 0.0, 0.0),
+                orientation=orientation,
                 angular_velocity=(0.0, lat, 0.0),
                 body_height=0.08 + rng.uniform(0, 0.01),
                 engine_rpm=rpm,

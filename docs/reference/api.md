@@ -121,8 +121,8 @@ Server → browser:
   event counts. The UI uses this to refresh lists live.
 - **`session`** — sent on new session, track identification, or track naming.
 - **`survey`** — one per-wheel surface transition while a survey is running:
-  from/to chars, changed wheels, position, velocity, heading, raw rotation
-  floats, and derived wheel-contact points (sent at full 60 Hz resolution —
+  from/to chars, changed wheels, position, velocity, heading, native orientation
+  quaternion, and derived wheel-contact points (sent at full 60 Hz resolution —
   these are single-tick events the throttled telemetry frames would miss).
 - **`status`** — sent on connect and whenever the source or console IP changes.
 - **`voice_callout`** — a Race Engineer callout: `id`, `event_type`, `text`,

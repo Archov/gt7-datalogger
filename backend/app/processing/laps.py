@@ -10,6 +10,7 @@ from statistics import median
 
 from app.models import TelemetryPacket
 from app.processing.analysis import time_weights
+from app.processing.orientation import normalize_quaternion
 from app.processing.surface import encode_surface, off_track_excursions
 
 log = logging.getLogger(__name__)
@@ -93,6 +94,12 @@ CORE_SAMPLE_COLUMNS = (
 )
 
 OPTIONAL_SAMPLE_GROUPS = {
+    "orientation": (
+        "orientation_x",
+        "orientation_y",
+        "orientation_z",
+        "orientation_w",
+    ),
     "B": (
         "steering_wheel_rad",
         "steering_angular_velocity",
@@ -454,6 +461,15 @@ class LapProcessor:
     def _append_sample(self, p: TelemetryPacket) -> None:
         s = self._samples
         available = {
+            "orientation": normalize_quaternion(
+                (
+                    p.orientation_x,
+                    p.orientation_y,
+                    p.orientation_z,
+                    p.orientation_w,
+                )
+            )
+            is not None,
             "B": p.wheel_rotation is not None and p.steering_angular_velocity is not None,
             "~": (
                 p.throttle_filtered is not None
@@ -532,6 +548,11 @@ class LapProcessor:
         s["sus_rr"].append(round(p.suspension_rr * 1000, 1))
         s["aids"].append(float(p.aids_bits))
         enabled_groups = self._optional_enabled or {}
+        if enabled_groups.get("orientation"):
+            s["orientation_x"].append(round(p.orientation_x, 6))
+            s["orientation_y"].append(round(p.orientation_y, 6))
+            s["orientation_z"].append(round(p.orientation_z, 6))
+            s["orientation_w"].append(round(p.orientation_w, 6))
         if enabled_groups.get("B"):
             assert p.wheel_rotation is not None
             assert p.steering_angular_velocity is not None

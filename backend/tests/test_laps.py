@@ -68,9 +68,17 @@ async def test_signed_yaw_and_packet_a_optional_channels(setup) -> None:
     assert samples["yaw_rate"] == [0.25, 0.25, 0.25]
     assert samples["yaw_rate_signed"] == [-0.25, -0.25, -0.25]
     assert samples["pos_y"] == [2.0, 2.0, 2.0]
+    assert samples["orientation_w"] == [1.0, 1.0, 1.0]
     assert "steering_wheel_rad" not in samples
     assert "surface" not in samples
     assert len({len(values) for values in samples.values()}) == 1
+
+
+async def test_invalid_orientation_drops_the_complete_group(setup) -> None:
+    proc, _ = setup
+    await proc.feed(make_packet(current_lap=1))
+    await proc.feed(make_packet(current_lap=1, orientation=(0.0, 0.0, 0.0, 0.0)))
+    assert not any(column.startswith("orientation_") for column in proc.live_lap_samples)
 
 
 async def test_extended_channels_and_metadata(setup) -> None:

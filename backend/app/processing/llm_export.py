@@ -14,6 +14,7 @@ from typing import Any, Literal, TypeGuard, cast
 
 from app.models import AidsBits
 from app.processing import analysis, events, spatial
+from app.processing.orientation import ORIENTATION_CHANNELS, normalize_quaternion
 from app.processing.surface import (
     LOOSE_CODES,
     SURFACE_KERB,
@@ -208,14 +209,45 @@ def _aligned(samples: Samples, column: str) -> list[float] | None:
 
 def _available_channels(samples: Samples) -> list[str]:
     n = len(samples.get("t") or [])
+    orientation_arrays = [samples.get(channel) or [] for channel in ORIENTATION_CHANNELS]
+    orientation_valid = all(len(values) == n for values in orientation_arrays) and all(
+        normalize_quaternion(tuple(values[index] for values in orientation_arrays)) is not None
+        for index in range(n)
+    )
     out: list[str] = []
     for key, values in samples.items():
         if len(values) != n:
             continue
         if key == "surface" and (not values or all(int(v) == SURFACE_NONE for v in values)):
             continue
+        if key in ORIENTATION_CHANNELS and not orientation_valid:
+            continue
         out.append(key)
     return sorted(out)
+
+
+def _channel_provenance_table(bundle: dict[str, Any], laps: list[dict[str, Any]]) -> Table:
+    provided = bundle.get("channel_provenance")
+    by_lap = provided if isinstance(provided, dict) else {}
+    rows: list[list[Any]] = []
+    for lap in laps:
+        lap_id = int(lap["id"])
+        state = by_lap.get(lap_id, by_lap.get(str(lap_id)))
+        if not isinstance(state, dict):
+            state = {
+                "persisted": _available_channels(_samples(lap)),
+                "archive_replay": [],
+                "unavailable": [],
+            }
+        rows.append(
+            [
+                lap_id,
+                sorted(str(value) for value in state.get("persisted", [])),
+                sorted(str(value) for value in state.get("archive_replay", [])),
+                sorted(str(value) for value in state.get("unavailable", [])),
+            ]
+        )
+    return table(("lap_id", "persisted", "archive_replay", "unavailable"), rows)
 
 
 def _usable(lap: dict[str, Any]) -> bool:
@@ -1695,8 +1727,10 @@ def _line_traces_table(
             "lateral_offset_m",
             "projection_distance_m",
             "heading_error_deg",
-            "curvature_1_per_m",
         ]
+        if "chassis_heading_error" in trace:
+            columns += ["chassis_heading_error_deg", "body_slip_angle_deg"]
+        columns.append("curvature_1_per_m")
         source_columns = [
             (column, public_name)
             for column, public_name in (
@@ -1725,8 +1759,13 @@ def _line_traces_table(
                 _number(trace["lateral_offset"][i], 1),
                 _number(trace["projection_distance"][i], 1),
                 _number(trace["heading_error"][i], 1),
-                _number(trace["curvature"][i], 6),
             ]
+            if "chassis_heading_error" in trace:
+                row += [
+                    _number(trace["chassis_heading_error"][i], 1),
+                    _number(trace["body_slip_angle"][i], 1),
+                ]
+            row.append(_number(trace["curvature"][i], 6))
             for column, _public_name in source_columns:
                 digits = 0 if column == "gear" else 4 if column.endswith(("_rad", "_signed")) else 1
                 row.append(_number(trace[column][i], digits))
@@ -1810,6 +1849,10 @@ def build_export(
             },
             "notes": [
                 "Missing channels are unavailable, not zero.",
+                (
+                    "channel_provenance identifies persisted, archive-replayed, and unavailable "
+                    "telemetry without repeating source metadata per sample."
+                ),
                 "surface is a packed four-wheel code; 0 means unavailable.",
                 "aids is a bitmask: TCS=1, ASM=2, handbrake=4, rev_limiter=8.",
                 "powered_corner_rear_slip is an analysis heuristic, not an official GT7 metric.",
@@ -1823,6 +1866,15 @@ def build_export(
                 "Large projection distances may represent off-line driving, spins, or excursions.",
                 "Spatial projection uses X/Y/Z when both laps provide Y, otherwise X/Z.",
                 "Spatial heading and curvature are planar X/Z measurements.",
+                (
+                    "Vehicle orientation is a local-to-world quaternion (x,y,z,w); local -Z is "
+                    "the chassis nose and local +Y is chassis up."
+                ),
+                (
+                    "Trajectory heading is direction of travel, chassis heading is direction "
+                    "the nose points, and yaw rate is their rotational rate rather than either "
+                    "angle."
+                ),
                 (
                     "Corner-line metrics use a 2 m internal grid; standard line tables use "
                     "10 m and deep line tables use 5 m."
@@ -1852,6 +1904,7 @@ def build_export(
             ("lap_id", "channels"),
             ([lap["id"], _available_channels(_samples(lap))] for lap in laps),
         ),
+        "channel_provenance": _channel_provenance_table(bundle, laps),
         "reference": {"lap_id": ref["id"], "reason": reason},
         "laps": _lap_table(laps, ref),
         "whole_lap_chassis": _chassis_table(laps),

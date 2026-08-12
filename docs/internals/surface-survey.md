@@ -26,7 +26,7 @@ kerbs on both sides, painted run-off, grass, gravel traps, sand if the track
 has it. The view shows the live per-wheel surface, the char histogram, a
 loud banner for any char the mapping doesn't know, and each transition's
 derived wheel-contact points on a scatter map. **Download JSONL** grabs the
-full transition log (position, velocity, raw orientation floats, per-wheel
+full transition log (position, velocity, native orientation quaternion, per-wheel
 contact points) for offline analysis; the server also keeps it next to the
 database as `data/surface_survey_<timestamp>.jsonl`.
 
@@ -76,8 +76,8 @@ must agree the points are collinear (which rejects two-edged strips, curved
 kerbs and mid-corner crossings). Once three rides agree, the measured median
 replaces the assumption for contact derivation — the status line shows which
 is in force, and every JSONL record carries the `tw_m` it was derived with.
-Heading comes from ground-plane velocity; the raw rotation floats +
-`rel_orientation_to_north` are logged for offline comparison.
+Heading currently comes from ground-plane velocity; the native `(x,y,z,w)` vehicle
+orientation quaternion is logged alongside it for comparison.
 
 Method: drive slowly over a kerb whose edge is visible on the race-line map,
 one wheel at a time, from both directions. The transition record pins where
@@ -87,7 +87,7 @@ contact point and the kerb edge across passes.
 | Question | Finding |
 |----------|---------|
 | Is the position field the car's midpoint (or an axle/CoG)? | |
-| Velocity-heading vs `rel_orientation_to_north` agreement | |
+| Velocity-heading vs quaternion chassis heading agreement | |
 | Right-vector sign `(f_z, -f_x)` correct, or mirrored? | |
 | Positional error at ~1.6 m assumed track width (narrow car) | ± __ m |
 | Positional error at ~1.6 m assumed track width (wide car, e.g. Gr.3) | ± __ m |

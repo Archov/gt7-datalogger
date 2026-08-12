@@ -135,11 +135,13 @@ async def test_export_import_roundtrip(client) -> None:
     )
     exported = export_response.json()
     assert exported["format"] == "gt7-datalogger-lap"
+    assert "orientation_w" in exported["lap"]["samples"]
 
     csv_response = await c.get(f"/api/laps/{laps[0]['id']}/export.csv")
     assert csv_response.headers["content-disposition"] == attachment_header(
         lap_export_filename(laps[0], sessions[0], "csv")
     )
+    assert "Orientation X" in csv_response.text
 
     resp = await c.post("/api/laps/import", json=exported)
     assert resp.status_code == 200

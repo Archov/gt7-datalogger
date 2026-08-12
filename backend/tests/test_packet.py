@@ -1,5 +1,7 @@
 """Packet building, encryption round-trip, and field decoding."""
 
+import struct
+
 import pytest
 
 from app.models import SimulatorFlags
@@ -60,6 +62,7 @@ def test_parse_core_fields() -> None:
         flags=int(SimulatorFlags.CAR_ON_TRACK | SimulatorFlags.HAS_TURBO),
         car_id=3298,
         road_plane=(0.1, -0.2, 0.95, 1.75),
+        orientation=(0.1, -0.2, 0.3, 0.9),
     )
     p = parse_packet(plain)
     assert p.packet_id == 42
@@ -85,6 +88,27 @@ def test_parse_core_fields() -> None:
     assert p.road_plane_y == pytest.approx(-0.2)
     assert p.road_plane_z == pytest.approx(0.95)
     assert p.road_plane_distance == pytest.approx(1.75)
+    assert (
+        p.orientation_x,
+        p.orientation_y,
+        p.orientation_z,
+        p.orientation_w,
+    ) == pytest.approx((0.1, -0.2, 0.3, 0.9))
+
+
+def test_orientation_uses_exact_base_offsets_and_future_lengths() -> None:
+    plain = make_plain(orientation=(0.11, 0.22, 0.33, 0.44))
+    assert struct.unpack_from("<4f", plain, 0x1C) == pytest.approx(
+        (0.11, 0.22, 0.33, 0.44)
+    )
+    packet = parse_packet(plain + b"future-extension")
+    assert packet.packet_format == "A"
+    assert (
+        packet.orientation_x,
+        packet.orientation_y,
+        packet.orientation_z,
+        packet.orientation_w,
+    ) == pytest.approx((0.11, 0.22, 0.33, 0.44))
 
 
 def test_tire_slip_ratio() -> None:

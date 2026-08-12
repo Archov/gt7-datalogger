@@ -93,6 +93,37 @@ def test_same_physical_line_aligns_independently_of_speed_and_driven_distance() 
     assert trace["speed"] == [90.0] * len(trace["progress"])
 
 
+def test_chassis_heading_and_body_slip_use_distinct_orientation_and_travel() -> None:
+    half = math.sqrt(0.5)
+    reference = make_samples(straight_points(100))
+    path = spatial.build_reference_path(reference)
+    assert path is not None
+
+    aligned = make_samples(straight_points(100))
+    for channel, value in zip(
+        ("orientation_x", "orientation_y", "orientation_z", "orientation_w"),
+        (0.0, -half, 0.0, half),
+        strict=True,
+    ):
+        aligned[channel] = [value] * len(aligned["t"])
+    projected = spatial.project_lap(path, aligned)
+    assert projected is not None
+    trace = spatial.resample_projected(path, projected, 10.0)
+    assert max(abs(value) for value in trace["chassis_heading_error"]) < 1e-5
+    assert max(abs(value) for value in trace["body_slip_angle"]) < 1e-5
+
+    sideways = make_samples(straight_points(100))
+    sideways["orientation_x"] = [0.0] * len(sideways["t"])
+    sideways["orientation_y"] = [0.0] * len(sideways["t"])
+    sideways["orientation_z"] = [0.0] * len(sideways["t"])
+    sideways["orientation_w"] = [1.0] * len(sideways["t"])
+    projected_sideways = spatial.project_lap(path, sideways)
+    assert projected_sideways is not None
+    sideways_trace = spatial.resample_projected(path, projected_sideways, 10.0)
+    assert sideways_trace["chassis_heading_error"] == pytest.approx([-90.0] * 11)
+    assert sideways_trace["body_slip_angle"] == pytest.approx([90.0] * 11)
+
+
 def test_wider_and_tighter_arcs_have_signed_offsets_and_physical_curvature() -> None:
     reference = make_samples(arc_points(50.0))
     path = spatial.build_reference_path(reference)

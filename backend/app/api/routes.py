@@ -30,6 +30,8 @@ from app.processing.llm_export import (
     ReferenceNotFoundError,
     build_export,
 )
+from app.processing.orientation import ORIENTATION_CHANNELS
+from app.processing.telemetry_resolution import resolve_session_telemetry
 from app.processing.tracks import signature_from_samples
 
 if TYPE_CHECKING:
@@ -80,6 +82,11 @@ async def export_session_for_llm(
     bundle = await svc(request).repo.get_session_analysis_data(session_id)
     if bundle is None:
         raise HTTPException(404, "session not found")
+    bundle = await resolve_session_telemetry(
+        bundle,
+        set(ORIENTATION_CHANNELS),
+        svc(request).settings.db_path.parent,
+    )
     try:
         data = build_export(
             bundle,
@@ -172,6 +179,10 @@ CSV_CHANNELS = (
     ("pos_x", "Pos X", "m"),
     ("pos_y", "Pos Y", "m"),
     ("pos_z", "Pos Z", "m"),
+    ("orientation_x", "Orientation X", "quaternion"),
+    ("orientation_y", "Orientation Y", "quaternion"),
+    ("orientation_z", "Orientation Z", "quaternion"),
+    ("orientation_w", "Orientation W", "quaternion"),
     ("body_height", "Ride Height", "mm"),
     ("fuel", "Fuel Level", "L"),
     ("road_plane_x", "Road Plane X", "raw"),

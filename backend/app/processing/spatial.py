@@ -7,6 +7,12 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from typing import Any
 
+from app.processing.orientation import (
+    MIN_TRAVEL_SPEED_MPS,
+    chassis_forward,
+    wrap_angle,
+)
+
 Samples = dict[str, list[float]]
 
 INITIAL_PROGRESS_WINDOW_M = 100.0
@@ -305,6 +311,20 @@ def project_lap(
         for channel in PROJECTED_SOURCE_CHANNELS
         if len(samples.get(channel) or []) == n
     ]
+    orientation_arrays = [samples.get(channel) or [] for channel in (
+        "orientation_x",
+        "orientation_y",
+        "orientation_z",
+        "orientation_w",
+    )]
+    orientation_forwards = (
+        [chassis_forward(tuple(values[i] for values in orientation_arrays)) for i in range(n)]
+        if all(len(values) == n for values in orientation_arrays)
+        else []
+    )
+    has_orientation = bool(orientation_forwards) and all(
+        value is not None for value in orientation_forwards
+    )
     channels: Samples = {
         "time_ms": [],
         "x": [],
@@ -313,6 +333,16 @@ def project_lap(
         "projection_distance": [],
         "along_track_speed_kmh": [],
         **({"y": []} if lap_has_y else {}),
+        **(
+            {
+                "chassis_forward_x": [],
+                "chassis_forward_z": [],
+                "travel_velocity_x": [],
+                "travel_velocity_z": [],
+            }
+            if has_orientation
+            else {}
+        ),
         **{channel: [] for channel in available},
     }
     dense: Samples = {
@@ -381,6 +411,17 @@ def project_lap(
             **({"y": float(y)} if y is not None else {}),
             **{channel: float(samples[channel][i]) for channel in available},
         }
+        if has_orientation:
+            chassis_vector = orientation_forwards[i]
+            assert chassis_vector is not None
+            values.update(
+                {
+                    "chassis_forward_x": chassis_vector[0],
+                    "chassis_forward_z": chassis_vector[2],
+                    "travel_velocity_x": velocity[0],
+                    "travel_velocity_z": velocity[2],
+                }
+            )
         dense["time_ms"].append(elapsed_ms)
         dense["dist"].append(float(dist[i]))
         dense["progress"].append(progress)
@@ -437,6 +478,36 @@ def resample_projected(
         math.degrees(_wrap_angle(actual - reference))
         for actual, reference in zip(heading, ref_heading, strict=True)
     ]
+    if all(
+        channel in out
+        for channel in (
+            "chassis_forward_x",
+            "chassis_forward_z",
+            "travel_velocity_x",
+            "travel_velocity_z",
+        )
+    ):
+        chassis_errors: list[float] = []
+        body_slips: list[float] = []
+        for i, reference in enumerate(ref_heading):
+            forward_x = out["chassis_forward_x"][i]
+            forward_z = out["chassis_forward_z"][i]
+            forward_norm = math.hypot(forward_x, forward_z)
+            if forward_norm <= EPSILON:
+                chassis_errors.append(math.nan)
+                body_slips.append(math.nan)
+                continue
+            chassis_heading = math.atan2(forward_z, forward_x)
+            chassis_errors.append(math.degrees(wrap_angle(chassis_heading - reference)))
+            velocity_x = out["travel_velocity_x"][i]
+            velocity_z = out["travel_velocity_z"][i]
+            if math.hypot(velocity_x, velocity_z) < MIN_TRAVEL_SPEED_MPS:
+                body_slips.append(math.nan)
+            else:
+                travel_heading = math.atan2(velocity_z, velocity_x)
+                body_slips.append(math.degrees(wrap_angle(travel_heading - chassis_heading)))
+        out["chassis_heading_error"] = chassis_errors
+        out["body_slip_angle"] = body_slips
     out["curvature"] = curvature
     return out
 

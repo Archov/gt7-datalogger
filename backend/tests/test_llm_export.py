@@ -563,6 +563,53 @@ def test_spatial_tables_include_recorded_elevation() -> None:
     assert "y_m" in line_columns
 
 
+def test_line_traces_expose_derived_orientation_not_quaternion_components() -> None:
+    lap = make_lap(1, 50.0)
+    half = 2**-0.5
+    size = len(lap["samples"]["t"])
+    lap["samples"].update(
+        {
+            "orientation_x": [0.0] * size,
+            "orientation_y": [-half] * size,
+            "orientation_z": [0.0] * size,
+            "orientation_w": [half] * size,
+        }
+    )
+    result = llm_export.build_export(bundle([lap]), detail="standard")
+    columns = result["line_traces"]["rows"][0][1]
+    assert columns[columns.index("heading_error_deg") + 1 : columns.index("curvature_1_per_m")] == [
+        "chassis_heading_error_deg",
+        "body_slip_angle_deg",
+    ]
+    assert not any(column.startswith("orientation_") for column in columns)
+    provenance = dict(
+        zip(
+            result["channel_provenance"]["columns"],
+            result["channel_provenance"]["rows"][0],
+            strict=True,
+        )
+    )
+    assert set(("orientation_x", "orientation_y", "orientation_z", "orientation_w")).issubset(
+        provenance["persisted"]
+    )
+
+
+def test_hydrated_provenance_is_preserved_by_exporter() -> None:
+    data = bundle([make_lap(1, 50.0)])
+    data["channel_provenance"] = {
+        1: {
+            "persisted": ["speed"],
+            "archive_replay": ["orientation_x"],
+            "unavailable": ["future_channel"],
+        }
+    }
+    result = llm_export.build_export(data, detail="compact")
+    assert result["channel_provenance"]["rows"] == [
+        [1, ["speed"], ["orientation_x"], ["future_channel"]]
+    ]
+    assert "line_traces" not in result
+
+
 def test_reverse_motion_is_in_compact_events_and_spatial_line_evidence() -> None:
     reference = make_lap(1, 50.0, total_m=100.0, sample_count=101)
     positions = [float(x) for x in range(51)]
