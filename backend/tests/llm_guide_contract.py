@@ -34,6 +34,8 @@ STANDARD_KEYS = {
     "detail_traces",
     "spatial_reference",
     "line_traces",
+    "drivetrain_characterization",
+    "wheelspin_characterization",
 }
 
 
@@ -68,9 +70,7 @@ def assert_standard_document_matches_guide(document: dict[str, Any]) -> None:
     canonical = set(SAMPLE_COLUMNS)
     for _lap_id, channels in document["channel_availability"]["rows"]:
         assert set(channels) <= canonical
-    for _lap_id, persisted, archive_replay, unavailable in document["channel_provenance"][
-        "rows"
-    ]:
+    for _lap_id, persisted, archive_replay, unavailable in document["channel_provenance"]["rows"]:
         assert set(persisted) <= canonical
         assert set(archive_replay) <= canonical
         assert set(unavailable) <= canonical

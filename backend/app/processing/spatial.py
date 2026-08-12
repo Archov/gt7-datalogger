@@ -350,6 +350,16 @@ def project_lap(
         "dist": [],
         "progress": [],
         "along_track_speed_kmh": [],
+        **(
+            {
+                "chassis_forward_x": [],
+                "chassis_forward_z": [],
+                "travel_velocity_x": [],
+                "travel_velocity_z": [],
+            }
+            if has_orientation
+            else {}
+        ),
     }
     projected_progress: list[float] = []
     last_progress = 0.0
@@ -426,6 +436,13 @@ def project_lap(
         dense["dist"].append(float(dist[i]))
         dense["progress"].append(progress)
         dense["along_track_speed_kmh"].append(along_track_speed)
+        if has_orientation:
+            chassis_vector = orientation_forwards[i]
+            assert chassis_vector is not None
+            dense["chassis_forward_x"].append(chassis_vector[0])
+            dense["chassis_forward_z"].append(chassis_vector[2])
+            dense["travel_velocity_x"].append(velocity[0])
+            dense["travel_velocity_z"].append(velocity[2])
         if projected_progress and progress <= projected_progress[-1] + EPSILON:
             # Keep the most spatially significant sample at a duplicated progress
             # (for example the outer point of a spin). Time and reverse motion carry

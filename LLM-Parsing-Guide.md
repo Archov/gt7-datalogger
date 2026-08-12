@@ -77,6 +77,8 @@ two laps or ranges have identical nested columns.
 | `detail_traces` | no | yes | yes | Reason-selected 5 m distance traces |
 | `spatial_reference` | no | yes | yes | Reference path geometry; 10 m or 5 m |
 | `line_traces` | no | yes | yes | Whole-lap projected line evidence |
+| `drivetrain_characterization` | no | yes | yes | Override plus torque-derived powered-wheel evidence |
+| `wheelspin_characterization` | no | yes | yes | Heuristic event mechanism compatibility ranking |
 | `source_traces` | no | no | yes | Bounded stored-rate samples |
 
 `spatial_reference` and `line_traces` are omitted if usable reference geometry is
@@ -465,6 +467,57 @@ Reverse detection enters below -2.0 km/h, exits at -0.5 km/h, requires at least 
 below the enter threshold, and bridges interruptions up to 200 ms if speed never exceeds
 +0.5 km/h. Negative along-track speed means physical motion opposite the selected
 reference direction, not reverse gear.
+
+### Wheelspin characterization
+
+Standard/deep add the same bounded `wheelspin_characterization`; Compact is unchanged.
+It is a nested columnar table. Decode each positional sub-row with its matching registry:
+`observed_columns`, `derived_columns`, `sequence_columns`,
+`comparator_quality_columns`, `comparator_columns`, `candidate_columns`, or
+`evidence_columns`. Rows identify every stored wheelspin event, direct `observed` facts,
+deterministic `derived` comparisons, onset `sequence`, comparator quality, explicit
+`resolution`/`unresolved_reasons`, and up to three ranked real `candidates`.
+Sequence values are integer milliseconds relative to stored wheelspin onset (`0`);
+unavailable evidence is `null`.
+
+`reference_corner` remains strict containment. `context_corner`, `corner_relation`, and
+`corner_distance_m` provide non-causal location context for an event inside a corner or
+within 250 m of its entry/exit. Comparison-excluded or spatially unalignable events still
+receive rows with nullable derived fields and explicit unresolved reason codes.
+
+`drivetrain_characterization` retains `override`, torque-derived `inferred`, effective
+precedence (`override` before `inferred` before `unknown`), powered wheels, positive
+front/rear torque shares, evidence counts/laps, and `conflict`. An override never erases
+contrary inference. Event-local torque allocation is retained; conflict reduces
+power-mechanism discrimination. Torque uses raw GT7 units: relative timing/distribution
+is usable, but Nm, tire force, and physical torque are unverified.
+
+Comparators are same-spatial-progress controls, not ideal laps. `ideal` means peak slip
+at or below 1.10. A `relative` control may itself cross 1.10 when peak slip is at least
+0.03 lower, integral or duration is at least 20% lower, and neither available integral
+nor duration is more than 10% worse. A stored overlapping wheelspin event alone does not
+exclude that control. Ranking
+balances slip separation, speed, gear, projection fit, and local cleanliness/disturbance
+evidence. `weak` quality reduces discrimination; one comparator cannot establish a
+robust outlier, and relative controls alone cannot make quality `strong`. Stored
+bottoming alone does not invalidate a comparator: independent, correctly timed local
+vertical-motion evidence is required.
+
+Weights are inspectable heuristic ranking parameters, not a learned model or calibrated
+physical probabilities. A score is not a probability; a candidate is not a proven
+cause. Signed motion remains in `observed`; v1 scoring normally compares absolute
+peer-relative magnitudes, so opposite yaw/body-slip signs of similar magnitude are not
+an outlier. Temporal order matters: a later correlated shift, kerb, or vertical event
+does not explain earlier slip.
+
+`combined_lateral_longitudinal_load_candidate` means power application during elevated
+lateral/rotational proxy state relative to controls. It does not mean measured tire
+force/load or friction-circle saturation. Steering alone supplies no support;
+vehicle-motion evidence must also be active. Persistent peer-relative one-wheel
+asymmetry can support `single_wheel_differential_spin_candidate`, but does not diagnose
+an LSD. `mixed_or_unresolved` is a `resolution`, never a duplicated pseudo-candidate;
+real alternatives remain in `candidates` and reason codes explain unresolved state.
+Characterization contains no setup or driver recommendation.
 
 `recurring_events` columns:
 

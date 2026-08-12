@@ -89,6 +89,12 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
 export const api = {
   status: () => get<ConnectionStatus>("/api/status"),
   sessions: () => get<SessionSummary[]>("/api/sessions"),
+  setCarDrivetrain: (carId: number, drivetrain: "auto" | "fwd" | "rwd" | "awd") =>
+    send<{ car_id: number; drivetrain_override: "fwd" | "rwd" | "awd" | null }>(
+      `/api/cars/${carId}/drivetrain`,
+      "PUT",
+      { drivetrain },
+    ),
   sessionLaps: (id: number) => get<LapSummary[]>(`/api/sessions/${id}/laps`),
   exportSessionForLlm: (id: number) =>
     getBlob(`/api/sessions/${id}/export.llm.json?detail=standard&segment_m=100`),

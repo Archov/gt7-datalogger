@@ -58,6 +58,15 @@ class SettingRow(Base):
     value: Mapped[str]
 
 
+class CarDrivetrainRow(Base):
+    """Optional player override shared by every session for a GT7 car ID."""
+
+    __tablename__ = "car_drivetrains"
+
+    car_id: Mapped[int] = mapped_column(primary_key=True)
+    drivetrain: Mapped[str]
+
+
 class LayoutRow(Base):
     """Named overlay/dashboard layouts (v2 grid configs, stored as JSON)."""
 

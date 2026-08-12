@@ -63,6 +63,25 @@ async def sessions(request: Request) -> list[dict[str, Any]]:
     return await svc(request).repo.list_sessions()
 
 
+class DrivetrainOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    drivetrain: Literal["auto", "fwd", "rwd", "awd"]
+
+
+@router.put("/cars/{car_id}/drivetrain", dependencies=[Depends(require_admin)])
+async def set_car_drivetrain(
+    request: Request,
+    car_id: int,
+    payload: DrivetrainOverrideRequest,
+) -> dict[str, Any]:
+    if car_id < 0:
+        raise HTTPException(422, "car_id must be non-negative")
+    value = None if payload.drivetrain == "auto" else payload.drivetrain
+    await svc(request).repo.set_car_drivetrain(car_id, value)
+    return {"car_id": car_id, "drivetrain_override": value}
+
+
 @router.get("/sessions/{session_id}/export.llm.json")
 async def export_session_for_llm(
     request: Request,

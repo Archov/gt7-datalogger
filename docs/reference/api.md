@@ -18,6 +18,7 @@ script can too. All REST routes live under `/api`; responses are JSON.
 | DELETE | `/api/sessions/{id}` | delete a session and its laps |
 | GET | `/api/sessions/{id}/laps` | lap summaries for one session |
 | GET | `/api/sessions/{id}/export.llm.json` | compact LLM session analysis; `detail=compact\|standard\|deep`, `segment_m=25..1000`, optional `ref` ([schema](llm-session-export.md)) |
+| PUT | `/api/cars/{car_id}/drivetrain` | authenticated per-car override: `{"drivetrain":"auto"\|"fwd"\|"rwd"\|"awd"}`; `auto` deletes it |
 | GET | `/api/laps` | all lap summaries, newest first |
 | GET | `/api/laps/{id}?samples=true` | full lap detail: metrics, events, gearing, and (optionally) the 60 Hz samples |
 | DELETE | `/api/laps/{id}` | delete a lap |

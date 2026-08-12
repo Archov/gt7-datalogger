@@ -19,6 +19,11 @@ sparkline** (chronological lap times with the best lap dotted in accent), and th
 Click a row (or the chevron) to expand its lap table; **Analyze** opens the session in
 Analysis with *latest vs best* selected.
 
+The **Auto/FWD/RWD/AWD** selector sets the powered-wheel model used by wheelspin
+characterization for that car ID. The selection applies to all existing and future
+sessions for the same car. **Auto** keeps torque-derived inference; an explicit override
+remains visible alongside contrary inferred evidence rather than erasing it.
+
 ## Lap table
 
 Per lap: time (best in accent), Δ to session best, fuel used, full-throttle %,

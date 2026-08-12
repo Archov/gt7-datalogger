@@ -13,7 +13,7 @@ from statistics import median
 from typing import Any, Literal, TypeGuard, cast
 
 from app.models import AidsBits
-from app.processing import analysis, events, spatial
+from app.processing import analysis, events, spatial, wheelspin_characterization
 from app.processing.orientation import ORIENTATION_CHANNELS, normalize_quaternion
 from app.processing.surface import (
     LOOSE_CODES,
@@ -326,8 +326,26 @@ def _weighted_stats(values: list[float], weights: list[float]) -> dict[str, floa
 
 
 def _mean(values: list[float], weights: list[float]) -> float | None:
-    stats = _weighted_stats(values, weights)
-    return stats["mean"] if stats else None
+    weighted_sum = 0.0
+    total = 0.0
+    fallback: list[float] = []
+    for value, weight in zip(values, weights, strict=False):
+        if not _finite(value) or not _finite(weight):
+            continue
+        numeric = float(value)
+        fallback.append(numeric)
+        safe_weight = max(float(weight), 0.0)
+        weighted_sum += numeric * safe_weight
+        total += safe_weight
+    if total > 0:
+        return weighted_sum / total
+    return sum(fallback) / len(fallback) if fallback else None
+
+
+def _mean_max_abs(values: list[float], weights: list[float]) -> tuple[float, float] | None:
+    absolute = [abs(value) for value in values]
+    mean = _mean(absolute, weights)
+    return (mean, max(absolute)) if mean is not None and absolute else None
 
 
 def _round_stats(stats: dict[str, float] | None, names: tuple[str, ...], digits: int) -> list[Any]:
@@ -596,19 +614,15 @@ def _chassis_table(laps: list[dict[str, Any]]) -> Table:
             front_steering,
             [abs(v) for v in steering_wheel] if steering_wheel else None,
         ):
-            stats = _weighted_stats(values, weights) if values else None
-            row += [_number(stats["mean"], 4), _number(stats["max"], 4)] if stats else [None, None]
+            stats = _mean_max_abs(values, weights) if values else None
+            row += [_number(stats[0], 4), _number(stats[1], 4)] if stats else [None, None]
         steering_velocity = _aligned(samples, "steering_angular_velocity")
-        stats = (
-            _weighted_stats([abs(v) for v in steering_velocity], weights)
-            if steering_velocity
-            else None
-        )
-        row += [_number(stats["mean"], 4), _number(stats["max"], 4)] if stats else [None, None]
+        stats = _mean_max_abs(steering_velocity, weights) if steering_velocity else None
+        row += [_number(stats[0], 4), _number(stats[1], 4)] if stats else [None, None]
         for channel in ("sway", "heave", "surge"):
             values = _aligned(samples, channel)
-            stats = _weighted_stats([abs(v) for v in values], weights) if values else None
-            row += [_number(stats["mean"], 4), _number(stats["max"], 4)] if stats else [None, None]
+            stats = _mean_max_abs(values, weights) if values else None
+            row += [_number(stats[0], 4), _number(stats[1], 4)] if stats else [None, None]
         yaw_signed = _aligned(samples, "yaw_rate_signed")
         if yaw_signed:
             row += [
@@ -1003,9 +1017,7 @@ def _event_table(laps: list[dict[str, Any]]) -> Table:
                 else start_t * 1000
             )
             end_time_ms = (
-                float(event["end_time_ms"])
-                if _finite(event.get("end_time_ms"))
-                else end_t * 1000
+                float(event["end_time_ms"]) if _finite(event.get("end_time_ms")) else end_t * 1000
             )
             duration_ms = (
                 float(event["duration_ms"])
@@ -1313,9 +1325,7 @@ def _primary_corner(
 
         return min(eligible, key=evidence_key)
 
-    intersecting = [
-        corner for corner in corners if _corner_intersects(corner, start, end, total)
-    ]
+    intersecting = [corner for corner in corners if _corner_intersects(corner, start, end, total)]
     if not intersecting:
         return None
     selected = min(
@@ -1377,9 +1387,7 @@ def _finalize_ranges(
                         {int(lap_id) for candidate in members for lap_id in candidate["lap_ids"]}
                     ),
                     "priority": max(int(candidate["priority"]) for candidate in members),
-                    "corner": _primary_corner(
-                        members, corners, window_start, window_end, total
-                    ),
+                    "corner": _primary_corner(members, corners, window_start, window_end, total),
                     "suppress_start": False,
                 }
             )
@@ -1774,6 +1782,273 @@ def _line_traces_table(
     return table(("lap_id", "columns", "rows"), rows)
 
 
+def _wheelspin_characterization_table(
+    result: wheelspin_characterization.CharacterizationResult,
+) -> Table:
+    outer_columns = (
+        "lap_id",
+        "event_index",
+        "reference_corner",
+        "context_corner",
+        "corner_relation",
+        "corner_distance_m",
+        "start_m",
+        "end_m",
+        "start_progress_m",
+        "end_progress_m",
+        "start_time_ms",
+        "end_time_ms",
+        "observed",
+        "derived",
+        "sequence",
+        "comparator_quality",
+        "comparators",
+        "resolution",
+        "unresolved_reasons",
+        "candidates",
+    )
+    observed_columns = (
+        "stored_type",
+        "stored_severity",
+        "event_wheels",
+        "effective_drivetrain",
+        "speed_at_onset_kmh",
+        "gear_at_onset",
+        "throttle_at_onset_pct",
+        "throttle_filtered_at_onset_pct",
+        "brake_at_onset_pct",
+        "brake_filtered_at_onset_pct",
+        "along_track_speed_at_onset_kmh",
+        "chassis_heading_deg_at_onset",
+        "travel_heading_deg_at_onset",
+        "body_slip_angle_deg_at_onset",
+        "yaw_rate_signed_at_onset",
+        "steering_wheel_rad_at_onset",
+        "steer_fl_rad_at_onset",
+        "steer_fr_rad_at_onset",
+        "surface_at_onset",
+        "aids_at_onset",
+        "body_height_at_onset_mm",
+        "suspension_at_onset_mm",
+        "sway_at_onset_raw",
+        "heave_at_onset_raw",
+        "surge_at_onset_raw",
+        "positive_torque_at_onset_raw",
+        "slip_at_onset",
+        "peak_slip",
+    )
+    derived_columns = (
+        "eligibility",
+        "analyzed_powered_wheels",
+        "event_local_powered_wheels",
+        "effective_powered_wheels",
+        "event_local_torque_shares",
+        "event_power_conflict",
+        "trustworthy_powered_wheel_intersection",
+        "mean_powered_slip_at_onset",
+        "slip_excess_integral_ratio_s",
+        "duration_above_threshold_ms",
+        "same_axle_asymmetry_peak",
+        "same_axle_asymmetry_duration_ms",
+        "both_powered_wheels_crossed_threshold",
+        "vertical_disturbance_families",
+        "slope_window_ms",
+        "throttle_slope_pct_s",
+        "throttle_filtered_slope_pct_s",
+        "torque_slope_raw_s",
+        "torque_slope_by_wheel_raw_s",
+        "torque_step_by_wheel_raw",
+        "yaw_change_rad_s2",
+        "brake_slope_pct_s",
+        "ordering",
+    )
+    sequence_columns = (
+        "meaningful_throttle_rise_start_ms",
+        "meaningful_torque_rise_start_ms",
+        "rotation_deviation_start_ms",
+        "body_slip_deviation_start_ms",
+        "yaw_deviation_start_ms",
+        "slip_threshold_cross_ms",
+        "shift_ms",
+        "surface_transition_ms",
+        "vertical_disturbance_ms",
+    )
+    quality_columns = (
+        "count",
+        "quality",
+        "quality_score",
+        "ideal_control_count",
+        "relative_control_count",
+        "same_gear_count",
+        "speed_spread_kmh",
+        "median_projection_distance_m",
+        "median_slip_separation",
+        "clean_or_unknown_count",
+        "bottoming_context_count",
+        "lap_ids",
+    )
+    comparator_columns = (
+        "lap_id",
+        "control_class",
+        "anchor_time_ms",
+        "end_time_ms",
+        "peak_slip",
+        "slip_excess_integral_ratio_s",
+        "duration_above_threshold_ms",
+        "slip_separation",
+        "speed_kmh",
+        "gear",
+        "speed_difference_kmh",
+        "projection_distance_m",
+        "utility",
+        "bottoming_context",
+    )
+    candidate_columns = (
+        "mechanism",
+        "score",
+        "evidence_coverage",
+        "support",
+        "counterevidence",
+    )
+    evidence_columns = (
+        "feature",
+        "event_value",
+        "comparator_median",
+        "comparator_min",
+        "comparator_max",
+        "comparator_mad",
+        "weight",
+        "signed_contribution",
+    )
+
+    def rounded(name: str, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: rounded(f"{name}_{key}", item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [rounded(name, item) for item in value]
+        if not isinstance(value, float):
+            return value
+        if not math.isfinite(value):
+            return None
+        if name.endswith("_ms") or name in {"gear", "surface_at_onset", "aids_at_onset"}:
+            return round(value)
+        if "steer" in name or "yaw" in name:
+            digits = 4
+        elif any(
+            token in name
+            for token in (
+                "score",
+                "weight",
+                "coverage",
+                "quality",
+                "utility",
+                "share",
+                "severity",
+                "slip",
+                "integral",
+                "asymmetry",
+                "projection",
+                "torque",
+                "sway",
+                "heave",
+                "surge",
+            )
+        ) and "body_slip_angle" not in name:
+            digits = 3
+        else:
+            digits = 1
+        result_value = round(value, digits)
+        return 0.0 if result_value == 0 else result_value
+
+    config = wheelspin_characterization.DEFAULT_CONFIG
+
+    def evidence_row(item: wheelspin_characterization.Contribution) -> list[Any]:
+        return [
+            item.feature,
+            rounded(item.feature, item.event_value),
+            rounded(item.feature, item.comparator_median),
+            rounded(item.feature, item.comparator_min),
+            rounded(item.feature, item.comparator_max),
+            rounded(item.feature, item.comparator_mad),
+            rounded("weight", item.weight),
+            rounded("score", item.signed_contribution),
+        ]
+
+    rows: list[list[Any]] = []
+    for item in result.events:
+        quality = item.comparators
+        candidate_rows: list[list[Any]] = []
+        for candidate in item.candidates[: config.resolution.exported_candidates]:
+            support = sorted(
+                (rule for rule in candidate.contributions if rule.signed_contribution > 0),
+                key=lambda rule: (-rule.signed_contribution, rule.feature),
+            )[: config.resolution.exported_support]
+            counter = sorted(
+                (rule for rule in candidate.contributions if rule.signed_contribution < 0),
+                key=lambda rule: (rule.signed_contribution, rule.feature),
+            )[: config.resolution.exported_counter]
+            candidate_rows.append(
+                [
+                    candidate.mechanism,
+                    rounded("score", candidate.score),
+                    rounded("coverage", candidate.evidence_coverage),
+                    [evidence_row(rule) for rule in support],
+                    [evidence_row(rule) for rule in counter],
+                ]
+            )
+        rows.append(
+            [
+                item.lap_id,
+                item.event_index,
+                item.reference_corner,
+                item.context_corner,
+                item.corner_relation,
+                rounded("corner_distance_m", item.corner_distance_m),
+                rounded("start_m", item.start_m),
+                rounded("end_m", item.end_m),
+                rounded("start_progress_m", item.start_progress_m),
+                rounded("end_progress_m", item.end_progress_m),
+                item.start_time_ms,
+                item.end_time_ms,
+                [rounded(name, item.observed.get(name)) for name in observed_columns],
+                [rounded(name, item.derived.get(name)) for name in derived_columns],
+                [item.sequence.get(name) for name in sequence_columns],
+                [
+                    quality.count,
+                    quality.quality,
+                    rounded("quality_score", quality.quality_score),
+                    quality.strong_control_count,
+                    quality.relative_control_count,
+                    quality.same_gear_count,
+                    rounded("speed_spread_kmh", quality.speed_spread_kmh),
+                    rounded("projection_distance_m", quality.median_projection_distance_m),
+                    rounded("slip_separation", quality.median_slip_separation),
+                    quality.clean_or_unknown_count,
+                    quality.bottoming_context_count,
+                    list(quality.lap_ids),
+                ],
+                [
+                    [rounded(name, detail.get(name)) for name in comparator_columns]
+                    for detail in item.comparator_details
+                ],
+                item.resolution,
+                list(item.unresolved_reasons),
+                candidate_rows,
+            ]
+        )
+    return {
+        "columns": list(outer_columns),
+        "observed_columns": list(observed_columns),
+        "derived_columns": list(derived_columns),
+        "sequence_columns": list(sequence_columns),
+        "comparator_quality_columns": list(quality_columns),
+        "comparator_columns": list(comparator_columns),
+        "candidate_columns": list(candidate_columns),
+        "evidence_columns": list(evidence_columns),
+        "rows": rows,
+    }
+
+
 def build_export(
     bundle: dict[str, Any],
     *,
@@ -1794,22 +2069,32 @@ def build_export(
     recurring_table, recurring = _recurring_events(laps, corners)
     spatial_path = spatial.build_reference_path(ref_samples)
     spatial_trajectories: dict[int, spatial.ProjectedTrajectory] = {}
+    characterization_trajectories: dict[int, spatial.ProjectedTrajectory] = {}
     if spatial_path is not None:
         for lap in laps:
-            if _usable(lap):
-                trajectory = spatial.project_lap(
-                    spatial_path,
-                    _samples(lap),
-                    completed_time_ms=int(lap["time_ms"]),
-                )
-                if trajectory is not None:
+            trajectory = spatial.project_lap(
+                spatial_path,
+                _samples(lap),
+                completed_time_ms=int(lap["time_ms"]),
+            )
+            if trajectory is not None:
+                characterization_trajectories[int(lap["id"])] = trajectory
+                if _usable(lap):
                     spatial_trajectories[int(lap["id"])] = trajectory
     event_laps: list[dict[str, Any]] = []
     for lap in laps:
         trajectory = spatial_trajectories.get(int(lap["id"]))
         reverse_events = events.detect_reverse_motion(trajectory.dense) if trajectory else []
-        event_laps.append(
-            {**lap, "events": [*(lap.get("events") or []), *reverse_events]}
+        event_laps.append({**lap, "events": [*(lap.get("events") or []), *reverse_events]})
+    wheelspin_result: wheelspin_characterization.CharacterizationResult | None = None
+    if detail != "compact":
+        wheelspin_result = wheelspin_characterization.characterize_wheelspin_events(
+            event_laps,
+            spatial_reference=spatial_path,
+            trajectories=characterization_trajectories,
+            corners=corners,
+            comparison_lap_ids=set(spatial_trajectories),
+            drivetrain_override=cast(str | None, bundle.get("drivetrain_override")),
         )
     all_channels = sorted(
         {channel for lap in laps for channel in _available_channels(_samples(lap))}
@@ -1917,6 +2202,57 @@ def build_export(
         ),
     }
     if detail != "compact":
+        assert wheelspin_result is not None
+        schema = cast(dict[str, Any], output["schema"])
+        notes = cast(list[str], schema["notes"])
+        notes.extend(
+            (
+                (
+                    "wheelspin_characterization is heuristic derived evidence: weights are "
+                    "ranking parameters, not a learned or calibrated model; candidate scores are "
+                    "neither probabilities nor proven causes."
+                ),
+                (
+                    "combined_lateral_longitudinal_load_candidate means power application during "
+                    "an elevated rotational proxy state; tire force, load, and friction-circle "
+                    "saturation are not measured."
+                ),
+                (
+                    "Torque is in raw GT7 units; relative timing and distribution are usable, "
+                    "but physical torque and tire force are unverified."
+                ),
+                (
+                    "Bottoming is a sustained near-lap-maximum compression heuristic, not proof "
+                    "of bump-stop, floor, or chassis contact."
+                ),
+                (
+                    "Signed motion observations are preserved, while v1 mechanism scoring uses "
+                    "absolute peer-relative magnitude unless direction is explicitly meaningful."
+                ),
+                (
+                    "Steering magnitude alone does not support a combined-load candidate, and a "
+                    "later correlated event does not establish an earlier cause."
+                ),
+                (
+                    "Stored bottoming alone does not invalidate a comparator; independently timed "
+                    "local vertical-motion evidence is required."
+                ),
+                (
+                    "wheelspin_characterization is nested columnar; decode positional sub-rows "
+                    "with their matching *_columns registry. mixed_or_unresolved is a resolution, "
+                    "not a mechanism candidate, and every stored wheelspin event receives a row."
+                ),
+                (
+                    "reference_corner requires strict containment; context_corner and "
+                    "corner_relation are descriptive location context only and do not affect "
+                    "scores."
+                ),
+            )
+        )
+        output["drivetrain_characterization"] = wheelspin_characterization.drivetrain_json(
+            wheelspin_result.drivetrain
+        )
+        output["wheelspin_characterization"] = _wheelspin_characterization_table(wheelspin_result)
         ranges = _interesting_ranges(event_laps, ref, corners, losses, recurring)
         output["corner_analysis"] = _corner_analysis(event_laps, ref, corners)
         output["interesting_ranges"] = _ranges_table(ranges)
@@ -1928,7 +2264,5 @@ def build_export(
                 event_laps, spatial_path, spatial_trajectories, spatial_step
             )
         if detail == "deep":
-            output["source_traces"] = _deep_traces(
-                ranges, event_laps, int(ref["id"])
-            )
+            output["source_traces"] = _deep_traces(ranges, event_laps, int(ref["id"]))
     return cast(dict[str, Any], strict_json_value(output))

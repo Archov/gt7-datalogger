@@ -240,6 +240,7 @@ export interface SessionSummary {
   track_name: string;
   lap_count: number;
   best_lap_time_ms: number | null;
+  drivetrain_override: "fwd" | "rwd" | "awd" | null;
 }
 
 export interface Track {

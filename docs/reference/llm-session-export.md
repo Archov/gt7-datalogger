@@ -56,6 +56,24 @@ availability, a lap table, whole-lap chassis summaries, exact fixed-distance tim
 segments, reference-defined corner comparisons, enriched events, and recurring
 problems. Standard/deep documents add interesting ranges and trace tables.
 
+Standard/deep also add deterministic wheelspin characterization. The
+`drivetrain_characterization` object preserves a per-car override alongside
+torque-derived inference and conflicts. The `wheelspin_characterization` table separates
+observations, comparator-relative derivations, onset sequence, comparator quality, and
+bounded candidate evidence. Scores are heuristic rankings, not probabilities or causal
+diagnoses. Torque remains in raw GT7 units; combined-load candidates use vehicle-motion
+proxies and do not measure tire force or friction-circle saturation. Bottoming alone does
+not invalidate a comparator or prove physical contact.
+
+The characterization payload is nested columnar: its `*_columns` registries decode the
+positional observation, derivation, sequence, comparator-quality, comparator, candidate,
+and evidence rows. `resolution` is `resolved` or `mixed_or_unresolved`; unresolved state
+is not a candidate and is accompanied by stable `unresolved_reasons`. Every stored
+wheelspin event gets a row, including comparison-excluded or unalignable events. Ideal
+controls stay at or below 1.10 peak slip; relative controls may cross that value when
+they meet the documented peak/integral/duration dominance gate. `reference_corner` is
+strict containment, while `context_corner` is descriptive nearest-corner context only.
+
 `corner_line_analysis` is present at every detail level. It reports entry/apex/exit
 lateral offset and heading error, line offset RMS/peak, projected path length and
 curvature, plus RMS and peak projection distance. Standard/deep also include:

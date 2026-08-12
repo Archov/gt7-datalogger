@@ -180,6 +180,87 @@ def test_reference_selection_precedence_and_validation() -> None:
         llm_export.select_reference([clean], explicit_ref=99)
 
 
+def test_wheelspin_characterization_is_additive_for_standard_and_deep_only() -> None:
+    event = {
+        "type": "wheelspin",
+        "start_dist": 100.0,
+        "end_dist": 120.0,
+        "wheels": ["rl", "rr"],
+        "severity": 1.23456,
+    }
+    laps = [make_lap(1, 50.0, events=[event]), make_lap(2, 50.0), make_lap(3, 50.0)]
+    for lap in laps:
+        count = len(lap["samples"]["t"])
+        for wheel in ("fl", "fr", "rl", "rr"):
+            lap["samples"][f"torque_{wheel}"] = [0.0 if wheel.startswith("f") else 10.0] * count
+    for index, distance in enumerate(laps[0]["samples"]["dist"]):
+        if 100 <= distance <= 120:
+            laps[0]["samples"]["slip_rl"][index] = 1.3
+            laps[0]["samples"]["slip_rr"][index] = 1.3
+
+    compact = llm_export.build_export(bundle(laps), detail="compact")
+    assert "drivetrain_characterization" not in compact
+    assert "wheelspin_characterization" not in compact
+
+    standard = llm_export.build_export(bundle(laps), detail="standard")
+    deep = llm_export.build_export(bundle(laps), detail="deep")
+    assert standard["drivetrain_characterization"]["effective"] == "rwd"
+    assert standard["wheelspin_characterization"] == deep["wheelspin_characterization"]
+    characterization_table = standard["wheelspin_characterization"]
+    assert characterization_table["columns"] == [
+        "lap_id",
+        "event_index",
+        "reference_corner",
+        "context_corner",
+        "corner_relation",
+        "corner_distance_m",
+        "start_m",
+        "end_m",
+        "start_progress_m",
+        "end_progress_m",
+        "start_time_ms",
+        "end_time_ms",
+        "observed",
+        "derived",
+        "sequence",
+        "comparator_quality",
+        "comparators",
+        "resolution",
+        "unresolved_reasons",
+        "candidates",
+    ]
+    assert characterization_table["candidate_columns"] == [
+        "mechanism",
+        "score",
+        "evidence_coverage",
+        "support",
+        "counterevidence",
+    ]
+    assert characterization_table["evidence_columns"] == [
+        "feature",
+        "event_value",
+        "comparator_median",
+        "comparator_min",
+        "comparator_max",
+        "comparator_mad",
+        "weight",
+        "signed_contribution",
+    ]
+    row = characterization_table["rows"][0]
+    observed = dict(
+        zip(
+            characterization_table["observed_columns"],
+            row[characterization_table["columns"].index("observed")],
+            strict=True,
+        )
+    )
+    assert observed["stored_severity"] == 1.235
+    candidates = row[characterization_table["columns"].index("candidates")]
+    assert len(candidates) <= 3
+    assert all(len(candidate[3]) <= 4 for candidate in candidates)
+    assert all(len(candidate[4]) <= 2 for candidate in candidates)
+
+
 def test_fixed_segments_and_partial_final_segment() -> None:
     reference = make_lap(1, 50.0)
     slower = make_lap(2, 40.0)
@@ -267,9 +348,7 @@ def test_standard_trace_channels_are_reason_aware() -> None:
 
     bottoming = llm_export._standard_trace_columns(samples, ["bottoming"])
     assert {"speed", "throttle", "brake", "gear"} <= set(bottoming)
-    assert {"body_height", "sus_fl", "sus_fr", "sus_rl", "sus_rr", "heave"} <= set(
-        bottoming
-    )
+    assert {"body_height", "sus_fl", "sus_fr", "sus_rl", "sus_rr", "heave"} <= set(bottoming)
     assert "road_plane_distance" in bottoming
     assert not {"torque_fl", "tt_fl", "steer_fl_rad"} & set(bottoming)
 
@@ -301,9 +380,7 @@ def test_deep_trace_retains_full_available_channel_set() -> None:
     samples = make_samples(50.0)
     n = len(samples["t"])
     samples["torque_fl"] = [100.0] * n
-    standard_columns, _ = llm_export._distance_trace(
-        samples, 75.0, 125.0, ["bottoming"]
-    )
+    standard_columns, _ = llm_export._distance_trace(samples, 75.0, 125.0, ["bottoming"])
     deep_columns, deep_rows = llm_export._source_trace(samples, 75.0, 125.0)
     assert "torque_fl" not in standard_columns
     assert "tt_fl" not in standard_columns
@@ -390,9 +467,7 @@ def test_split_range_traces_do_not_duplicate_seam_distance(
     lap = make_lap(1, 50.0, total_m=600.0, sample_count=121)
     standard = llm_export._standard_traces(ranges, [lap], 1)
     standard_distances = [
-        row[0]
-        for _range_id, _lap_id, _columns, rows in standard["rows"]
-        for row in rows
+        row[0] for _range_id, _lap_id, _columns, rows in standard["rows"] for row in rows
     ]
     assert len(standard_distances) == len(set(standard_distances))
 
@@ -464,14 +539,10 @@ def test_range_corner_evidence_survives_merge_and_split() -> None:
 
 
 def test_finish_segment_reconciles_shorter_and_longer_full_laps() -> None:
-    reference = make_lap(
-        1, 40.0, total_m=3553.5, sample_count=712, time_ms=90_000
-    )
+    reference = make_lap(1, 40.0, total_m=3553.5, sample_count=712, time_ms=90_000)
     shorter = make_lap(2, 40.0, total_m=3548.0, sample_count=711, time_ms=90_395)
     longer = make_lap(3, 40.0, total_m=3560.0, sample_count=713, time_ms=90_330)
-    partial = make_lap(
-        4, 40.0, full=False, total_m=3548.0, sample_count=711, time_ms=89_000
-    )
+    partial = make_lap(4, 40.0, full=False, total_m=3548.0, sample_count=711, time_ms=89_000)
     result = llm_export.build_export(
         bundle([reference, shorter, longer, partial]), detail="compact", segment_m=100.0
     )
@@ -517,8 +588,7 @@ def test_spatial_outputs_projection_quality_and_detail_grids(
     assert "projection_distance_rms_m" in corner_table["columns"]
     assert "projection_distance_peak_m" in corner_table["columns"]
     corner_rows = [
-        dict(zip(corner_table["columns"], row, strict=True))
-        for row in corner_table["rows"]
+        dict(zip(corner_table["columns"], row, strict=True)) for row in corner_table["rows"]
     ]
     alternate_corner = next(row for row in corner_rows if row["lap_id"] == 2)
     assert alternate_corner["projection_distance_rms_m"] == pytest.approx(2.0)
@@ -528,8 +598,7 @@ def test_spatial_outputs_projection_quality_and_detail_grids(
     assert len(standard["spatial_reference"]["rows"]) == 26
     assert "y_m" not in standard["spatial_reference"]["columns"]
     standard_traces = {
-        row[0]: {"columns": row[1], "rows": row[2]}
-        for row in standard["line_traces"]["rows"]
+        row[0]: {"columns": row[1], "rows": row[2]} for row in standard["line_traces"]["rows"]
     }
     assert len(standard_traces[1]["rows"]) == 26
     assert len(standard_traces[2]["rows"]) == 26
@@ -632,15 +701,12 @@ def test_reverse_motion_is_in_compact_events_and_spatial_line_evidence() -> None
     samples["speed"] = [72.0] * len(positions)
 
     compact = llm_export.build_export(bundle([reference, reverse]), detail="compact")
-    assert compact == llm_export.build_export(
-        bundle([reference, reverse]), detail="compact"
-    )
+    assert compact == llm_export.build_export(bundle([reference, reverse]), detail="compact")
     json.dumps(compact, allow_nan=False, separators=(",", ":"))
     assert "line_traces" not in compact
     event_table = compact["events"]
     event_rows = [
-        dict(zip(event_table["columns"], row, strict=True))
-        for row in event_table["rows"]
+        dict(zip(event_table["columns"], row, strict=True)) for row in event_table["rows"]
     ]
     reverse_event = next(row for row in event_rows if row["type"] == "reverse_motion")
     assert reverse_event["lap_id"] == 2

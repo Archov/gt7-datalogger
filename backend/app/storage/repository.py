@@ -7,11 +7,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import case, delete, func, select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
 from app.processing.tracks import TrackSignature, matches
-from app.storage.db import LapRow, LayoutRow, SessionRow, SettingRow, TrackRow
+from app.storage.db import (
+    CarDrivetrainRow,
+    LapRow,
+    LayoutRow,
+    SessionRow,
+    SettingRow,
+    TrackRow,
+)
 
 # v3: extended packet channels plus per-lap static telemetry metadata.
 # v1/v2 files import fine — missing fields stay absent and consumers skip them.
@@ -90,9 +98,7 @@ class Repository:
                 row.raw_archive_meta_json = json.dumps(metadata, separators=(",", ":"))
                 await db.commit()
 
-    async def get_session_archive_metadata(
-        self, session_id: int
-    ) -> dict[str, object] | None:
+    async def get_session_archive_metadata(self, session_id: int) -> dict[str, object] | None:
         async with self._sf() as db:
             row = await db.get(SessionRow, session_id)
             if row is None or not row.raw_archive_meta_json:
@@ -193,6 +199,15 @@ class Repository:
                     .order_by(SessionRow.id.desc())
                 )
             ).all()
+            try:
+                overrides = dict(
+                    (await db.execute(select(CarDrivetrainRow.car_id, CarDrivetrainRow.drivetrain)))
+                    .tuples()
+                    .all()
+                )
+            except OperationalError:
+                # Direct readers of an old database may not have run init_db yet.
+                overrides = {}
             return [
                 {
                     "id": s.id,
@@ -203,6 +218,7 @@ class Repository:
                     "track_name": s.track_name,
                     "lap_count": count,
                     "best_lap_time_ms": best,
+                    "drivetrain_override": overrides.get(s.car_id),
                 }
                 for s, count, best in rows
             ]
@@ -318,6 +334,10 @@ class Repository:
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
                 lap["samples"] = json.loads(row.samples_json)
                 laps.append(lap)
+            try:
+                drivetrain_override = await db.get(CarDrivetrainRow, session.car_id)
+            except OperationalError:
+                drivetrain_override = None
             return {
                 "session": {
                     "id": session.id,
@@ -329,7 +349,31 @@ class Repository:
                 },
                 "laps": laps,
                 "raw_archive_meta": _json_object(session.raw_archive_meta_json),
+                "drivetrain_override": (
+                    drivetrain_override.drivetrain if drivetrain_override is not None else None
+                ),
             }
+
+    async def set_car_drivetrain(self, car_id: int, drivetrain: str | None) -> None:
+        """Set a per-car override, or delete it to restore automatic inference."""
+        async with self._sf() as db:
+            row = await db.get(CarDrivetrainRow, car_id)
+            if drivetrain is None:
+                if row is not None:
+                    await db.delete(row)
+            elif row is None:
+                db.add(CarDrivetrainRow(car_id=car_id, drivetrain=drivetrain))
+            else:
+                row.drivetrain = drivetrain
+            await db.commit()
+
+    async def get_car_drivetrain(self, car_id: int) -> str | None:
+        async with self._sf() as db:
+            try:
+                row = await db.get(CarDrivetrainRow, car_id)
+            except OperationalError:
+                return None
+            return row.drivetrain if row is not None else None
 
     async def delete_session(self, session_id: int) -> None:
         async with self._sf() as db:
