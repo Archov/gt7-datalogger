@@ -9,6 +9,7 @@ import { CornerDetail, type CornerLap } from "@/components/analysis/CornerDetail
 import { DeviationChart } from "@/components/analysis/DeviationChart";
 import { FuelMapPanel } from "@/components/analysis/FuelMapPanel";
 import { GearingPanel } from "@/components/analysis/GearingPanel";
+import { GGDiagram, ggLap, type GGLap } from "@/components/analysis/GGDiagram";
 import { RaceLineMap, type MapLap } from "@/components/analysis/RaceLineMap";
 import { StackedCharts } from "@/components/analysis/StackedCharts";
 import { Select } from "@/components/ui/Select";
@@ -23,8 +24,19 @@ import {
 } from "@/lib/channels";
 import { lapColor, lapColorMap } from "@/lib/colors";
 import { formatLapTime, formatSpeed } from "@/lib/format";
-import { reflectAnalysisSelection, type AnalysisRequest } from "@/lib/router";
-import type { CompareResult, DeviationResult, LapSummary, SessionSummary } from "@/lib/types";
+import {
+  openInAnalysis,
+  reflectAnalysisSelection,
+  type AnalysisRequest,
+} from "@/lib/router";
+import type {
+  CategoryBest,
+  CompareResult,
+  DeviationResult,
+  LapSummary,
+  SessionSummary,
+  TrackOutline,
+} from "@/lib/types";
 import { useAnalysisSelection } from "@/store/analysis";
 import { useSettings } from "@/store/settings";
 import { useTelemetry } from "@/store/telemetry";
@@ -41,6 +53,10 @@ const CORNER_COLUMNS = [
 // The race-line map shades where wheels touched kerb/grass/gravel whenever
 // the lap carries the per-tick surface column (packet C recordings).
 const MAP_COLUMNS = ["surface"];
+
+// The g-g diagram is always shown when the recording has an accelerometer, so
+// its columns ride along regardless of the chart picker (#16).
+const GG_COLUMNS = ["acc_lat", "acc_long"];
 
 export function AnalysisView({ request }: { request: AnalysisRequest }) {
   const units = useSettings((s) => s.units);
@@ -147,7 +163,14 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   // The request always carries the per-corner columns for the Corner Detail
   // widget on top of whatever the picked panels need.
   const requestColumns = useMemo(
-    () => [...new Set([...columnsForChannels(channelKeys), ...CORNER_COLUMNS, ...MAP_COLUMNS])],
+    () => [
+      ...new Set([
+        ...columnsForChannels(channelKeys),
+        ...CORNER_COLUMNS,
+        ...MAP_COLUMNS,
+        ...GG_COLUMNS,
+      ]),
+    ],
     [channelKeys],
   );
   useEffect(() => {
@@ -169,6 +192,26 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
     if (sessionId == null) return;
     api.deviation(sessionId).then(setDeviation).catch(() => setDeviation(null));
   }, [sessionId, lapEpoch]);
+
+  // The surveyed road under the race line (#51). Keyed on the SESSION'S
+  // circuit rather than the reference lap: the lap only ever resolved to its
+  // session's circuit anyway, so this is the same answer without refetching
+  // every time the reference lap changes — and it means the outline is cleared
+  // exactly when the circuit changes, never leaving one track's road drawn
+  // under another track's lap while the replacement is in flight.
+  const [outline, setOutline] = useState<TrackOutline | null>(null);
+  const outlineTrack = sessions?.find((s) => s.id === sessionId)?.track_name ?? "";
+  useEffect(() => {
+    setOutline(null);
+    if (!outlineTrack) return;
+    let live = true;
+    api.trackOutline(outlineTrack)
+      .then((o) => live && setOutline(o))
+      .catch(() => live && setOutline(null));
+    return () => {
+      live = false;
+    };
+  }, [outlineTrack]);
 
   // Synchronized zoom state across all charts (minDist, maxDist in meters)
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
@@ -204,6 +247,31 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
 
   const refEntry = compare?.laps[String(refLap)];
   const refSummary = laps.find((l) => l.id === refLap);
+  const session = sessions?.find((s) => s.id === sessionId) ?? null;
+
+  // Category best at this circuit (#19): a lap is worth judging against the
+  // fastest one ever set here IN THE SAME CLASS — a Gr.3 time and an N100
+  // time around the same corners are not the same achievement. Needs both a
+  // named circuit and a category, so it stays absent on unnamed tracks and on
+  // recordings made before packet C.
+  const [categoryBest, setCategoryBest] = useState<CategoryBest | null>(null);
+  const bestTrack = session?.track_name ?? "";
+  const bestCategory = session?.car_category ?? "";
+  useEffect(() => {
+    // Cleared before the request, not after it: otherwise switching sessions
+    // shows the previous circuit's benchmark against the new reference lap's
+    // time until the replacement lands, and the "open" link goes to a lap from
+    // somewhere else entirely.
+    setCategoryBest(null);
+    if (!bestTrack || !bestCategory) return;
+    let live = true;
+    api.categoryBest(bestTrack, bestCategory)
+      .then((b) => live && setCategoryBest(b))
+      .catch(() => live && setCategoryBest(null));
+    return () => {
+      live = false;
+    };
+  }, [bestTrack, bestCategory, lapEpoch]);
 
   // One color assignment for everything that shows the compared laps together
   // (chips, chart series, map, corner detail): id-keyed, but two selected laps
@@ -230,6 +298,15 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
       isRef: id === String(refLap),
     }));
   }, [compare, lapLabels, refLap, lapColors]);
+
+  // Same laps again, converted to g for the traction circle. Empty whenever
+  // the recording predates the accelerometer (packet A) — the panel then
+  // never mounts rather than drawing an empty ring.
+  const ggLaps = useMemo<GGLap[]>(() => {
+    const accel = compare?.accel;
+    if (!accel?.available) return [];
+    return mapLaps.map((lap) => ggLap(lap, accel)).filter((l): l is GGLap => l != null);
+  }, [mapLaps, compare]);
 
   // Same laps, shaped for the Corner Detail widget (cursor-synced with the
   // charts and the map dot).
@@ -382,6 +459,18 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               cursorDist={cursorDist}
               step={compare!.step}
               zoomRange={zoomRange}
+              outline={outline}
+              onZoomChange={setZoomRange}
+            />
+          </SidePanel>
+        )}
+        {ggLaps.length > 0 && (
+          <SidePanel title="Traction circle — g-g">
+            <GGDiagram
+              laps={ggLaps}
+              accel={compare!.accel}
+              cursorDist={cursorDist}
+              step={compare!.step}
             />
           </SidePanel>
         )}
@@ -421,6 +510,7 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               <Info k="Tire spin" v={`${refSummary.tire_spin_pct.toFixed(1)}%`} />
               <Info k="Fuel used" v={`${refSummary.fuel_consumed.toFixed(2)} L`} />
               <Info k="Car" v={refSummary.car_name ?? "–"} />
+              {bestCategory && <Info k="Category" v={bestCategory} />}
               {refSummary.tcs_active_pct != null && (
                 <Info k="TCS active" v={`${refSummary.tcs_active_pct.toFixed(1)}%`} />
               )}
@@ -445,7 +535,71 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
                 />
               )}
             </div>
+            {categoryBest && (
+              <CategoryBestRow
+                best={categoryBest}
+                refTimeMs={refSummary.time_ms}
+                refIsFullLap={refSummary.counts_for_best !== false}
+                onOpen={() =>
+                  openInAnalysis({
+                    session: categoryBest.session_id,
+                    laps: [categoryBest.lap_id],
+                    ref: categoryBest.lap_id,
+                  })
+                }
+              />
+            )}
           </SidePanel>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The class benchmark for this circuit, and how far off the reference lap is.
+// Silent about which session it came from beyond the car — the point is the
+// target, and clicking through is how you go and look at it.
+function CategoryBestRow({
+  best,
+  refTimeMs,
+  refIsFullLap,
+  onOpen,
+}: {
+  best: CategoryBest;
+  refTimeMs: number;
+  /** Partial laps (pit out-laps) are excluded from the benchmark itself, so
+   *  their GT7-reported time — short precisely because it is not a lap — must
+   *  not be measured against it, let alone allowed to beat it. */
+  refIsFullLap: boolean;
+  onOpen: () => void;
+}) {
+  const gap = refTimeMs - best.time_ms;
+  const isBest = refIsFullLap && gap <= 0;
+  return (
+    <div className="border-t border-edge px-3 py-2 text-xs">
+      <div className="mb-1 flex items-baseline gap-2">
+        <span className="text-ink-dim">
+          {best.car_category} best at {best.track_name}
+        </span>
+        <span className="ml-auto font-tabular text-accent">{formatLapTime(best.time_ms)}</span>
+      </div>
+      <div className="flex items-baseline gap-2 text-ink-dim">
+        <span className="truncate">{best.car_name}</span>
+        <span className="ml-auto shrink-0 font-tabular">
+          {!refIsFullLap ? (
+            <span title="This reference lap is a partial lap, so its time is not a lap time">
+              partial lap — no comparison
+            </span>
+          ) : isBest ? (
+            <span className="text-throttle">this lap is the best</span>
+          ) : (
+            <span className="text-brake">+{(gap / 1000).toFixed(3)}</span>
+          )}
+        </span>
+        {!isBest && (
+          <button className="shrink-0 text-ink-dim hover:text-accent" onClick={onOpen}>
+            open
+          </button>
         )}
       </div>
     </div>
