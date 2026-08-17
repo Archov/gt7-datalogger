@@ -25,14 +25,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.api.auth import require_admin
-from app.processing import survey_log, track_bundle, track_catalog, track_outline, tracks
+from app.processing import (
+    survey_log,
+    track_bundle,
+    track_catalog,
+    track_compile,
+    track_outline,
+    tracks,
+)
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -89,7 +101,9 @@ async def overview(request: Request) -> dict[str, Any]:
     directory = data_dir(request)
     named = await service.repo.list_tracks()
     sessions = await service.repo.list_sessions()
-    bundles = track_bundle.list_bundles(directory)
+    # The enriched rows, so the management view sees each bundle's coverage
+    # score without a second fetch.
+    bundles = await asyncio.to_thread(_bundle_rows, directory)
     doc = _catalog(request)
     configs = track_catalog.configurations(doc) if doc else []
 
@@ -153,7 +167,45 @@ async def overview(request: Request) -> dict[str, Any]:
     }
 
 
-# --- the surveyed road, compiled for drawing (#51) -----------------------------
+# --- the surveyed road, compiled for drawing (#51, #44) ------------------------
+
+
+def _outline_payload(directory: Path, name: str) -> dict[str, Any]:
+    """The outline the map draws: ordered compiled geometry when the bundle
+    compiles (#44 — the ordered pairing fills the road the local pairing
+    could not), the legacy local pairing when it does not. A bundle the
+    compiler chokes on must degrade to the old drawing, never to a 500."""
+    compiled: dict[str, Any] | None
+    try:
+        compiled = track_compile.for_track(directory, name)
+    except Exception:
+        log.exception("track compile failed for %r; serving the local pairing", name)
+        compiled = None
+    if compiled is None:
+        fallback = dict(track_outline.for_track(directory, name))
+        fallback.setdefault("gaps", [])
+        fallback.setdefault("coverage", None)
+        return fallback
+    # Border polylines flattened to drawable segments, the shape the map
+    # already renders; gap spans ride alongside so the map can say where the
+    # boundary is honest-blank rather than surveyed.
+    edges: list[list[float]] = []
+    for side in ("L", "R"):
+        for poly in compiled["borders"][side]:
+            for a, b in zip(poly, poly[1:], strict=False):
+                edges.append([a[0], a[1], b[0], b[1]])
+    return {
+        "track": compiled["track"],
+        "slug": compiled["slug"],
+        "road": compiled["road"],
+        "edges": edges,
+        "walls": compiled["walls"],
+        "finish": compiled["finish"],
+        "runs": compiled["source"]["runs"],
+        "updated_at": compiled["source"]["bundle_updated_at"],
+        "gaps": compiled["gaps"]["L"] + compiled["gaps"]["R"],
+        "coverage": compiled["coverage"],
+    }
 
 
 @router.get("/track-outline")
@@ -168,16 +220,16 @@ async def outline(
     bundle — "this track has never been surveyed" is the common case, not an
     error, and the map simply falls back to drawing the lap on its own.
 
-    Compiling parses the bundle (multiple megabytes) and pairs thousands of
-    border cells, so it runs off the event loop; repeat calls hit the cache in
-    `track_outline` and cost nothing.
+    Compiling parses the bundle (multiple megabytes) and orders thousands of
+    border cells, so it runs off the event loop; repeat calls hit the caches
+    in `track_compile` / `track_outline` and cost nothing.
     """
     name = track.strip()
     if not name and lap_id is not None:
         name = await svc(request).repo.track_for_lap(lap_id)
     if not name:
         return track_outline.EMPTY
-    return await asyncio.to_thread(track_outline.for_track, data_dir(request), name)
+    return await asyncio.to_thread(_outline_payload, data_dir(request), name)
 
 
 # --- naming sessions from the survey bundles (#41) -----------------------------
@@ -281,13 +333,123 @@ async def assign_log(
     return result
 
 
+@router.get("/survey/logs/{name}/download")
+async def download_log(request: Request, name: str) -> FileResponse:
+    """One run's raw JSONL, verbatim — the transportable record (#40).
+
+    A log is the complete evidence of a run, so moving the file moves the
+    run: downloaded here, uploaded (or assigned) on another installation.
+    """
+    path = survey_log.log_path(data_dir(request), name)
+    if path is None:
+        raise HTTPException(404, "no such survey log")
+    return FileResponse(path, media_type="application/jsonl", filename=path.name)
+
+
+# Uploaded names must land inside the shape `survey_log.list_logs` globs for,
+# or the file arrives and no listing ever shows it.
+_LOG_NAME = re.compile(r"surface_survey_[A-Za-z0-9._-]{1,80}\.jsonl")
+
+
+def _claim_upload_path(directory: Path, requested: str | None, part: Path) -> Path:
+    """Land a validated temp file under its final name: the caller's when it
+    already fits the naming scheme, a fresh timestamped one otherwise — and
+    never an existing file. Overwriting would silently replace one run's
+    evidence with another's; a suffixed copy loses nothing.
+
+    Claimed with os.link, which fails with FileExistsError instead of
+    replacing — an exists()-then-rename gap would let two concurrent uploads
+    of the same name both "win". Same directory, so same filesystem, which is
+    what makes the link legal and atomic; the temp file is the caller's to
+    unlink."""
+    name = (requested or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    if not _LOG_NAME.fullmatch(name):
+        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        name = f"surface_survey_uploaded_{ts}.jsonl"
+    stem = name.removesuffix(".jsonl")
+    n = 1
+    while True:
+        path = directory / (name if n == 1 else f"{stem}_{n}.jsonl")
+        try:
+            os.link(part, path)
+        except FileExistsError:
+            n += 1
+            continue
+        return path
+
+
+@router.post("/survey/logs/upload", dependencies=[Depends(require_admin)])
+async def upload_log(request: Request) -> dict[str, Any]:
+    """Land a survey JSONL from elsewhere where the log listing reads.
+
+    Streamed to disk in chunks with the same cap and for the same reason as
+    the bundle import: a chunked upload carries no Content-Length, and the
+    cap must hold for it too. `?name=` carries the original filename.
+    """
+    directory = data_dir(request)
+    directory.mkdir(parents=True, exist_ok=True)
+    length = request.headers.get("content-length")
+    if length is not None and length.isdigit() and int(length) > MAX_IMPORT_BYTES:
+        raise HTTPException(413, "log too large")
+    # A temp name unique to this request — concurrent uploads must not share
+    # a spool file — and outside the listing glob, so nothing rejected or
+    # abandoned here ever lists. The finally covers every exit: validation
+    # failure, cap abort, client disconnect.
+    part = directory / f"upload_{uuid4().hex}.part"
+    size = 0
+    try:
+        with part.open("wb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_IMPORT_BYTES:
+                    raise HTTPException(413, "log too large")
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "empty upload")
+        # Full pass, not a sniff: any object-shaped JSON ({}, a bundle
+        # export) used to upload "successfully", list as a run with nothing
+        # in it, and only fail at assign time. Off the event loop — it is a
+        # line-by-line parse of up to MAX_IMPORT_BYTES.
+        try:
+            await asyncio.to_thread(survey_log.validate_log, part)
+        except survey_log.LogFormatError as exc:
+            raise HTTPException(400, f"not a survey JSONL log: {exc}") from exc
+        path = _claim_upload_path(directory, request.query_params.get("name"), part)
+    finally:
+        part.unlink(missing_ok=True)
+    return survey_log.summarize(path)
+
+
 # --- bundles ------------------------------------------------------------------
+
+
+def _bundle_rows(directory: Path) -> list[dict[str, Any]]:
+    """Bundle listing rows, each carrying its compiled coverage score (#40).
+
+    Coverage is the compiled document's, so listing a bundle also states how
+    much of its boundary the survey has actually established. Blocking on a
+    stale compile (tens of ms per bundle, cached and persisted after that):
+    callers run it off the event loop. A bundle that will not compile still
+    lists — the row just carries no score.
+    """
+    rows = track_bundle.list_bundles(directory)
+    for row in rows:
+        try:
+            compiled = track_compile.for_track(directory, row["track"])
+        except Exception:
+            log.exception("track compile failed for %r; listing without coverage",
+                          row["track"])
+            compiled = None
+        if compiled is not None:
+            row["coverage"] = compiled["coverage"]
+            row["compiled_at"] = compiled["compiled_at"]
+    return rows
 
 
 @router.get("/track-bundles")
 async def list_bundles(request: Request) -> list[dict[str, Any]]:
     """Every circuit's accumulated survey bundle (perimeters, finish line)."""
-    return track_bundle.list_bundles(data_dir(request))
+    return await asyncio.to_thread(_bundle_rows, data_dir(request))
 
 
 def _slug(slug: str) -> str:
