@@ -42,6 +42,22 @@ one panel per selected channel.
   bottoming/kerbs on suspension panels; TCS activity shades Throttle, ASM shades Speed.
   Bands are tinted in the lap's color.
 
+## Corner report card
+
+Below the charts, one row per corner: entry / minimum / exit speed and the time spent
+between the corner's entry and exit, for the focused lap with the reference's figures in
+small type beside it. The **Δ s** column is the time lost (red) or gained (green) through
+that corner vs the reference — and the table is **sorted by it**, so the first row is
+where the lap is actually being lost. The footer sums it: your total gap that happened
+inside corners rather than on the straights.
+
+Every lap is measured through the *reference lap's* corner windows (the same
+distance-from-start convention as the time-diff chart), so the times are comparable;
+with more than one comparison lap, chips pick which one the card focuses on. Clicking a
+row zooms every chart and the map to that corner. Corners come from the circuit's
+[authored set](tracks-view.md#labelling-corners) when it has one — stable numbers and
+names across sessions — otherwise from detection on the reference lap.
+
 ## Channel picker
 
 The **Channels (n)** button opens a grouped picker with ~20 channels:
@@ -150,6 +166,17 @@ laps, focus chips let you switch the focus lap.
 
 ## Side panels
 
+- **Race engineer — post-lap notes** — the [race engineer's](race-engineer.md)
+  coaching findings as text, in the exact wording voice would have used:
+  "repeated front-left lockups into turn four", "you are braking early into turn
+  six, about fifteen meters", "you lost three tenths in turn five — braked
+  eighteen meters earlier and carried five kilometers per hour less at the
+  apex". Grouped per lap, newest first, with the currently compared laps
+  highlighted; a note that names a corner zooms the charts and map to it on
+  click. The notes are **replayed** from the stored session through the same
+  detector the voice engineer uses — same thresholds, same reference (the
+  session best as it stood at the time), same repetition windows — so they
+  exist for every recorded session, whether or not voice was ever enabled.
 - **Gearing (reference lap)** — per-gear ratios with estimated speed at redline, tune
   top speed, and redline RPM.
 - **Consistency — best 5 laps** — median speed plus a deviation band across the

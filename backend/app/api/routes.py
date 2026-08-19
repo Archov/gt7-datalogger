@@ -17,6 +17,7 @@ from app.api.auth import require_admin
 from app.processing import analysis
 from app.processing.laps import SAMPLE_COLUMNS
 from app.processing.tracks import signature_from_samples
+from app.race_engineer import replay
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -387,6 +388,11 @@ async def compare(
     # document — off the event loop.
     track = await svc(request).repo.track_for_lap(ref)
     authored = await asyncio.to_thread(svc(request).authored_corners, track)
+    # Corner numbering comes from the reference lap only, so every overlaid
+    # lap shares one consistent set of map markers — and from the circuit's
+    # authored corners when it has them, so the numbering is the same in
+    # every session too, not just within this one.
+    ref_corners = analysis.corners_for_lap(samples_by_id[ref], authored)
 
     out: dict[str, Any] = {
         "ref": ref,
@@ -411,15 +417,47 @@ async def compare(
             # traction-circle readout is about.
             entry["gg"] = analysis.gg_extremes(samples, out["accel"])
         if lap_id == ref:
-            # Corner numbering comes from the reference lap only, so every
-            # overlaid lap shares one consistent set of map markers — and from
-            # the circuit's authored corners when it has them, so the numbering
-            # is the same in every session too, not just within this one.
-            entry["corners"] = analysis.corners_for_lap(samples, authored)
+            entry["corners"] = ref_corners
         else:
             entry["delta"] = analysis.time_delta_series(samples, samples_by_id[ref], step)
+        if ref_corners:
+            # Every lap measured through the SAME corner windows (the
+            # reference's), which is what makes the per-corner report card's
+            # time-lost column mean something (#21).
+            entry["corner_report"] = analysis.corner_report(ref_corners, samples)
         out["laps"][str(lap_id)] = entry
     return out
+
+
+@router.get("/analysis/coaching")
+async def coaching(request: Request, session_id: int) -> dict[str, Any]:
+    """The race engineer's post-lap coaching notes for a stored session (#23).
+
+    Replayed through the live CoachingDetector rather than recorded from it,
+    so the notes exist for sessions driven with voice off — which is the
+    point: the findings were speech-only before this. See
+    app.race_engineer.replay for what is (and isn't) faithful to live.
+    """
+    service = svc(request)
+    lap_rows = await service.repo.list_laps(session_id)
+    lap_rows = [r for r in lap_rows if (r["total_ticks"] or 0) > 0]
+    if not lap_rows:
+        return {"session_id": session_id, "laps": []}
+    lap_ids = [r["id"] for r in lap_rows]
+    samples_by_id = await service.repo.get_laps_samples(lap_ids)
+    events_by_id = await service.repo.get_laps_events(lap_ids)
+    track = await service.repo.track_for_lap(lap_ids[0])
+
+    def _replay() -> list[dict[str, Any]]:
+        authored = service.authored_corners(track)
+        return replay.coaching_notes(
+            lap_rows, samples_by_id, events_by_id, authored,
+            service.settings.race_engineer_units,
+        )
+
+    # Corner detection runs once per new session best inside the replay —
+    # tens of milliseconds a time, far too much for the event loop.
+    return {"session_id": session_id, "laps": await asyncio.to_thread(_replay)}
 
 
 @router.get("/analysis/deviation")

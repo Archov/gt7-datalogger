@@ -448,12 +448,24 @@ export interface GGExtremes {
   braking: number;
 }
 
+// One corner of the report card (#21): this lap measured through the
+// REFERENCE lap's corner window, so time-through is comparable across laps.
+// A corner the lap never fully drove is absent from its report.
+export interface CornerReportRow {
+  n: number;
+  entry_speed: number;
+  min_speed: number;
+  exit_speed: number;
+  time_ms: number;
+}
+
 export interface CompareLapEntry {
   series: Samples & { dist: number[] };
   peaks_valleys: { peaks: PeakValley[]; valleys: PeakValley[] };
   events?: LapEvent[];
   delta?: { dist: number[]; delta_ms: number[] };
   corners?: Corner[]; // reference lap only
+  corner_report?: CornerReportRow[]; // every lap, on the reference's corners
   gg?: GGExtremes; // peaks from the raw ticks, not the resampled series
 }
 
@@ -462,6 +474,25 @@ export interface CompareResult {
   step: number;
   accel: AccelCalibration;
   laps: Record<string, CompareLapEntry>;
+}
+
+// One post-lap coaching note (#23) — the race engineer's finding, in the
+// exact wording voice would have used. `corner` is set when it names one.
+export interface CoachingFinding {
+  type: string;
+  text: string;
+  corner: number | null;
+}
+
+export interface CoachingLapNotes {
+  lap_id: number;
+  number: number;
+  findings: CoachingFinding[];
+}
+
+export interface CoachingNotes {
+  session_id: number;
+  laps: CoachingLapNotes[];
 }
 
 // One border's coverage, measured against the compiled boundary itself (#38):

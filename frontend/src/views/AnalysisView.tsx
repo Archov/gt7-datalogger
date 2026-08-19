@@ -5,7 +5,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelPicker } from "@/components/analysis/ChannelPicker";
+import { CoachingPanel } from "@/components/analysis/CoachingPanel";
 import { CornerDetail, type CornerLap } from "@/components/analysis/CornerDetail";
+import { CornerReport, type ReportLap } from "@/components/analysis/CornerReport";
 import { DeviationChart } from "@/components/analysis/DeviationChart";
 import { FuelMapPanel } from "@/components/analysis/FuelMapPanel";
 import { GearingPanel } from "@/components/analysis/GearingPanel";
@@ -31,6 +33,7 @@ import {
 } from "@/lib/router";
 import type {
   CategoryBest,
+  CoachingNotes,
   CompareResult,
   DeviationResult,
   LapSummary,
@@ -193,6 +196,22 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
     api.deviation(sessionId).then(setDeviation).catch(() => setDeviation(null));
   }, [sessionId, lapEpoch]);
 
+  // The engineer's post-lap notes for the whole session (#23). Cleared before
+  // the fetch so a slow reply never shows one session's coaching against
+  // another session's laps.
+  const [coaching, setCoaching] = useState<CoachingNotes | null>(null);
+  useEffect(() => {
+    setCoaching(null);
+    if (sessionId == null) return;
+    let live = true;
+    api.coachingNotes(sessionId)
+      .then((n) => live && setCoaching(n))
+      .catch(() => live && setCoaching(null));
+    return () => {
+      live = false;
+    };
+  }, [sessionId, lapEpoch]);
+
   // The surveyed road under the race line (#51). Keyed on the SESSION'S
   // circuit rather than the reference lap: the lap only ever resolved to its
   // session's circuit anyway, so this is the same answer without refetching
@@ -307,6 +326,20 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
     if (!accel?.available) return [];
     return mapLaps.map((lap) => ggLap(lap, accel)).filter((l): l is GGLap => l != null);
   }, [mapLaps, compare]);
+
+  // Laps that have a per-corner report (#21), for the report card table.
+  const reportLaps = useMemo<ReportLap[]>(() => {
+    if (!compare) return [];
+    return Object.keys(compare.laps)
+      .map((id) => ({
+        id,
+        label: lapLabels[id] ?? `Lap ${id}`,
+        color: lapColors[id] ?? lapColor(Number(id)),
+        isRef: id === String(refLap),
+        report: compare.laps[id].corner_report ?? [],
+      }))
+      .filter((l) => l.report.length > 0);
+  }, [compare, lapLabels, refLap, lapColors]);
 
   // Same laps, shaped for the Corner Detail widget (cursor-synced with the
   // charts and the map dot).
@@ -446,6 +479,19 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
             />
           </div>
         )}
+        {reportLaps.length > 0 && refEntry?.corners && refEntry.corners.length > 0 && (
+          <div className="mt-3 rounded-xl bg-panel">
+            <div className="border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-ink-dim">
+              Corner report card
+            </div>
+            <CornerReport
+              corners={refEntry.corners}
+              laps={reportLaps}
+              units={units}
+              onZoom={setZoomRange}
+            />
+          </div>
+        )}
       </div>
 
       {/* Right: race line, deviation, fuel, tuning */}
@@ -481,6 +527,17 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               cursorDist={cursorDist}
               step={compare!.step}
               trackCorners={refEntry?.corners}
+            />
+          </SidePanel>
+        )}
+        {coaching && coaching.laps.length > 0 && (
+          <SidePanel title="Race engineer — post-lap notes">
+            <CoachingPanel
+              notes={coaching.laps}
+              selected={selected}
+              lapColors={lapColors}
+              corners={refEntry?.corners ?? []}
+              onZoom={setZoomRange}
             />
           </SidePanel>
         )}

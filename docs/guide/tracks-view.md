@@ -126,10 +126,15 @@ Once labelled, they take over from detection everywhere:
 Contributed bundles live in their own repository —
 [**gt7-datalogger-track-data**](https://github.com/jbhoorasingh/gt7-datalogger-track-data)
 — with a [browsable map of every circuit in
-it](https://jbhoorasingh.github.io/gt7-datalogger-track-data/). Grab the pack
-from its latest release, unzip, and run its `import_into_app.py` against your
-datalogger; or download a single track from the site and use **Import
-bundle…** below.
+it](https://jbhoorasingh.github.io/gt7-datalogger-track-data/). The easiest
+way in is the **Shared bundles** panel at the bottom of this view: it lists
+every circuit the repo offers, says whether you already hold a bundle of it,
+and **Pull** fetches and merges one without leaving the app. (The repo is
+configurable via `GT7_SHARED_BUNDLES_URL`; setting it empty hides the panel.
+Nothing is fetched until this view is opened.) Alternatively, grab the pack
+from the repo's latest release, unzip, and run its `import_into_app.py`
+against your datalogger; or download a single track from the site and use
+**Import bundle…** below.
 
 The data is separate from the app on purpose: it changes every time somebody
 drives, and a corrected corner label should not have to wait for a software
@@ -157,6 +162,30 @@ run count is what advances.
 
 Your own corner labels and your confirmed layout match are never overwritten
 by an import.
+
+### Contributing back
+
+The reverse direction — your survey work into the shared repo — is two
+commands in a clone of
+[gt7-datalogger-track-data](https://github.com/jbhoorasingh/gt7-datalogger-track-data)
+(standard-library Python, nothing to install):
+
+```bash
+python tools/add_bundle.py --from-app http://gt7.local:8000
+python tools/build_index.py
+```
+
+then open a pull request. `add_bundle.py` pulls every bundle out of your
+running app (or takes an exported file), validates it, and **merges** it into
+whatever the repo already holds — the same per-source voting merge as
+everywhere else, so re-contributing never double-counts and the PR diff is
+only the metres and votes you added. Two things matter before you run it:
+**confirm the official layout** (the repo files bundles by `official_id` and
+its CI rejects one without it), and ideally label the corners — the
+highest-value part of a bundle after the borders. The intended loop is pull →
+drive → contribute: start from the shared bundle, extend it, send back the
+difference. Details in the repo's
+[CONTRIBUTING](https://github.com/jbhoorasingh/gt7-datalogger-track-data/blob/main/CONTRIBUTING.md).
 
 Imported documents are validated field by field before anything is merged: an
 import writes into the same store the app surveys into, so a malformed or
