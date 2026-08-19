@@ -275,6 +275,10 @@ class SimTelemetrySource:
                 source="sim",
             )
             packet = parse_packet(plain)
+            packet.received_monotonic_ns = capture.received_monotonic_ns
+            packet.received_unix_ns = capture.received_unix_ns
+            packet.receiver_order = capture.receiver_order
+            packet.source = "sim"
             token = None
             if self._on_raw_packet is not None:
                 token = self._on_raw_packet(replace(capture, packet=packet))

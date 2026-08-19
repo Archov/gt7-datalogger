@@ -15,10 +15,32 @@ services:
       - GT7_PS_IP=${GT7_PS_IP:-}
       # Set to "sim" to demo without a PlayStation.
       - GT7_SOURCE=${GT7_SOURCE:-udp}
-      # Lossless decrypted packet archives for future parser/replay work.
+      # Lossless encrypted receive-boundary archives for parser/replay work.
       - GT7_RAW_ARCHIVE=${GT7_RAW_ARCHIVE:-true}
     volumes:
       - gt7-data:/data
+      - gt7-metrics:/metrics
+
+  grafana:
+    profiles: ["grafana"]
+    image: grafana/grafana-oss:13.1.1
+    container_name: gt7-grafana
+    restart: unless-stopped
+    depends_on:
+      - gt7-datalogger
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_PLUGINS_PREINSTALL_SYNC=frser-sqlite-datasource@4.0.6
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - gt7-metrics:/var/lib/gt7-metrics:ro
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
 volumes:
   gt7-data:
+  gt7-metrics:
+  grafana-data:

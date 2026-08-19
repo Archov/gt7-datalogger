@@ -488,6 +488,24 @@ export interface AdminStats {
   http_port: number;
 }
 
+export type ArchiveHydrationMode = "stale_only" | "retry_incomplete" | "force_all";
+
+export interface ArchiveHydrationStatus {
+  state: "idle" | "running" | "completed" | "cancelled" | "failed";
+  mode: ArchiveHydrationMode | null;
+  total_sessions: number;
+  processed_sessions: number;
+  hydrated_sessions: number;
+  complete_sessions: number;
+  partial_sessions: number;
+  failed_sessions: number;
+  skipped_sessions: number;
+  current_session_id: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  latest_diagnostic: string | null;
+}
+
 export type WsMessage =
   | { type: "telemetry"; data: LiveFrame }
   | { type: "lap"; data: LapSummary }

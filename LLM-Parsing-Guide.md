@@ -212,9 +212,8 @@ lap_id, channels
 ```
 
 The channel array is the usable normalized telemetry for that lap in this export's
-resolved, in-memory view. It can include channels supplied on demand by
-`archive_replay`; it does not necessarily describe only fields physically stored in a
-historical lap's `samples_json`. An absent channel means unavailable, not zero. Legacy
+resolved view. Missing channels may be supplied from the raw archive and atomically
+stored before export. An absent channel means unavailable, not zero. Legacy
 all-zero `surface` arrays are treated as unavailable.
 
 `channel_provenance` columns:
@@ -224,13 +223,13 @@ lap_id, persisted, archive_replay, unavailable
 ```
 
 - `persisted`: already present in the saved normalized lap;
-- `archive_replay`: recovered on demand from the session's raw packet archive;
+- `archive_replay`: transient recovery from the session's raw packet archive;
 - `unavailable`: requested but neither persisted nor safely recoverable.
 
-Persisted data always takes precedence. Archive replay is read-only and aligned to the
-persisted lap identity/time grid; it does not rewrite historical samples. Provenance is
-confidence/context metadata, not a quality ranking. Currently it is especially relevant
-to historical orientation recovery.
+Persisted data always takes precedence. Archive replay is aligned to the persisted lap
+identity/time grid and missing channels are committed atomically. Successful recovery is
+reported as `persisted`; subsequent requests do not replay it. Provenance is
+confidence/context metadata, not a quality ranking.
 
 Packet-format channel groups:
 
@@ -251,6 +250,7 @@ appear in availability lists; the trace registries select subsets of them.
 t, dist, speed, throttle, brake, coast, gear, rpm, boost, tire_slip,
 yaw_rate, yaw_rate_signed,
 pos_x, pos_y, pos_z,
+velocity_x, velocity_y, velocity_z,
 body_height, fuel,
 road_plane_x, road_plane_y, road_plane_z, road_plane_distance,
 slip_fl, slip_fr, slip_rl, slip_rr,
@@ -269,7 +269,8 @@ field names:
 
 - `t` is elapsed seconds and `dist` is cumulative metres;
 - `speed` is km/h; throttle, brake, and filtered inputs are percent; `coast` is a flag;
-- positions are metres; quaternion components are unitless;
+- positions are metres; native world-velocity components are metres/second;
+  quaternion components are unitless;
 - `body_height` and `sus_fl/fr/rl/rr` are converted from metres to millimetres;
 - fuel is litres, tire temperatures are degrees Celsius, and boost is bar;
 - steering is radians; yaw and steering angular velocity are radians/second;

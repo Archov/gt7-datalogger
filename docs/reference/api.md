@@ -58,6 +58,10 @@ builder; the server only checks the version and a 64 KB size cap.
 Default compare channels: `t, speed, throttle, brake, coast, gear, rpm, boost,
 tire_slip, yaw_rate, pos_x, pos_z`. Any other stored column can be requested via
 `channels=`; `t`, `pos_x`, `pos_z` are always included (the delta and map need them).
+When requested orientation or native-velocity channels are absent from historical
+samples, comparison performs the same conservative raw-archive replay used by LLM
+export hydration. Recovered channels are aligned to the stored lap time grid and
+persisted once; later requests use normalized samples without replaying the archive.
 Delta values are milliseconds, **positive = slower than the reference**.
 
 ## Controls
@@ -98,6 +102,8 @@ packet path (packet format C required for surface data).
 | GET | `/api/admin/logs` | `limit` (≤2000), `level` — recent log records from the ring buffer |
 | DELETE | `/api/admin/logs` | clear the ring buffer |
 | GET | `/api/admin/stats` | uptime, DB stats, source stats, client count, LAN IP |
+| GET | `/api/admin/archive-hydration` | current/last archived-lap reprocessing status |
+| POST | `/api/admin/archive-hydration` | start background hydration with `mode`: `stale_only`, `retry_incomplete`, or `force_all` |
 | POST | `/api/admin/restart-source` | stop/start the telemetry source |
 | POST | `/api/admin/clear-data` | delete **all** sessions and laps (settings/tracks kept) |
 | POST | `/api/admin/vacuum` | SQLite `VACUUM` |

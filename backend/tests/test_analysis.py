@@ -4,6 +4,7 @@ import pytest
 
 from app.processing import analysis
 from app.processing.laps import new_sample_store
+from app.processing.orientation import chassis_forward
 
 
 def make_lap(total_dist: float, speed: float, n: int = 100) -> dict[str, list[float]]:
@@ -35,6 +36,62 @@ def test_resample_by_distance() -> None:
     assert out["dist"] == [i * 100.0 for i in range(11)]
     assert all(v == pytest.approx(180.0) for v in out["speed"])
     assert out["t"][5] == pytest.approx(500 / 50, abs=0.01)
+
+
+def test_resample_quaternion_uses_shortest_path_and_velocity_is_linear() -> None:
+    half = 0.5**0.5
+    samples = {
+        "dist": [0.0, 10.0],
+        "orientation_x": [0.0, 0.0],
+        "orientation_y": [-half, half],
+        "orientation_z": [0.0, 0.0],
+        "orientation_w": [half, -half],
+        "velocity_x": [10.0, 0.0],
+        "velocity_z": [0.0, 10.0],
+    }
+    out = analysis.resample_by_distance(
+        samples,
+        step=5.0,
+        columns=(
+            "orientation_x",
+            "orientation_y",
+            "orientation_z",
+            "orientation_w",
+            "velocity_x",
+            "velocity_z",
+        ),
+    )
+    quaternion = tuple(
+        out[channel][1]
+        for channel in (
+            "orientation_x",
+            "orientation_y",
+            "orientation_z",
+            "orientation_w",
+        )
+    )
+    assert chassis_forward(quaternion) == pytest.approx((1.0, 0.0, 0.0), abs=1e-6)
+    assert out["velocity_x"][1] == pytest.approx(5.0)
+    assert out["velocity_z"][1] == pytest.approx(5.0)
+
+
+def test_velocity_resampling_preserves_a_zero_crossing() -> None:
+    samples = {
+        "dist": [0.0, 10.0],
+        "velocity_x": [-8.0, 8.0],
+        "velocity_y": [2.0, -2.0],
+        "velocity_z": [4.0, -4.0],
+    }
+
+    out = analysis.resample_by_distance(
+        samples,
+        step=5.0,
+        columns=("velocity_x", "velocity_y", "velocity_z"),
+    )
+
+    assert out["velocity_x"] == [-8.0, 0.0, 8.0]
+    assert out["velocity_y"] == [2.0, 0.0, -2.0]
+    assert out["velocity_z"] == [4.0, 0.0, -4.0]
 
 
 def test_time_delta_series_slower_lap_positive() -> None:
@@ -163,9 +220,7 @@ def test_corners_single_90_degree_turn() -> None:
 
 
 def test_corners_s_section_is_two_corners() -> None:
-    lap = track_lap(
-        [("straight", 300), ("arc", 90, 80), ("arc", 90, -80), ("straight", 300)]
-    )
+    lap = track_lap([("straight", 300), ("arc", 90, 80), ("arc", 90, -80), ("straight", 300)])
     corners = analysis.detect_corners(lap)
     assert [c["direction"] for c in corners] == ["R", "L"]
     assert [c["n"] for c in corners] == [1, 2]
@@ -218,8 +273,15 @@ def test_corners_shallow_kink_ignored() -> None:
 def test_corners_spin_arc_dropped() -> None:
     # A 420° loop (spin) must not be numbered
     lap = track_lap(
-        [("straight", 400), ("arc", 80, 90), ("straight", 200), ("arc", 20, 420),
-         ("straight", 200), ("arc", 80, -90), ("straight", 400)]
+        [
+            ("straight", 400),
+            ("arc", 80, 90),
+            ("straight", 200),
+            ("arc", 20, 420),
+            ("straight", 200),
+            ("arc", 80, -90),
+            ("straight", 400),
+        ]
     )
     corners = analysis.detect_corners(lap)
     assert len(corners) == 2

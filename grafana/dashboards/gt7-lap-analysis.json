@@ -1,0 +1,71 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"},
+      "description": "Select any numeric native, unknown, or derived channel. Native unknowns retain offset names and raw units.",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [{"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "format": "time_series", "rawQueryText": "SELECT ${x_axis:raw} AS time, ${channel:raw} AS value, 'Lap ' || lap_id AS metric FROM samples WHERE lap_id IN (${lap:csv}) AND ${channel:raw} IS NOT NULL ORDER BY lap_id,sample_index", "refId": "A"}],
+      "title": "$channel by $x_axis",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"},
+      "description": "Lap timing, fuel, cleanliness, packet format, and capture provenance.",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 10},
+      "id": 2,
+      "options": {"showHeader": true},
+      "targets": [{"format": "table", "rawQueryText": "SELECT number,time_ms,max_speed,fuel_consumed,clean_lap,off_track_count,packet_format,native_provenance FROM laps WHERE id IN (${lap:csv}) ORDER BY number", "refId": "A"}],
+      "title": "Lap summary",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"},
+      "description": "Flattened chassis and track events with independent wheel flags.",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 10},
+      "id": 3,
+      "options": {"showHeader": true},
+      "targets": [{"format": "table", "rawQueryText": "SELECT lap_id,type,start_dist,end_dist,severity,wheel_fl,wheel_fr,wheel_rl,wheel_rr FROM events WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,event_index", "refId": "A"}],
+      "title": "Detected events",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"},
+      "description": "Compatibility channels covering speed, inputs, engine, tires, suspension, transmission, motion, racing line, flags, aids, and surface state. Use the channel selector above for every native field.",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 17},
+      "id": 4,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {"format": "time_series", "rawQueryText": "SELECT t AS time,speed,throttle,brake,rpm FROM samples WHERE lap_id=${lap:raw} ORDER BY sample_index", "refId": "A"},
+        {"format": "time_series", "rawQueryText": "SELECT t AS time,slip_fl,slip_fr,slip_rl,slip_rr FROM samples WHERE lap_id=${lap:raw} ORDER BY sample_index", "refId": "B"}
+      ],
+      "title": "Speed, inputs, engine, and wheels",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": ["gt7", "telemetry"],
+  "templating": {"list": [
+    {"name": "session", "label": "Session", "type": "query", "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "query": "SELECT id AS __value, id || ': ' || car_name || ' / ' || COALESCE(NULLIF(track_name,''),'Unknown track') AS __text FROM sessions ORDER BY id DESC", "refresh": 1},
+    {"name": "lap", "label": "Lap", "type": "query", "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "query": "SELECT id AS __value, 'Lap ' || number || ' — ' || printf('%.3f s',time_ms/1000.0) AS __text FROM laps WHERE session_id=$session ORDER BY number", "refresh": 2, "multi": true, "includeAll": false},
+    {"name": "channel", "label": "Channel", "type": "query", "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "query": "SELECT name AS __value, name || ' [' || unit || '; ' || confidence || ']' AS __text FROM channel_catalog WHERE storage_type IN ('real','integer') ORDER BY layer,name", "refresh": 1},
+    {"name": "x_axis", "label": "X axis", "type": "custom", "query": "sample_time_unix_s,t,sample_index,dist", "current": {"text": "t", "value": "t"}}
+  ]},
+  "time": {"from": "now-15m", "to": "now"},
+  "timezone": "browser",
+  "title": "GT7 Lap Analysis",
+  "uid": "gt7-lap-analysis",
+  "version": 1
+}

@@ -12,6 +12,7 @@ from app.models import TelemetryPacket
 from app.processing.analysis import time_weights
 from app.processing.orientation import normalize_quaternion
 from app.processing.surface import encode_surface, off_track_excursions
+from app.telemetry.packet_catalog import catalog_rows
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ SPANS_FOR_MEDIAN = 3
 # and the real partials sat at 88 %, 88 %, 81 %, 65 % and 40 %.
 PROVISIONAL_SPAN_RATIO = 0.93
 
+VELOCITY_CHANNELS = ("velocity_x", "velocity_y", "velocity_z")
+
 # Columnar per-tick series kept for each lap. Core columns exist for every
 # packet format. Extension columns exist only when that format was available
 # for the whole recorded lap; this keeps "not recorded" distinct from zero.
@@ -71,6 +74,7 @@ CORE_SAMPLE_COLUMNS = (
     "pos_x",
     "pos_y",
     "pos_z",
+    *VELOCITY_CHANNELS,
     "body_height",
     "fuel",
     "road_plane_x",
@@ -125,6 +129,15 @@ OPTIONAL_SAMPLE_GROUPS = {
 SAMPLE_COLUMNS = CORE_SAMPLE_COLUMNS + tuple(
     column for columns in OPTIONAL_SAMPLE_GROUPS.values() for column in columns
 )
+NATIVE_SAMPLE_COLUMNS = tuple(str(row["name"]) for row in catalog_rows() if row["name"] != "magic")
+CAPTURE_SAMPLE_COLUMNS = (
+    "packet_size",
+    "packet_format",
+    "received_unix_ns",
+    "received_monotonic_ns",
+    "receiver_order",
+    "source",
+)
 
 _PACKET_FORMAT_RANK = {"A": 0, "B": 1, "~": 2, "C": 3}
 
@@ -139,6 +152,11 @@ def new_recording_sample_store() -> dict[str, list[float]]:
     return {c: [] for c in CORE_SAMPLE_COLUMNS}
 
 
+def new_native_sample_store() -> dict[str, list[float | int | str | None]]:
+    """Exact packet evidence retained only for the comprehensive metrics mirror."""
+    return {c: [] for c in (*CAPTURE_SAMPLE_COLUMNS, *NATIVE_SAMPLE_COLUMNS)}
+
+
 @dataclass(slots=True)
 class CompletedLap:
     number: int
@@ -148,6 +166,7 @@ class CompletedLap:
     samples: dict[str, list[float]]
     fuel_start: float
     fuel_end: float
+    native_samples: dict[str, list[float | int | str | None]] = field(default_factory=dict)
     tod_ms: int = -1  # in-game time of day when the lap completed
     # metrics
     fuel_consumed: float = 0.0
@@ -256,6 +275,9 @@ class LapProcessor:
     _session: SessionInfo | None = None
     _current_lap: int = -1
     _samples: dict[str, list[float]] = field(default_factory=new_recording_sample_store)
+    _native_samples: dict[str, list[float | int | str | None]] = field(
+        default_factory=new_native_sample_store
+    )
     _optional_enabled: dict[str, bool] | None = None
     _telemetry_meta: dict[str, object] | None = None
     _distance: float = 0.0
@@ -283,6 +305,10 @@ class LapProcessor:
     @property
     def live_lap_samples(self) -> dict[str, list[float]]:
         return self._samples
+
+    @property
+    def live_native_samples(self) -> dict[str, list[float | int | str | None]]:
+        return self._native_samples
 
     @property
     def live_telemetry_meta(self) -> dict[str, object] | None:
@@ -341,6 +367,7 @@ class LapProcessor:
             and len(self._samples["t"]) >= self.min_lap_ticks
         )
         finished_samples = self._samples
+        finished_native_samples = self._native_samples
         finished_meta = self._telemetry_meta
         fuel_start = self._fuel_start
         engine = (self._max_water, self._max_oil, self._min_oil_pressure)
@@ -350,6 +377,7 @@ class LapProcessor:
         # boundary once per packet (duplicate laps at ~60 Hz).
         self._current_lap = p.current_lap
         self._samples = new_recording_sample_store()
+        self._native_samples = new_native_sample_store()
         self._optional_enabled = None
         self._telemetry_meta = None
         self._distance = 0.0
@@ -368,6 +396,7 @@ class LapProcessor:
                 samples=finished_samples,
                 fuel_start=fuel_start,
                 fuel_end=p.fuel_level,
+                native_samples=finished_native_samples,
                 tod_ms=p.day_progression_ms,
                 telemetry_meta=finished_meta,
             )
@@ -508,6 +537,19 @@ class LapProcessor:
                     self._telemetry_meta["wheelbase_m"] = p.wheelbase_m
                 if self._telemetry_meta.get("car_category") is None and p.car_category is not None:
                     self._telemetry_meta["car_category"] = p.car_category
+        native = self._native_samples
+        capture_values: dict[str, float | int | str | None] = {
+            "packet_size": p.packet_size,
+            "packet_format": p.packet_format,
+            "received_unix_ns": p.received_unix_ns,
+            "received_monotonic_ns": p.received_monotonic_ns,
+            "receiver_order": p.receiver_order,
+            "source": p.source,
+        }
+        for column in CAPTURE_SAMPLE_COLUMNS:
+            native[column].append(capture_values[column])
+        for column in NATIVE_SAMPLE_COLUMNS:
+            native[column].append(p.native_fields.get(column))
         dt_s = self._pending_dt * TICK_SECONDS
         if s["t"]:  # the lap's first sample anchors at t=0
             self._elapsed_s += dt_s
@@ -529,6 +571,9 @@ class LapProcessor:
         s["pos_x"].append(round(p.position_x, 2))
         s["pos_y"].append(round(p.position_y, 2))
         s["pos_z"].append(round(p.position_z, 2))
+        s["velocity_x"].append(round(p.velocity_x, 4))
+        s["velocity_y"].append(round(p.velocity_y, 4))
+        s["velocity_z"].append(round(p.velocity_z, 4))
         s["body_height"].append(round(p.body_height * 1000, 1))  # mm
         s["fuel"].append(round(p.fuel_level, 3))
         s["road_plane_x"].append(round(p.road_plane_x, 4))

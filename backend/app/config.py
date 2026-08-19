@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Telemetry format requested from the console: "A", "B", "~", or "C".
     # "C" (game v1.68+) is the richest; older game versions only answer "A".
     packet_format: str = "C"
-    # Lossless decrypted packet archive, stored beside the SQLite database.
+    # Lossless encrypted receive-boundary archive, stored beside the primary database.
     raw_archive: bool = True
 
     # Simulated-source scenario: "practice" (default), "race", "fuel_shortage",
@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     sim_scenario: str = "practice"
 
     db_path: Path = Path("data/gt7.db")
+    # Disposable, Grafana-oriented mirror of completed-lap telemetry.
+    metrics_db_path: Path = Path("data/gt7-metrics.db")
     cars_csv: Path = Path("data/cars.csv")
     # Official GT7 track/layout metadata (see scripts/build_track_metadata.py)
     tracks_json: Path = Path("data/tracks.json")

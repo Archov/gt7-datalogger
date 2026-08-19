@@ -4,6 +4,11 @@
 // Sessions or Live views, and is mirrored back into the URL for sharing.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import { ChannelPicker } from "@/components/analysis/ChannelPicker";
 import { CornerDetail, type CornerLap } from "@/components/analysis/CornerDetail";
 import { DeviationChart } from "@/components/analysis/DeviationChart";
@@ -23,6 +28,25 @@ import {
 } from "@/lib/channels";
 import { lapColor, lapColorMap } from "@/lib/colors";
 import { formatLapTime, formatSpeed } from "@/lib/format";
+import {
+  clampWorkspacePreferences,
+  defaultWorkspacePreferences,
+  hasStoredWorkspacePreferences,
+  loadWorkspacePreferences,
+  MAP_SCALE_PRESETS,
+  MAP_SCALE_STEP,
+  MAX_MAP_METERS_PER_PIXEL,
+  MIN_CENTER_WIDTH,
+  MIN_INSPECTOR_WIDTH,
+  MIN_MAP_HEIGHT,
+  MIN_MAP_METERS_PER_PIXEL,
+  MIN_TIMELINE_HEIGHT,
+  normalizeMapMetersPerPixel,
+  saveWorkspacePreferences,
+  TIMELINE_PANEL_HEIGHTS,
+  type AnalysisWorkspacePreferences,
+  WORKSPACE_DIVIDER_SIZE,
+} from "@/lib/analysisWorkspace";
 import { reflectAnalysisSelection, type AnalysisRequest } from "@/lib/router";
 import type { CompareResult, DeviationResult, LapSummary, SessionSummary } from "@/lib/types";
 import { useAnalysisSelection } from "@/store/analysis";
@@ -40,7 +64,29 @@ const CORNER_COLUMNS = [
 
 // The race-line map shades where wheels touched kerb/grass/gravel whenever
 // the lap carries the per-tick surface column (packet C recordings).
-const MAP_COLUMNS = ["surface"];
+const MAP_COLUMNS = [
+  "surface",
+  "orientation_x",
+  "orientation_y",
+  "orientation_z",
+  "orientation_w",
+  "velocity_x",
+  "velocity_y",
+  "velocity_z",
+];
+
+type ResizeKind = "vertical" | "horizontal" | "diagonal";
+
+interface ResizeGesture {
+  kind: ResizeKind;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  inspectorWidth: number;
+  mapHeight: number;
+  workspaceWidth: number;
+  workspaceHeight: number;
+}
 
 export function AnalysisView({ request }: { request: AnalysisRequest }) {
   const units = useSettings((s) => s.units);
@@ -173,6 +219,148 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   // Synchronized zoom state across all charts (minDist, maxDist in meters)
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
 
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const resizeGesture = useRef<ResizeGesture | null>(null);
+  const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
+  const [workspace, setWorkspace] = useState<AnalysisWorkspacePreferences>(() => {
+    return hasStoredWorkspacePreferences()
+      ? loadWorkspacePreferences()
+      : defaultWorkspacePreferences(window.innerWidth - 24, window.innerHeight - 100);
+  });
+
+  useEffect(() => saveWorkspacePreferences(workspace), [workspace]);
+
+  useEffect(() => {
+    const element = workspaceRef.current;
+    if (!element) return;
+    const update = () => {
+      const rect = element.getBoundingClientRect();
+      const next = { width: rect.width, height: rect.height };
+      setWorkspaceSize((current) =>
+        current.width === next.width && current.height === next.height ? current : next,
+      );
+      if (next.width > 0 && next.height > 0) {
+        setWorkspace((current) =>
+          clampWorkspacePreferences(current, next.width, next.height),
+        );
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [sessions]);
+
+  const updateWorkspaceSize = useCallback(
+    (updates: Partial<AnalysisWorkspacePreferences>) => {
+      setWorkspace((current) =>
+        clampWorkspacePreferences(
+          { ...current, ...updates },
+          workspaceSize.width || window.innerWidth,
+          workspaceSize.height || window.innerHeight,
+        ),
+      );
+    },
+    [workspaceSize],
+  );
+
+  const resetWorkspace = useCallback(() => {
+    setWorkspace(
+      defaultWorkspacePreferences(
+        workspaceSize.width || window.innerWidth,
+        workspaceSize.height || window.innerHeight,
+      ),
+    );
+  }, [workspaceSize]);
+
+  const resetLayoutSizes = useCallback(() => {
+    const defaults = defaultWorkspacePreferences(
+      workspaceSize.width || window.innerWidth,
+      workspaceSize.height || window.innerHeight,
+    );
+    updateWorkspaceSize({
+      inspectorWidth: defaults.inspectorWidth,
+      mapHeight: defaults.mapHeight,
+    });
+  }, [workspaceSize, updateWorkspaceSize]);
+
+  const beginResize = useCallback(
+    (kind: ResizeKind, event: ReactPointerEvent<HTMLElement>) => {
+      if (workspaceSize.width <= 0 || workspaceSize.height <= 0) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      resizeGesture.current = {
+        kind,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        inspectorWidth: workspace.inspectorWidth,
+        mapHeight: workspace.mapHeight,
+        workspaceWidth: workspaceSize.width,
+        workspaceHeight: workspaceSize.height,
+      };
+    },
+    [workspace, workspaceSize],
+  );
+
+  const continueResize = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = resizeGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const horizontal = gesture.kind === "vertical" || gesture.kind === "diagonal";
+    const vertical = gesture.kind === "horizontal" || gesture.kind === "diagonal";
+    setWorkspace((current) =>
+      clampWorkspacePreferences(
+        {
+          ...current,
+          inspectorWidth: horizontal
+            ? gesture.inspectorWidth - (event.clientX - gesture.startX)
+            : current.inspectorWidth,
+          mapHeight: vertical
+            ? gesture.mapHeight + (event.clientY - gesture.startY)
+            : current.mapHeight,
+        },
+        gesture.workspaceWidth,
+        gesture.workspaceHeight,
+      ),
+    );
+  }, []);
+
+  const finishResize = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (resizeGesture.current?.pointerId !== event.pointerId) return;
+    resizeGesture.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const resizeByKeyboard = useCallback(
+    (kind: ResizeKind, event: ReactKeyboardEvent<HTMLElement>) => {
+      const step = event.shiftKey ? 60 : 20;
+      let inspectorWidth = workspace.inspectorWidth;
+      let mapHeight = workspace.mapHeight;
+      if (event.key === "Home") {
+        if (kind !== "horizontal") inspectorWidth = MIN_INSPECTOR_WIDTH;
+        if (kind !== "vertical") mapHeight = MIN_MAP_HEIGHT;
+      } else if (event.key === "End") {
+        if (kind !== "horizontal") inspectorWidth = Number.POSITIVE_INFINITY;
+        if (kind !== "vertical") mapHeight = Number.POSITIVE_INFINITY;
+      } else if (event.key === "ArrowLeft" && kind !== "horizontal") {
+        inspectorWidth += step;
+      } else if (event.key === "ArrowRight" && kind !== "horizontal") {
+        inspectorWidth -= step;
+      } else if (event.key === "ArrowUp" && kind !== "vertical") {
+        mapHeight -= step;
+      } else if (event.key === "ArrowDown" && kind !== "vertical") {
+        mapHeight += step;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      updateWorkspaceSize({ inspectorWidth, mapHeight });
+    },
+    [workspace, updateWorkspaceSize],
+  );
+
   // Reset zoom window when session or lap selection changes
   useEffect(() => {
     setZoomRange(null);
@@ -204,6 +392,18 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
 
   const refEntry = compare?.laps[String(refLap)];
   const refSummary = laps.find((l) => l.id === refLap);
+  const maximumInspectorWidth = Math.max(
+    MIN_INSPECTOR_WIDTH,
+    workspaceSize.width - MIN_CENTER_WIDTH - WORKSPACE_DIVIDER_SIZE,
+  );
+  const maximumMapHeight = Math.max(
+    MIN_MAP_HEIGHT,
+    workspaceSize.height - MIN_TIMELINE_HEIGHT - WORKSPACE_DIVIDER_SIZE,
+  );
+  const workspaceStyle = {
+    "--analysis-inspector-width": `${workspace.inspectorWidth}px`,
+    "--analysis-map-height": `${workspace.mapHeight}px`,
+  } as CSSProperties;
 
   // One color assignment for everything that shows the compared laps together
   // (chips, chart series, map, corner detail): id-keyed, but two selected laps
@@ -278,10 +478,8 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
-      {/* Left: selector + stacked charts */}
-      <div className="min-w-0">
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel p-3">
+    <div className="flex min-h-full flex-col gap-3 p-3 xl:h-full xl:min-h-0 xl:overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-xl bg-panel p-3">
           <Select
             ariaLabel="Session"
             value={String(sessionId ?? "")}
@@ -334,6 +532,14 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
             })}
           </div>
           <ChannelPicker selected={channelKeys} onChange={setChannelKeys} />
+          <button
+            type="button"
+            className="btn px-2 py-1 text-[11px]"
+            onClick={resetWorkspace}
+            title="Restore map size, inspector width, timeline density, and map camera defaults"
+          >
+            Reset workspace
+          </button>
           {refLap != null && (
             <div className="ml-auto">
               <Select
@@ -351,103 +557,301 @@ export function AnalysisView({ request }: { request: AnalysisRequest }) {
               />
             </div>
           )}
-        </div>
-
-        {error && <div className="mb-3 rounded-md bg-brake/10 p-2 text-sm text-brake">{error}</div>}
-        {loading && !compare && <div className="skeleton h-96" />}
-        {compare && (
-          <div className="rounded-xl bg-panel p-2">
-            <StackedCharts
-              data={compare}
-              lapLabels={lapLabels}
-              lapColors={lapColors}
-              units={units}
-              channels={channelDefs}
-              onCursorDist={onCursorDist}
-              zoomRange={zoomRange}
-              onZoomChange={setZoomRange}
-            />
-          </div>
-        )}
       </div>
 
-      {/* Right: race line, deviation, fuel, tuning */}
-      <div className="flex min-w-0 flex-col gap-3">
-        {refEntry && (
-          <SidePanel
-            title={mapLaps.length > 1 ? "Race lines — selected laps" : "Race line (reference lap)"}
-          >
-            <RaceLineMap
-              laps={mapLaps}
-              cursorDist={cursorDist}
-              step={compare!.step}
-              zoomRange={zoomRange}
-            />
-          </SidePanel>
-        )}
-        {cornerLaps.length > 0 && (
-          <SidePanel title="Corner detail — cursor synced">
-            <CornerDetail
-              laps={cornerLaps}
-              cursorDist={cursorDist}
-              step={compare!.step}
-              trackCorners={refEntry?.corners}
-            />
-          </SidePanel>
-        )}
-        {refLap != null && (
-          <SidePanel title="Gearing (reference lap)">
-            <GearingPanel lapId={refLap} units={units} />
-          </SidePanel>
-        )}
-        {deviation && deviation.dist.length > 0 && (
-          <SidePanel title={`Consistency — best ${deviation.lap_ids.length} laps`}>
-            <DeviationChart data={deviation} units={units} zoomRange={zoomRange} />
-          </SidePanel>
-        )}
-        {refLap != null && (
-          <SidePanel title="Fuel strategy">
-            <FuelMapPanel lapId={refLap} />
-          </SidePanel>
-        )}
-        {refSummary && (
-          <SidePanel title="Tuning info (reference lap)">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 p-3 font-tabular text-xs">
-              <Info k="Max speed" v={formatSpeed(refSummary.max_speed, units)} />
-              <Info k="Min body height" v={`${refSummary.min_body_height.toFixed(0)} mm`} />
-              <Info k="Full throttle" v={`${refSummary.full_throttle_pct.toFixed(1)}%`} />
-              <Info k="Full brake" v={`${refSummary.full_brake_pct.toFixed(1)}%`} />
-              <Info k="Coasting" v={`${refSummary.coasting_pct.toFixed(1)}%`} />
-              <Info k="Tire spin" v={`${refSummary.tire_spin_pct.toFixed(1)}%`} />
-              <Info k="Fuel used" v={`${refSummary.fuel_consumed.toFixed(2)} L`} />
-              <Info k="Car" v={refSummary.car_name ?? "–"} />
-              {refSummary.tcs_active_pct != null && (
-                <Info k="TCS active" v={`${refSummary.tcs_active_pct.toFixed(1)}%`} />
-              )}
-              {refSummary.asm_active_pct != null && (
-                <Info k="ASM active" v={`${refSummary.asm_active_pct.toFixed(1)}%`} />
-              )}
-              {(refSummary.max_water_temp ?? 0) > 0 && (
-                <Info k="Max water" v={`${refSummary.max_water_temp!.toFixed(0)}°C`} />
-              )}
-              {(refSummary.max_oil_temp ?? 0) > 0 && (
-                <Info k="Max oil" v={`${refSummary.max_oil_temp!.toFixed(0)}°C`} />
-              )}
-              {(refSummary.min_oil_pressure ?? -1) >= 0 && (
-                <Info k="Min oil press." v={`${refSummary.min_oil_pressure!.toFixed(1)} bar`} />
-              )}
-              {refSummary.event_counts && Object.keys(refSummary.event_counts).length > 0 && (
-                <Info
-                  k="Events"
-                  v={Object.entries(refSummary.event_counts)
-                    .map(([type, n]) => `${n} ${type}`)
-                    .join(" · ")}
+      {error && <div className="shrink-0 rounded-md bg-brake/10 p-2 text-sm text-brake">{error}</div>}
+
+      <div
+        ref={workspaceRef}
+        className="analysis-workspace min-h-0 flex-1"
+        style={workspaceStyle}
+      >
+        <div className="analysis-center min-w-0">
+          <section className="analysis-map-viewport flex min-h-0 flex-col overflow-hidden rounded-xl bg-panel">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-edge px-3 py-2">
+              <span className="mr-auto text-[10px] font-semibold uppercase tracking-widest text-ink-dim">
+                {mapLaps.length > 1 ? "Race lines — selected laps" : "Race line (reference lap)"}
+              </span>
+              <button
+                type="button"
+                aria-pressed={workspace.followCursor}
+                onClick={() => updateWorkspaceSize({ followCursor: !workspace.followCursor })}
+                className={`rounded border px-2 py-0.5 text-[11px] transition-colors ${
+                  workspace.followCursor
+                    ? "border-accent bg-accent/15 text-accent"
+                    : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
+                }`}
+              >
+                Follow cursor
+              </button>
+              <button
+                type="button"
+                aria-pressed={workspace.showTravelDirection}
+                onClick={() =>
+                  updateWorkspaceSize({ showTravelDirection: !workspace.showTravelDirection })
+                }
+                title="Show native world-velocity direction above 0.1 m/s"
+                className={`rounded border px-2 py-0.5 text-[11px] transition-colors ${
+                  workspace.showTravelDirection
+                    ? "border-accent bg-accent/15 text-accent"
+                    : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
+                }`}
+              >
+                Travel direction
+              </button>
+              <button
+                type="button"
+                aria-pressed={workspace.keepLapMarkersVisible}
+                onClick={() =>
+                  updateWorkspaceSize({
+                    keepLapMarkersVisible: !workspace.keepLapMarkersVisible,
+                  })
+                }
+                title="Pan minimally and temporarily zoom out when needed to keep every lap marker visible"
+                className={`rounded border px-2 py-0.5 text-[11px] transition-colors ${
+                  workspace.keepLapMarkersVisible
+                    ? "border-accent bg-accent/15 text-accent"
+                    : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
+                }`}
+              >
+                Keep laps in frame
+              </button>
+              <MapScaleControls
+                value={workspace.mapMetersPerPixel}
+                onChange={(mapMetersPerPixel) => updateWorkspaceSize({ mapMetersPerPixel })}
+              />
+            </div>
+            <div className="min-h-0 flex-1">
+              {refEntry && compare ? (
+                <RaceLineMap
+                  laps={mapLaps}
+                  cursorDist={cursorDist}
+                  zoomRange={zoomRange}
+                  followCursor={workspace.followCursor}
+                  mapMetersPerPixel={workspace.mapMetersPerPixel}
+                  showTravelDirection={workspace.showTravelDirection}
+                  keepLapMarkersVisible={workspace.keepLapMarkersVisible}
                 />
+              ) : loading ? (
+                <div className="skeleton h-full min-h-72 w-full" />
+              ) : (
+                <div className="flex h-full min-h-72 items-center justify-center text-sm text-ink-dim">
+                  Select a lap with position telemetry to display the track map.
+                </div>
               )}
             </div>
-          </SidePanel>
-        )}
+          </section>
+
+          <div
+            role="separator"
+            aria-label="Resize map and timeline"
+            aria-orientation="horizontal"
+            aria-valuemin={MIN_MAP_HEIGHT}
+            aria-valuemax={maximumMapHeight}
+            aria-valuenow={Math.round(workspace.mapHeight)}
+            tabIndex={0}
+            className="analysis-horizontal-resizer hidden touch-none cursor-row-resize items-center justify-center xl:flex"
+            onPointerDown={(event) => beginResize("horizontal", event)}
+            onPointerMove={continueResize}
+            onPointerUp={finishResize}
+            onPointerCancel={finishResize}
+            onKeyDown={(event) => resizeByKeyboard("horizontal", event)}
+            onDoubleClick={resetLayoutSizes}
+          >
+            <span className="h-px w-12 bg-edge-bright" />
+          </div>
+
+          <section className="analysis-timeline mt-3 min-w-0 rounded-xl bg-panel p-2 xl:mt-0">
+            {loading && !compare && <div className="skeleton h-96" />}
+            {compare && (
+              <StackedCharts
+                data={compare}
+                lapLabels={lapLabels}
+                lapColors={lapColors}
+                units={units}
+                channels={channelDefs}
+                onCursorDist={onCursorDist}
+                zoomRange={zoomRange}
+                onZoomChange={setZoomRange}
+                panelHeight={TIMELINE_PANEL_HEIGHTS[workspace.timelineDensity]}
+                timelineDensity={workspace.timelineDensity}
+                onTimelineDensityChange={(timelineDensity) =>
+                  updateWorkspaceSize({ timelineDensity })
+                }
+              />
+            )}
+          </section>
+        </div>
+
+        <div
+          role="separator"
+          aria-label="Resize analysis and inspector"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_INSPECTOR_WIDTH}
+          aria-valuemax={maximumInspectorWidth}
+          aria-valuenow={Math.round(workspace.inspectorWidth)}
+          tabIndex={0}
+          className="analysis-vertical-resizer hidden touch-none cursor-col-resize items-center justify-center xl:flex"
+          onPointerDown={(event) => beginResize("vertical", event)}
+          onPointerMove={continueResize}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+          onKeyDown={(event) => resizeByKeyboard("vertical", event)}
+          onDoubleClick={resetLayoutSizes}
+        >
+          <span className="h-12 w-px bg-edge-bright" />
+        </div>
+
+        <aside className="analysis-inspector mt-3 flex min-w-0 flex-col gap-3 xl:mt-0">
+          {cornerLaps.length > 0 && (
+            <SidePanel title="Corner detail — cursor synced">
+              <CornerDetail
+                laps={cornerLaps}
+                cursorDist={cursorDist}
+                step={compare!.step}
+                trackCorners={refEntry?.corners}
+              />
+            </SidePanel>
+          )}
+          {refLap != null && (
+            <SidePanel title="Gearing (reference lap)">
+              <GearingPanel lapId={refLap} units={units} />
+            </SidePanel>
+          )}
+          {deviation && deviation.dist.length > 0 && (
+            <SidePanel title={`Consistency — best ${deviation.lap_ids.length} laps`}>
+              <DeviationChart data={deviation} units={units} zoomRange={zoomRange} />
+            </SidePanel>
+          )}
+          {refLap != null && (
+            <SidePanel title="Fuel strategy">
+              <FuelMapPanel lapId={refLap} />
+            </SidePanel>
+          )}
+          {refSummary && (
+            <SidePanel title="Tuning info (reference lap)">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 p-3 font-tabular text-xs">
+                <Info k="Max speed" v={formatSpeed(refSummary.max_speed, units)} />
+                <Info k="Min body height" v={`${refSummary.min_body_height.toFixed(0)} mm`} />
+                <Info k="Full throttle" v={`${refSummary.full_throttle_pct.toFixed(1)}%`} />
+                <Info k="Full brake" v={`${refSummary.full_brake_pct.toFixed(1)}%`} />
+                <Info k="Coasting" v={`${refSummary.coasting_pct.toFixed(1)}%`} />
+                <Info k="Tire spin" v={`${refSummary.tire_spin_pct.toFixed(1)}%`} />
+                <Info k="Fuel used" v={`${refSummary.fuel_consumed.toFixed(2)} L`} />
+                <Info k="Car" v={refSummary.car_name ?? "–"} />
+                {refSummary.tcs_active_pct != null && (
+                  <Info k="TCS active" v={`${refSummary.tcs_active_pct.toFixed(1)}%`} />
+                )}
+                {refSummary.asm_active_pct != null && (
+                  <Info k="ASM active" v={`${refSummary.asm_active_pct.toFixed(1)}%`} />
+                )}
+                {(refSummary.max_water_temp ?? 0) > 0 && (
+                  <Info k="Max water" v={`${refSummary.max_water_temp!.toFixed(0)}°C`} />
+                )}
+                {(refSummary.max_oil_temp ?? 0) > 0 && (
+                  <Info k="Max oil" v={`${refSummary.max_oil_temp!.toFixed(0)}°C`} />
+                )}
+                {(refSummary.min_oil_pressure ?? -1) >= 0 && (
+                  <Info k="Min oil press." v={`${refSummary.min_oil_pressure!.toFixed(1)} bar`} />
+                )}
+                {refSummary.event_counts && Object.keys(refSummary.event_counts).length > 0 && (
+                  <Info
+                    k="Events"
+                    v={Object.entries(refSummary.event_counts)
+                      .map(([type, n]) => `${n} ${type}`)
+                      .join(" · ")}
+                  />
+                )}
+              </div>
+            </SidePanel>
+          )}
+        </aside>
+
+        <button
+          type="button"
+          aria-label="Resize map, timeline, and inspector"
+          className="analysis-diagonal-resizer hidden touch-none cursor-nwse-resize rounded-sm border border-edge-bright bg-panel-2 shadow-md xl:block"
+          onPointerDown={(event) => beginResize("diagonal", event)}
+          onPointerMove={continueResize}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+          onKeyDown={(event) => resizeByKeyboard("diagonal", event)}
+          onDoubleClick={resetLayoutSizes}
+          title="Drag diagonally to resize map and inspector; double-click to reset"
+        >
+          <span aria-hidden="true" className="block text-[11px] leading-none text-ink-dim">↘</span>
+        </button>
       </div>
+    </div>
+  );
+}
+
+function formatMapScale(value: number): string {
+  return String(Math.round(value * 1000) / 1000);
+}
+
+function MapScaleControls({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatMapScale(value));
+
+  useEffect(() => setDraft(formatMapScale(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number(draft);
+    if (draft.trim() === "" || !Number.isFinite(parsed)) {
+      setDraft(formatMapScale(value));
+      return;
+    }
+    const normalized = normalizeMapMetersPerPixel(parsed);
+    setDraft(formatMapScale(normalized));
+    onChange(normalized);
+  };
+
+  return (
+    <div
+      className="flex items-center gap-1"
+      title="World metres shown per CSS pixel; lower values zoom in"
+    >
+      <span className="text-[10px] uppercase tracking-wide text-ink-dim">Scale</span>
+      {MAP_SCALE_PRESETS.map((scale) => (
+        <button
+          type="button"
+          key={scale}
+          onClick={() => onChange(scale)}
+          aria-pressed={value === scale}
+          className={`rounded border px-2 py-0.5 font-tabular text-[11px] transition-colors ${
+            value === scale
+              ? "border-accent bg-accent/15 text-accent"
+              : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
+          }`}
+        >
+          {formatMapScale(scale)}
+        </button>
+      ))}
+      <input
+        type="number"
+        aria-label="Map scale in metres per CSS pixel"
+        min={MIN_MAP_METERS_PER_PIXEL}
+        max={MAX_MAP_METERS_PER_PIXEL}
+        step={MAP_SCALE_STEP}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            setDraft(formatMapScale(value));
+            event.currentTarget.blur();
+          }
+        }}
+        className="w-16 rounded border border-edge bg-panel-2 px-1.5 py-0.5 text-right font-tabular text-[11px] text-ink"
+      />
+      <span className="whitespace-nowrap text-[10px] text-ink-dim">m/CSS px</span>
     </div>
   );
 }

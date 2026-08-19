@@ -367,6 +367,7 @@ working directory):
 | `GT7_SOURCE` | `udp` | `udp` (PlayStation) or `sim` (simulated laps) |
 | `GT7_PS_IP` | *(empty)* | Console IP; empty = broadcast auto-discovery |
 | `GT7_DB_PATH` | `data/gt7.db` | SQLite database path |
+| `GT7_METRICS_DB_PATH` | `data/gt7-metrics.db` | Comprehensive read-only Grafana mirror path |
 | `GT7_CARS_CSV` | `data/cars.csv` | Car ID → name lookup table |
 | `GT7_WS_RATE` | `30` | Live stream rate to the browser (Hz) |
 | `GT7_WEBHOOK_URL` | *(empty)* | Webhook for PB / session notifications (also settable in Admin) |

@@ -22,10 +22,11 @@ RUN pip install --no-cache-dir ./backend
 COPY --from=frontend /build/dist frontend/dist
 
 ENV GT7_DB_PATH=/data/gt7.db \
+    GT7_METRICS_DB_PATH=/metrics/gt7-metrics.db \
     GT7_CARS_CSV=/app/backend/data/cars.csv \
     PYTHONUNBUFFERED=1
 
-VOLUME /data
+VOLUME /data /metrics
 EXPOSE 8000
 EXPOSE 33740/udp
 

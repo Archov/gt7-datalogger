@@ -42,7 +42,12 @@ def _try_decrypt(data: bytes, xor: int) -> bytes | None:
     iv1 = struct.unpack_from("<I", data, IV_OFFSET)[0]
     iv2 = iv1 ^ xor
     nonce = struct.pack("<II", iv2, iv1)
-    plain = Salsa20.new(key=KEY, nonce=nonce).decrypt(data)
+    plain_buffer = bytearray(Salsa20.new(key=KEY, nonce=nonce).decrypt(data))
+    # GT7 deliberately leaves iv1 readable on the wire.  Restore those four
+    # bytes after applying the stream cipher so the returned plaintext is a
+    # byte-exact representation of the logical packet, not keystream garbage.
+    plain_buffer[IV_OFFSET : IV_OFFSET + 4] = data[IV_OFFSET : IV_OFFSET + 4]
+    plain = bytes(plain_buffer)
     if struct.unpack_from("<I", plain, 0)[0] != MAGIC:
         return None
     return plain

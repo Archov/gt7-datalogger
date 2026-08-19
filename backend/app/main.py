@@ -19,6 +19,7 @@ from app.processing.cars import CarDatabase
 from app.race_engineer import VERBOSITY_MODES
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
+from app.storage.metrics import MetricsMirror
 from app.storage.repository import Repository
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
@@ -41,6 +42,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
+    metrics: MetricsMirror | None = None
+    try:
+        metrics = MetricsMirror(repo, settings.metrics_db_path, settings.db_path.parent)
+        await metrics.start()
+        repo.set_mutation_callback(metrics.enqueue)
+    except Exception:  # noqa: BLE001 -- the primary recorder must remain available
+        metrics = None
+        log.exception("metrics mirror is unavailable; primary telemetry capture will continue")
 
     # Settings changed via the admin page override env defaults.
     stored = await repo.get_settings()
@@ -82,6 +91,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     yield
     await service.stop()
+    repo.set_mutation_callback(None)
+    if metrics is not None:
+        await metrics.stop()
     await engine.dispose()
 
 

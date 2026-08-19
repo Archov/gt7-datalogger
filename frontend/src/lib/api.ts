@@ -2,6 +2,8 @@ import type { LayoutConfig, LayoutSummary } from "./layout";
 import type {
   AdminSettings,
   AdminStats,
+  ArchiveHydrationMode,
+  ArchiveHydrationStatus,
   CompareResult,
   ConnectionStatus,
   DeviationResult,
@@ -186,6 +188,9 @@ export const api = {
       get<LogRecord[]>(`/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
     clearLogs: () => send<{ status: string }>("/api/admin/logs", "DELETE"),
     stats: () => get<AdminStats>("/api/admin/stats"),
+    archiveHydration: () => get<ArchiveHydrationStatus>("/api/admin/archive-hydration"),
+    startArchiveHydration: (mode: ArchiveHydrationMode) =>
+      send<ArchiveHydrationStatus>("/api/admin/archive-hydration", "POST", { mode }),
     restartSource: () => send<ConnectionStatus>("/api/admin/restart-source", "POST"),
     clearData: () => send<{ status: string }>("/api/admin/clear-data", "POST"),
     vacuum: () => send<{ status: string }>("/api/admin/vacuum", "POST"),

@@ -69,6 +69,7 @@ nav:
       - Race Engineer (voice): guide/race-engineer.md
       - Widget reference: guide/widgets.md
       - Admin view: guide/admin.md
+      - Grafana: guide/grafana.md
   - How it works:
       - Architecture: internals/architecture.md
       - Telemetry capture: internals/telemetry-capture.md
@@ -84,5 +85,6 @@ nav:
       - REST & WebSocket API: reference/api.md
       - Lap file format: reference/lap-file-format.md
       - Raw telemetry archive: reference/raw-telemetry-archive.md
+      - Packet field catalog: reference/packet-field-catalog.md
       - LLM session export: reference/llm-session-export.md
       - Troubleshooting: reference/troubleshooting.md

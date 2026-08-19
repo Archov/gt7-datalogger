@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,7 +28,7 @@ from app.storage.db import (
 EXPORT_VERSION = 3
 
 
-def lap_summary(row: LapRow) -> dict[str, Any]:
+def lap_summary(row: LapRow, metrics_revision: int | None = None) -> dict[str, Any]:
     return {
         "id": row.id,
         "session_id": row.session_id,
@@ -53,6 +55,7 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "counts_for_best": row.counts_for_best,
         "off_track_count": row.off_track_count,
         "clean_lap": row.clean_lap,
+        "metrics_revision": metrics_revision or row.__dict__.get("metrics_revision", 1),
         "event_counts": _event_counts(row.events_json),
         "telemetry_meta": (
             json.loads(row.telemetry_meta_json) if row.telemetry_meta_json else None
@@ -78,9 +81,70 @@ def _json_object(raw: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+async def _hydration_metadata(
+    db: AsyncSession, session_ids: list[int]
+) -> dict[int, dict[str, Any] | None]:
+    """Read additive hydration metadata, tolerating an unmigrated read-only DB."""
+    if not session_ids:
+        return {}
+    try:
+        rows = (
+            await db.execute(
+                select(SessionRow.id, SessionRow.telemetry_hydration_meta_json).where(
+                    SessionRow.id.in_(session_ids)
+                )
+            )
+        ).all()
+    except OperationalError:
+        return {session_id: None for session_id in session_ids}
+    return {session_id: _json_object(raw) for session_id, raw in rows}
+
+
+async def _session_revisions(db: AsyncSession, session_ids: list[int]) -> dict[int, int]:
+    if not session_ids:
+        return {}
+    try:
+        rows = (
+            await db.execute(
+                select(SessionRow.id, SessionRow.metrics_revision).where(
+                    SessionRow.id.in_(session_ids)
+                )
+            )
+        ).all()
+    except OperationalError:
+        return {session_id: 1 for session_id in session_ids}
+    return {int(row_id): int(revision) for row_id, revision in rows}
+
+
+async def _lap_revisions(db: AsyncSession, lap_ids: list[int]) -> dict[int, int]:
+    if not lap_ids:
+        return {}
+    try:
+        rows = (
+            await db.execute(
+                select(LapRow.id, LapRow.metrics_revision).where(LapRow.id.in_(lap_ids))
+            )
+        ).all()
+    except OperationalError:
+        return {lap_id: 1 for lap_id in lap_ids}
+    return {int(row_id): int(revision) for row_id, revision in rows}
+
+
 class Repository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
+        self._mutation_callback: Callable[[str, int, CompletedLap | None], None] | None = None
+
+    def set_mutation_callback(
+        self, callback: Callable[[str, int, CompletedLap | None], None] | None
+    ) -> None:
+        self._mutation_callback = callback
+
+    def _notify_metrics(
+        self, operation: str, identifier: int = 0, lap: CompletedLap | None = None
+    ) -> None:
+        if self._mutation_callback is not None:
+            self._mutation_callback(operation, identifier, lap)
 
     async def create_session(self, info: SessionInfo, car_name: str) -> int:
         async with self._sf() as db:
@@ -96,7 +160,13 @@ class Repository:
             row = await db.get(SessionRow, session_id)
             if row is not None:
                 row.raw_archive_meta_json = json.dumps(metadata, separators=(",", ":"))
+                await db.execute(
+                    update(SessionRow)
+                    .where(SessionRow.id == session_id)
+                    .values(metrics_revision=SessionRow.metrics_revision + 1)
+                )
                 await db.commit()
+                self._notify_metrics("reconcile")
 
     async def get_session_archive_metadata(self, session_id: int) -> dict[str, object] | None:
         async with self._sf() as db:
@@ -105,6 +175,100 @@ class Repository:
                 return None
             value = json.loads(row.raw_archive_meta_json)
             return value if isinstance(value, dict) else None
+
+    async def get_session_hydration_metadata(self, session_id: int) -> dict[str, object] | None:
+        async with self._sf() as db:
+            return (await _hydration_metadata(db, [session_id])).get(session_id)
+
+    async def persist_session_hydration(
+        self,
+        session_id: int,
+        updates: dict[int, dict[str, list[float]]],
+        expected: dict[int, tuple[int, int, int, list[float]]],
+        metadata: dict[str, object],
+        *,
+        replace_channels: set[str] | None = None,
+    ) -> tuple[bool, int]:
+        """Atomically merge recovered channels and record the hydration outcome.
+
+        Existing aligned channels remain authoritative unless a caller explicitly
+        identifies a semantically-invalid group (for example an invalid quaternion).
+        The persisted lap identity and time grid are revalidated inside the write
+        transaction so a concurrent import/delete cannot receive replayed data.
+        """
+        replace = replace_channels or set()
+        async with self._sf() as db:
+            session = await db.get(SessionRow, session_id)
+            if session is None:
+                return False, 0
+            rows = (
+                (
+                    await db.execute(
+                        select(LapRow).where(LapRow.session_id == session_id).order_by(LapRow.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_id = {row.id: row for row in rows}
+            changed = 0
+            for lap_id, channels in updates.items():
+                row = by_id.get(lap_id)
+                identity = expected.get(lap_id)
+                if row is None or identity is None:
+                    await db.rollback()
+                    return False, 0
+                car_id, number, time_ms, target_t = identity
+                if (row.car_id, row.number, row.time_ms) != (car_id, number, time_ms):
+                    await db.rollback()
+                    return False, 0
+                samples = json.loads(row.samples_json)
+                current_t = samples.get("t") if isinstance(samples, dict) else None
+                if current_t != target_t:
+                    await db.rollback()
+                    return False, 0
+                size = len(target_t)
+                for channel, values in sorted(channels.items()):
+                    if len(values) != size or any(
+                        not isinstance(value, (int, float)) or not math.isfinite(float(value))
+                        for value in values
+                    ):
+                        continue
+                    current = samples.get(channel)
+                    if (
+                        channel not in replace
+                        and isinstance(current, list)
+                        and len(current) == size
+                    ):
+                        continue
+                    samples[channel] = values
+                    changed += 1
+                row.samples_json = json.dumps(
+                    samples,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                    ensure_ascii=False,
+                )
+                await db.execute(
+                    update(LapRow)
+                    .where(LapRow.id == row.id)
+                    .values(metrics_revision=LapRow.metrics_revision + 1)
+                )
+            session.telemetry_hydration_meta_json = json.dumps(
+                metadata,
+                separators=(",", ":"),
+                allow_nan=False,
+                ensure_ascii=False,
+            )
+            await db.execute(
+                update(SessionRow)
+                .where(SessionRow.id == session_id)
+                .values(metrics_revision=SessionRow.metrics_revision + 1)
+            )
+            await db.commit()
+            if changed:
+                self._notify_metrics("reconcile")
+            return True, changed
 
     async def list_recording_archive_metadata(self) -> list[tuple[int, dict[str, object]]]:
         async with self._sf() as db:
@@ -181,7 +345,13 @@ class Repository:
                 samples_json=json.dumps(lap.samples, separators=(",", ":")),
             )
             db.add(row)
+            await db.execute(
+                update(SessionRow)
+                .where(SessionRow.id == session_id)
+                .values(metrics_revision=SessionRow.metrics_revision + 1)
+            )
             await db.commit()
+            self._notify_metrics("lap", row.id, lap)
             return row.id
 
     async def list_sessions(self) -> list[dict[str, Any]]:
@@ -208,6 +378,7 @@ class Repository:
             except OperationalError:
                 # Direct readers of an old database may not have run init_db yet.
                 overrides = {}
+            revisions = await _session_revisions(db, [s.id for s, _count, _best in rows])
             return [
                 {
                     "id": s.id,
@@ -219,6 +390,7 @@ class Repository:
                     "lap_count": count,
                     "best_lap_time_ms": best,
                     "drivetrain_override": overrides.get(s.car_id),
+                    "metrics_revision": revisions.get(s.id, 1),
                 }
                 for s, count, best in rows
             ]
@@ -229,12 +401,15 @@ class Repository:
             row = await db.get(SessionRow, session_id)
             if row is None:
                 return None
+            revision = (await _session_revisions(db, [session_id])).get(session_id, 1)
             return {
                 "id": row.id,
                 "started_at": row.started_at,
                 "car_id": row.car_id,
                 "car_name": row.car_name,
                 "track_name": row.track_name,
+                "note": row.note,
+                "metrics_revision": revision,
             }
 
     async def session_lap_stats(self, session_id: int) -> dict[str, Any]:
@@ -274,24 +449,35 @@ class Repository:
             await db.execute(
                 update(LapRow)
                 .where(LapRow.session_id == session_id)
-                .values(counts_for_best=LapRow.number.notin_(numbers) if numbers else True)
+                .values(
+                    counts_for_best=LapRow.number.notin_(numbers) if numbers else True,
+                    metrics_revision=LapRow.metrics_revision + 1,
+                )
+            )
+            await db.execute(
+                update(SessionRow)
+                .where(SessionRow.id == session_id)
+                .values(metrics_revision=SessionRow.metrics_revision + 1)
             )
             await db.commit()
+        self._notify_metrics("reconcile")
 
     async def list_laps(self, session_id: int | None = None) -> list[dict[str, Any]]:
         async with self._sf() as db:
             q = select(LapRow).order_by(LapRow.id.desc())
             if session_id is not None:
                 q = q.where(LapRow.session_id == session_id)
-            rows = (await db.execute(q)).scalars()
-            return [lap_summary(r) for r in rows]
+            rows = list((await db.execute(q)).scalars())
+            revisions = await _lap_revisions(db, [row.id for row in rows])
+            return [lap_summary(row, revisions.get(row.id, 1)) for row in rows]
 
     async def get_lap(self, lap_id: int, with_samples: bool = True) -> dict[str, Any] | None:
         async with self._sf() as db:
             row = (await db.execute(select(LapRow).where(LapRow.id == lap_id))).scalar_one_or_none()
             if row is None:
                 return None
-            data = lap_summary(row)
+            revision = (await _lap_revisions(db, [lap_id])).get(lap_id, 1)
+            data = lap_summary(row, revision)
             data["events"] = json.loads(row.events_json or "[]")
             data["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
             if with_samples:
@@ -312,6 +498,58 @@ class Repository:
             ).all()
             return {lap_id: json.loads(ev or "[]") for lap_id, ev in rows}
 
+    async def get_lap_analysis_bundles(self, lap_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """Load selected laps grouped with the archive metadata for their sessions."""
+        async with self._sf() as db:
+            lap_rows = (
+                (await db.execute(select(LapRow).where(LapRow.id.in_(lap_ids)).order_by(LapRow.id)))
+                .scalars()
+                .all()
+            )
+            session_ids = sorted({row.session_id for row in lap_rows})
+            session_rows = (
+                (
+                    await db.execute(
+                        select(SessionRow)
+                        .where(SessionRow.id.in_(session_ids))
+                        .order_by(SessionRow.id)
+                    )
+                )
+                .scalars()
+                .all()
+                if session_ids
+                else []
+            )
+            hydration_by_id = await _hydration_metadata(db, session_ids)
+            session_revisions = await _session_revisions(db, session_ids)
+            lap_revisions = await _lap_revisions(db, [row.id for row in lap_rows])
+            bundles: dict[int, dict[str, Any]] = {}
+            for session in session_rows:
+                bundles[session.id] = {
+                    "session": {
+                        "id": session.id,
+                        "started_at": session.started_at,
+                        "car_id": session.car_id,
+                        "car_name": session.car_name,
+                        "note": session.note,
+                        "track_name": session.track_name,
+                        "metrics_revision": session_revisions.get(session.id, 1),
+                    },
+                    "laps": [],
+                    "raw_archive_meta": _json_object(session.raw_archive_meta_json),
+                    "telemetry_hydration_meta": hydration_by_id.get(session.id),
+                }
+            for row in lap_rows:
+                bundle = bundles.get(row.session_id)
+                if bundle is None:
+                    continue
+                lap = lap_summary(row, lap_revisions.get(row.id, 1))
+                lap["events"] = json.loads(row.events_json or "[]")
+                lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
+                lap["samples"] = json.loads(row.samples_json)
+                bundle["laps"].append(lap)
+            return bundles
+
     async def get_session_analysis_data(self, session_id: int) -> dict[str, Any] | None:
         """Load one session and all persisted lap analysis inputs.
 
@@ -322,14 +560,19 @@ class Repository:
             session = await db.get(SessionRow, session_id)
             if session is None:
                 return None
-            rows = (
-                await db.execute(
-                    select(LapRow).where(LapRow.session_id == session_id).order_by(LapRow.id)
-                )
-            ).scalars()
+            rows = list(
+                (
+                    await db.execute(
+                        select(LapRow).where(LapRow.session_id == session_id).order_by(LapRow.id)
+                    )
+                ).scalars()
+            )
+            hydration_meta = (await _hydration_metadata(db, [session_id])).get(session_id)
+            session_revision = (await _session_revisions(db, [session_id])).get(session_id, 1)
+            lap_revisions = await _lap_revisions(db, [row.id for row in rows])
             laps: list[dict[str, Any]] = []
             for row in rows:
-                lap = lap_summary(row)
+                lap = lap_summary(row, lap_revisions.get(row.id, 1))
                 lap["events"] = json.loads(row.events_json or "[]")
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
                 lap["samples"] = json.loads(row.samples_json)
@@ -346,9 +589,11 @@ class Repository:
                     "car_name": session.car_name,
                     "note": session.note,
                     "track_name": session.track_name,
+                    "metrics_revision": session_revision,
                 },
                 "laps": laps,
                 "raw_archive_meta": _json_object(session.raw_archive_meta_json),
+                "telemetry_hydration_meta": hydration_meta,
                 "drivetrain_override": (
                     drivetrain_override.drivetrain if drivetrain_override is not None else None
                 ),
@@ -380,11 +625,13 @@ class Repository:
             await db.execute(delete(LapRow).where(LapRow.session_id == session_id))
             await db.execute(delete(SessionRow).where(SessionRow.id == session_id))
             await db.commit()
+        self._notify_metrics("delete_session", session_id)
 
     async def delete_lap(self, lap_id: int) -> None:
         async with self._sf() as db:
             await db.execute(delete(LapRow).where(LapRow.id == lap_id))
             await db.commit()
+        self._notify_metrics("delete_lap", lap_id)
 
     async def export_lap(self, lap_id: int) -> dict[str, Any] | None:
         lap = await self.get_lap(lap_id, with_samples=True)
@@ -441,7 +688,13 @@ class Repository:
             row = await db.get(SessionRow, session_id)
             if row is not None:
                 row.track_name = track_name
+                await db.execute(
+                    update(SessionRow)
+                    .where(SessionRow.id == session_id)
+                    .values(metrics_revision=SessionRow.metrics_revision + 1)
+                )
                 await db.commit()
+                self._notify_metrics("reconcile")
 
     # --- overlay/dashboard layouts ------------------------------------------
 
@@ -547,6 +800,7 @@ class Repository:
             await db.execute(delete(LapRow))
             await db.execute(delete(SessionRow))
             await db.commit()
+        self._notify_metrics("clear")
 
     async def vacuum(self) -> None:
         async with self._sf() as db:

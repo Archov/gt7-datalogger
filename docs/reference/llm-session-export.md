@@ -22,7 +22,8 @@ rounded by meaning: milliseconds for time, 0.1 m for distances, 0.1 km/h for spe
 angles, angular velocity, and slip. Missing values are JSON `null`; a separate channel
 availability table distinguishes missing telemetry from a real zero.
 `channel_provenance` additionally groups each lap's channels by `persisted`,
-`archive_replay`, or `unavailable`; provenance is not repeated in sample rows.
+`archive_replay`, or `unavailable`; provenance is not repeated in sample rows. Successful
+on-demand recovery is committed before export and therefore appears as `persisted`.
 
 ## Detail levels
 
@@ -152,9 +153,10 @@ When a requested normalized channel is absent from an historical lap, the export
 can recover it on demand from that session's complete raw `.gt7r` archive. Replay uses
 the current production packet parser and lap processor, matches a reconstructed lap by
 car ID, GT7 lap number, and completed lap time, then aligns recovered data onto the
-persisted lap-relative time grid. Existing persisted channels always win. Recovery is
-read-only: exports do not rewrite old sample blobs. Missing, interrupted, truncated, or
-corrupt archives simply leave the channel unavailable.
+persisted lap-relative time grid. Existing persisted channels always win. Missing
+recovered channels are added atomically to old sample blobs. Missing, interrupted,
+truncated, or corrupt archives simply leave the channel unavailable; outcomes are cached
+per archive fingerprint and hydration version to prevent repeated failed replay.
 
 For archival data or unrestricted source-rate analysis, the existing per-lap raw JSON
 and CSV exports remain available.

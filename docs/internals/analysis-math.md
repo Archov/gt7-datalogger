@@ -53,8 +53,24 @@ classified into an input zone:
 | Coasting | otherwise | blue |
 
 Other selected laps overlay as solid lines in their chart colors, so line differences
-are visible spatially. The chart cursor maps distance → grid index → coordinates, which
-is how hovering a chart moves the dots on the map.
+are visible spatially. Cursor markers are a same-time snapshot: the graph cursor first
+determines elapsed time on the reference lap, then each selected lap is interpolated on
+its own time/distance grid at that instant. Therefore a positive time delta (slower than
+the reference at the selected distance) appears behind the reference marker, while a
+negative delta appears ahead. A fixed-size white chevron shows chassis direction from
+the native vehicle quaternion (local nose `-Z`); its lap-colored outline identifies the
+lap. A smaller lap-colored chevron independently shows native X/Z velocity direction
+when enabled and horizontal speed is at least 0.1 m/s. If orientation is unavailable,
+the existing cursor dot remains while a valid travel chevron can still be shown. The
+angular difference is body-slip evidence only when both chevrons exist.
+
+The map uses world X horizontally and inverted world Z vertically, so `+X` points right
+and `+Z` points down. Cursor-follow scale is metres per CSS pixel: resizing reveals more
+world area without changing marker size or spatial scale. `Keep laps in frame` is
+enabled by default: the selected scale becomes the minimum zoom, the camera pans only as
+far as needed, and it temporarily zooms out when the same-time lap-marker spread cannot
+fit with its fixed CSS-pixel margin. Disabling the setting restores the exact selected
+scale centered on the reference marker.
 
 ## Speed peaks & valleys
 

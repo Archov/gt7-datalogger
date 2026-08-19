@@ -54,7 +54,11 @@ export default function App() {
     <TooltipProvider delayDuration={300}>
       <div className="flex h-full flex-col">
         <StatusBar view={route.view} />
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main
+          className={`min-h-0 flex-1 overflow-y-auto ${
+            route.view === "analysis" ? "xl:overflow-hidden" : ""
+          }`}
+        >
           {route.view === "live" && <LiveView />}
           {route.view === "analysis" && <AnalysisView request={analysisRequest} />}
           {route.view === "sessions" && <SessionsView />}

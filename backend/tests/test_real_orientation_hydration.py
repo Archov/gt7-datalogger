@@ -26,8 +26,7 @@ HAS_SESSION_17_FIXTURE = REAL_DATABASE.is_file() and REAL_ARCHIVE.is_file()
 def _session_sample_blobs(database: Path) -> dict[int, bytes]:
     with sqlite3.connect(database) as connection:
         rows = connection.execute(
-            "SELECT id, CAST(samples_json AS BLOB) FROM laps "
-            "WHERE session_id = 17 ORDER BY id"
+            "SELECT id, CAST(samples_json AS BLOB) FROM laps WHERE session_id = 17 ORDER BY id"
         ).fetchall()
     return {int(lap_id): bytes(blob) for lap_id, blob in rows}
 
@@ -54,7 +53,7 @@ async def test_session_17_hydrates_orientation_on_standard_http_export_after_res
         assert not set(ORIENTATION_CHANNELS).intersection(samples)
 
     from app import main
-    from app.processing import laps, telemetry_resolution
+    from app.processing import laps, telemetry_hydration, telemetry_resolution
     from app.telemetry import packet, raw_archive, simulator
     from app.telemetry.listener import UdpTelemetrySource
 
@@ -105,8 +104,7 @@ async def test_session_17_hydrates_orientation_on_standard_http_export_after_res
     monkeypatch.setattr(packet, "parse_packet", counted_parse)
     monkeypatch.setattr(laps.LapProcessor, "feed", counted_feed)
     monkeypatch.setattr(telemetry_resolution, "resolve_session_telemetry", counted_resolution)
-    # routes imported the callable directly, so spy at that integration point too.
-    monkeypatch.setattr("app.api.routes.resolve_session_telemetry", counted_resolution)
+    monkeypatch.setattr(telemetry_hydration, "resolve_session_telemetry", counted_resolution)
 
     application = main.create_app()
     lifespan = application.router.lifespan_context(application)
@@ -126,16 +124,14 @@ async def test_session_17_hydrates_orientation_on_standard_http_export_after_res
             document = first.json()
             assert_standard_document_matches_guide(document)
             provenance_rows = {
-                row[0]: dict(
-                    zip(document["channel_provenance"]["columns"], row, strict=True)
-                )
+                row[0]: dict(zip(document["channel_provenance"]["columns"], row, strict=True))
                 for row in document["channel_provenance"]["rows"]
             }
             expected_laps = set(before)
             assert set(provenance_rows) == expected_laps
             for state in provenance_rows.values():
-                assert set(ORIENTATION_CHANNELS).issubset(state["archive_replay"])
-                assert not set(ORIENTATION_CHANNELS).intersection(state["persisted"])
+                assert set(ORIENTATION_CHANNELS).issubset(state["persisted"])
+                assert state["archive_replay"] == []
 
             traces = {row[0]: (row[1], row[2]) for row in document["line_traces"]["rows"]}
             assert set(traces) == expected_laps
@@ -145,12 +141,19 @@ async def test_session_17_hydrates_orientation_on_standard_http_export_after_res
                 assert any(row[chassis] is not None for row in rows)
                 assert any(row[slip] is not None for row in rows)
 
-            assert _session_sample_blobs(database) == before
+            after_first = _session_sample_blobs(database)
+            assert after_first != before
+            for lap_id, blob in after_first.items():
+                samples = json.loads(blob)
+                assert set(ORIENTATION_CHANNELS).issubset(samples)
+                original = json.loads(before[lap_id])
+                for channel, values in original.items():
+                    assert samples[channel] == values
             second = await client.get(
                 "/api/sessions/17/export.llm.json?detail=standard&segment_m=100"
             )
             assert second.status_code == 200
             assert second.content == first.content
-            assert counts["archive_open"] == 2
-            assert counts["resolution"] == 2
-            assert _session_sample_blobs(database) == before
+            assert counts["archive_open"] == 1
+            assert counts["resolution"] == 1
+            assert _session_sample_blobs(database) == after_first

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import struct
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -19,6 +20,7 @@ from dataclasses import dataclass, replace
 from app.config import Settings
 from app.models import TelemetryPacket
 from app.telemetry.crypto import decrypt_packet
+from app.telemetry.diagnostics import record_decode_error
 from app.telemetry.packet import HEARTBEAT_FORMATS, parse_packet
 from app.telemetry.raw_archive import CapturedPayload
 
@@ -107,7 +109,9 @@ class UdpTelemetrySource:
         target = self._settings.ps_ip or "<broadcast>"
         log.info(
             "UDP telemetry listening on :%d, heartbeat to %s:%d",
-            self._settings.telemetry_port, target, self._settings.heartbeat_port,
+            self._settings.telemetry_port,
+            target,
+            self._settings.heartbeat_port,
         )
 
     async def stop(self) -> None:
@@ -136,8 +140,25 @@ class UdpTelemetrySource:
         plain = decrypt_packet(data)
         if plain is None:
             self._decode_errors += 1
+            record_decode_error(
+                f"udp: decryption/magic failure for {len(data)} bytes; "
+                "attempted size-preferred, A, B, and ~ XOR profiles"
+            )
             if self._decode_errors in (1, 100):
                 log.warning("failed to decrypt packet from %s (bad key/format?)", addr[0])
+            if self._on_raw_packet is not None:
+                self._on_raw_packet(
+                    CapturedPayload(
+                        payload=b"",
+                        wire_payload=data,
+                        decode_status="decode_failed",
+                        received_monotonic_ns=received_monotonic_ns,
+                        received_unix_ns=received_unix_ns,
+                        receiver_order=self._receive_order,
+                        source="udp",
+                    )
+                )
+            self._receive_order += 1
             return
         capture = CapturedPayload(
             payload=plain,
@@ -145,12 +166,22 @@ class UdpTelemetrySource:
             received_unix_ns=received_unix_ns,
             receiver_order=self._receive_order,
             source="udp",
+            wire_payload=data,
         )
         packet: TelemetryPacket | None
         try:
             packet = parse_packet(plain)
-        except ValueError:
+        except ValueError as exc:
             packet = None
+            capture = replace(capture, decode_status=f"parser_error:{exc}")
+            record_decode_error(f"udp: {exc}")
+        if packet is not None:
+            packet.received_monotonic_ns = received_monotonic_ns
+            packet.received_unix_ns = received_unix_ns
+            packet.receiver_order = self._receive_order
+            packet.source = "udp"
+            packet.wire_nonce_iv1 = struct.unpack_from("<I", data, 0x40)[0]
+            packet.native_fields["nonce_iv1"] = packet.wire_nonce_iv1
         token = None
         if self._on_raw_packet is not None:
             token = self._on_raw_packet(replace(capture, packet=packet))

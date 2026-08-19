@@ -35,7 +35,7 @@ async def client(tmp_path):
     await engine.dispose()
 
 
-async def drive_laps(service: TelemetryService, laps: int = 2) -> None:
+async def drive_laps(service: TelemetryService, laps: int = 2, car_id: int = 7) -> None:
     # GT7 keeps last_lap_time_ms set to the previous lap's time on every packet.
     for lap in range(1, laps + 1):
         for tick in range(60):
@@ -49,7 +49,7 @@ async def drive_laps(service: TelemetryService, laps: int = 2) -> None:
                         throttle=255,
                         fuel_level=100.0 - lap,
                         flags=ON_TRACK,
-                        car_id=7,
+                        car_id=car_id,
                     )
                 )
             )
@@ -61,7 +61,7 @@ async def drive_laps(service: TelemetryService, laps: int = 2) -> None:
                 last_lap_time_ms=59_000,
                 fuel_level=100.0 - laps - 1.5,
                 flags=ON_TRACK,
-                car_id=7,
+                car_id=car_id,
             )
         )
     )
@@ -130,13 +130,37 @@ async def test_compare_endpoint(client) -> None:
     await drive_laps(service, laps=2)
     laps = (await c.get("/api/laps")).json()
     ids = [lap["id"] for lap in laps]
-    resp = await c.get(f"/api/analysis/compare?laps={ids[0]},{ids[1]}&ref={ids[1]}")
+    resp = await c.get(
+        f"/api/analysis/compare?laps={ids[0]},{ids[1]}&ref={ids[1]}"
+        "&channels=speed,orientation_x,orientation_y,orientation_z,orientation_w,"
+        "velocity_x,velocity_y,velocity_z"
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert str(ids[0]) in data["laps"]
     assert "delta" in data["laps"][str(ids[0])]
     assert "pos_x" in data["laps"][str(ids[1])]["series"]
+    assert "orientation_w" in data["laps"][str(ids[1])]["series"]
+    assert "velocity_x" in data["laps"][str(ids[1])]["series"]
     assert "peaks_valleys" in data["laps"][str(ids[1])]
+
+
+async def test_compare_endpoint_preserves_cross_session_selection(client) -> None:
+    c, service = client
+    await drive_laps(service, laps=1, car_id=7)
+    await drive_laps(service, laps=1, car_id=8)
+    laps = (await c.get("/api/laps")).json()
+    assert {lap["session_id"] for lap in laps} == {1, 2}
+    ids = [lap["id"] for lap in laps]
+
+    response = await c.get(
+        f"/api/analysis/compare?laps={ids[0]},{ids[1]}&ref={ids[1]}"
+        "&channels=orientation_x,orientation_y,orientation_z,orientation_w,"
+        "velocity_x,velocity_y,velocity_z"
+    )
+
+    assert response.status_code == 200
+    assert set(response.json()["laps"]) == {str(ids[0]), str(ids[1])}
 
 
 async def test_export_import_roundtrip(client) -> None:
@@ -151,12 +175,14 @@ async def test_export_import_roundtrip(client) -> None:
     exported = export_response.json()
     assert exported["format"] == "gt7-datalogger-lap"
     assert "orientation_w" in exported["lap"]["samples"]
+    assert "velocity_x" in exported["lap"]["samples"]
 
     csv_response = await c.get(f"/api/laps/{laps[0]['id']}/export.csv")
     assert csv_response.headers["content-disposition"] == attachment_header(
         lap_export_filename(laps[0], sessions[0], "csv")
     )
     assert "Orientation X" in csv_response.text
+    assert "Velocity X" in csv_response.text
 
     resp = await c.post("/api/laps/import", json=exported)
     assert resp.status_code == 200

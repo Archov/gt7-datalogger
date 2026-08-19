@@ -1,7 +1,8 @@
 # Raw telemetry archive (`.gt7r`)
 
-Raw archives preserve the complete decrypted GT7 packet payload before the typed parser
-selects fields. They are the lossless source for future parser discoveries. SQLite lap
+Version 2 raw archives preserve the original encrypted UDP datagram at the receive
+boundary, before decryption or parsing. They are the lossless source for future parser
+discoveries. SQLite lap
 samples remain the efficient interpreted form used by the UI and analysis, while the LLM
 JSON remains a curated analytical export; neither contains the raw packet stream.
 
@@ -10,12 +11,12 @@ Archival is enabled by default. Live sessions append to
 `session-<id>.gt7r.zip`. A crash leaves the uncompressed file intact and readable through
 its final complete record. Session deletion removes its associated archive.
 
-Only payloads that pass GT7 Salsa20 decryption and magic validation are archived. The
-stored bytes are exactly those supplied to `parse_packet`, including reserved bytes and
-bytes beyond the newest packet layout understood by this release. An unfamiliar size is
-not truncated or rejected merely for being unfamiliar.
+Datagrams that fail decryption, magic validation, or exact-length validation are retained
+with a decode-status flag but are never passed to lap processing. Successful v2 records
+store the encrypted bytes and readers expose both `wire_payload` and decrypted `payload`.
+The reader remains backward compatible with v1 archives, whose payloads were plaintext.
 
-## Version 1 binary layout
+## Version 2 binary layout
 
 All integers are little-endian. Sizes declared in headers include the header itself.
 
@@ -24,7 +25,7 @@ File header (`<8sHHQ`, currently 20 bytes):
 | Field | Type | Meaning |
 | --- | --- | --- |
 | magic | 8 bytes | `GT7RAW\0\0` |
-| version | `uint16` | container version, currently 1 |
+| version | `uint16` | container version, currently 2; versions 1 and 2 are readable |
 | header size | `uint16` | total file-header bytes |
 | creation Unix ns | `uint64` | wall clock sampled with the first payload |
 
@@ -34,7 +35,7 @@ Each record begins with `<4sHHQQIiiBBHI` (currently 44 bytes):
 | --- | --- | --- |
 | magic | 4 bytes | `PKT1` |
 | header size | `uint16` | total record-header bytes |
-| flags | `uint16` | reserved, currently zero |
+| flags | `uint16` | bit 0 encrypted wire payload; bit 1 decoder failure |
 | monotonic offset ns | `uint64` | time since the first archived payload |
 | order | `uint64` | receiver order supplied by the source |
 | payload length | `uint32` | following payload bytes |
@@ -44,7 +45,7 @@ Each record begins with `<4sHHQQIiiBBHI` (currently 44 bytes):
 | packet format | `uint8` | 0 unknown, 1 A, 2 B, 3 `~`, 4 C |
 | reserved | `uint16` | zero |
 | CRC32 | `uint32` | checksum of the payload |
-| payload | variable | exact decrypted telemetry payload |
+| payload | variable | v2 encrypted wire datagram, or v1 plaintext packet |
 
 Readers honor both header-size fields: they read the known v1 prefix and skip declared
 extensions. A version they do not support is rejected instead of guessed. Payload lengths
@@ -85,11 +86,15 @@ remain authoritative. Continuous values interpolate onto the persisted time grid
 discrete values use nearest-neighbor, and quaternion orientation uses shortest-path
 spherical interpolation.
 
-Hydration exists only in memory for the request. It never rewrites historical lap JSON
-or the archive. Export `channel_provenance` reports which channels came from
-`persisted`, `archive_replay`, or remain `unavailable`. Any missing, interrupted,
-truncated, corrupt, or ambiguous archive fails closed without preventing the ordinary
-export.
+Recovered channels are committed atomically to historical lap JSON on its existing time
+grid; the archive itself is never changed. Later requests report those channels as
+`persisted` and do not replay the archive. `archive_replay` describes only a transient
+resolver result, not durable origin metadata. Any missing, interrupted, truncated,
+corrupt, or ambiguous archive fails closed without preventing the ordinary export.
+
+**Admin → Reprocess archived laps** performs hydration ahead of time. It processes
+sessions sequentially in the background and offers stale-only, retry-incomplete, and
+force-all modes.
 
 The normal reader stops before a truncated final header or payload and then reports
 `truncated_tail = True`. Strict mode raises `TruncatedArchiveError`. Bad magic, CRC,

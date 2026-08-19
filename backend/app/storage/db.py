@@ -28,6 +28,11 @@ class SessionRow(Base):
     note: Mapped[str] = mapped_column(default="")
     track_name: Mapped[str] = mapped_column(default="")
     raw_archive_meta_json: Mapped[str] = mapped_column(Text, default="")
+    # Deferred so read-only tooling can still inspect a legacy database without
+    # first mutating it through init_db(). Normal application startup migrates it.
+    telemetry_hydration_meta_json: Mapped[str] = mapped_column(Text, default="", deferred=True)
+    # Deferred so read-only historical tooling can inspect an unmigrated DB.
+    metrics_revision: Mapped[int] = mapped_column(default=1, deferred=True)
 
     laps: Mapped[list[LapRow]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
@@ -116,6 +121,7 @@ class LapRow(Base):
     gearing_json: Mapped[str] = mapped_column(Text, default="")
     telemetry_meta_json: Mapped[str] = mapped_column(Text, default="")
     samples_json: Mapped[str] = mapped_column(Text)
+    metrics_revision: Mapped[int] = mapped_column(default=1, deferred=True)
 
     session: Mapped[SessionRow] = relationship(back_populates="laps")
 
@@ -145,6 +151,16 @@ _SQLITE_MIGRATIONS = (
         "raw_archive_meta_json",
         "ALTER TABLE sessions ADD COLUMN raw_archive_meta_json TEXT NOT NULL DEFAULT ''",
     ),
+    (
+        "sessions",
+        "telemetry_hydration_meta_json",
+        "ALTER TABLE sessions ADD COLUMN telemetry_hydration_meta_json TEXT NOT NULL DEFAULT ''",
+    ),
+    (
+        "sessions",
+        "metrics_revision",
+        "ALTER TABLE sessions ADD COLUMN metrics_revision INTEGER NOT NULL DEFAULT 1",
+    ),
     ("laps", "tod_ms", "ALTER TABLE laps ADD COLUMN tod_ms INTEGER NOT NULL DEFAULT -1"),
     (
         "laps",
@@ -164,6 +180,7 @@ _SQLITE_MIGRATIONS = (
         ("telemetry_meta_json", "TEXT NOT NULL DEFAULT ''"),
         ("off_track_count", "INTEGER NOT NULL DEFAULT -1"),
         ("clean_lap", "BOOLEAN"),
+        ("metrics_revision", "INTEGER NOT NULL DEFAULT 1"),
     )
 )
 

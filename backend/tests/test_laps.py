@@ -62,12 +62,16 @@ async def test_signed_yaw_and_packet_a_optional_channels(setup) -> None:
         3,
         angular_velocity=(0.0, -0.25, 0.0),
         position=(1.0, 2.0, 3.0),
+        velocity=(4.0, -0.5, 6.0),
     )
     await proc.feed(make_packet(current_lap=2, last_lap_time_ms=10_000))
     samples = collector.laps[0].samples
     assert samples["yaw_rate"] == [0.25, 0.25, 0.25]
     assert samples["yaw_rate_signed"] == [-0.25, -0.25, -0.25]
     assert samples["pos_y"] == [2.0, 2.0, 2.0]
+    assert samples["velocity_x"] == [4.0, 4.0, 4.0]
+    assert samples["velocity_y"] == [-0.5, -0.5, -0.5]
+    assert samples["velocity_z"] == [6.0, 6.0, 6.0]
     assert samples["orientation_w"] == [1.0, 1.0, 1.0]
     assert "steering_wheel_rad" not in samples
     assert "surface" not in samples

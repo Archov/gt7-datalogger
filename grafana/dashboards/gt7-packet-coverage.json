@@ -1,0 +1,26 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "description": "Decoded sample counts by exact packet format and size.", "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 7, "w": 8, "x": 0, "y": 0}, "id": 1, "options": {"showHeader": true}, "targets": [{"format": "table", "rawQueryText": "SELECT packet_format,packet_size,COUNT(*) AS samples FROM samples GROUP BY packet_format,packet_size ORDER BY packet_size", "refId": "A"}], "title": "Packet formats", "type": "table"},
+    {"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "description": "Decoder schema, supported exact sizes, byte-coverage assertion, and rejected-packet diagnostics.", "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 7, "w": 8, "x": 8, "y": 0}, "id": 2, "options": {"showHeader": true}, "targets": [{"format": "table", "rawQueryText": "SELECT * FROM decoder_status", "refId": "A"}], "title": "Decoder status", "type": "table"},
+    {"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "description": "Background reconciliation state. Errors do not block primary telemetry writes.", "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 7, "w": 8, "x": 16, "y": 0}, "id": 3, "options": {"showHeader": true}, "targets": [{"format": "table", "rawQueryText": "SELECT * FROM mirror_status", "refId": "A"}], "title": "Mirror status", "type": "table"},
+    {"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "description": "Per-lap source and availability. Missing historical native fields remain explicitly unavailable.", "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 9, "w": 12, "x": 0, "y": 7}, "id": 4, "options": {"showHeader": true}, "targets": [{"format": "table", "rawQueryText": "SELECT source,available,COUNT(*) AS channels FROM lap_channel_provenance GROUP BY source,available ORDER BY source", "refId": "A"}], "title": "Channel provenance", "type": "table"},
+    {"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "description": "Native unknown values are evidence only. Their names encode byte offsets; no physical meaning is implied.", "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 9, "w": 12, "x": 12, "y": 7}, "id": 5, "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}}, "targets": [{"format": "time_series", "rawQueryText": "SELECT t AS time, ${unknown_channel:raw} AS value FROM samples WHERE lap_id=${lap:raw} AND ${unknown_channel:raw} IS NOT NULL ORDER BY sample_index", "refId": "A"}], "title": "$unknown_channel (raw/unknown)", "type": "timeseries"},
+    {"datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "description": "Independent checks of native evidence versus compatibility transforms.", "fieldConfig": {"defaults": {}, "overrides": []}, "gridPos": {"h": 9, "w": 24, "x": 0, "y": 16}, "id": 6, "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}}, "targets": [{"format": "time_series", "rawQueryText": "SELECT t AS time,native_speed_mps*3.6 AS native_speed_kmh,speed AS derived_speed_kmh,native_throttle_raw*100.0/255.0 AS native_throttle_pct,throttle AS derived_throttle_pct FROM samples WHERE lap_id=${lap:raw} ORDER BY sample_index", "refId": "A"}], "title": "Native versus normalized", "type": "timeseries"}
+  ],
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": ["gt7", "coverage"],
+  "templating": {"list": [
+    {"name": "lap", "label": "Lap", "type": "query", "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "query": "SELECT id AS __value, 'Session ' || session_id || ' / Lap ' || number AS __text FROM laps ORDER BY id DESC", "refresh": 1},
+    {"name": "unknown_channel", "label": "Unknown field", "type": "query", "datasource": {"type": "frser-sqlite-datasource", "uid": "gt7-metrics-sqlite"}, "query": "SELECT name AS __value, name || ' [' || unit || '; ' || confidence || ']' AS __text FROM channel_catalog WHERE classification IN ('unknown','padding') ORDER BY source_offset", "refresh": 1}
+  ]},
+  "time": {"from": "now-15m", "to": "now"},
+  "timezone": "browser",
+  "title": "GT7 Packet Coverage",
+  "uid": "gt7-packet-coverage",
+  "version": 1
+}

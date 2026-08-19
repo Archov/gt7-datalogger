@@ -278,22 +278,22 @@ between Turns N and N+1`.
 columns:[lap_id,channels]
 ```
 
-`channels`: resolved export-time usable normalized telemetry. May include
-`archive_replay`; NOT necessarily only persisted `samples_json`. Absent=>unavailable,
-NOT zero. Legacy all-zero `surface`=>unavailable.
+`channels`: resolved export-time usable normalized telemetry. Missing archive-recovered
+channels committed before export. Absent=>unavailable, NOT zero. Legacy all-zero
+`surface`=>unavailable.
 
 `channel_provenance`:
 
 ```text
 columns:[lap_id,persisted,archive_replay,unavailable]
 persisted: present in saved normalized lap
-archive_replay: on-demand raw-archive recovery
+archive_replay: transient raw-archive recovery
 unavailable: requested; neither persisted nor safely recoverable
 ```
 
-Rules: persisted wins; replay read-only; replay aligned to persisted lap identity/time
-grid; no historical sample rewrite; provenance = context/confidence, NOT quality rank.
-Current principal use: historical orientation recovery.
+Rules: persisted wins; replay aligned to persisted lap identity/time grid; recovered
+missing channels committed atomically; successful recovery=>persisted on export/later
+requests; provenance=context/confidence, NOT quality rank.
 
 Packet groups:
 
@@ -315,6 +315,7 @@ Canonical normalized sample registry:
 t, dist, speed, throttle, brake, coast, gear, rpm, boost, tire_slip,
 yaw_rate, yaw_rate_signed,
 pos_x, pos_y, pos_z,
+velocity_x, velocity_y, velocity_z,
 body_height, fuel,
 road_plane_x, road_plane_y, road_plane_z, road_plane_distance,
 slip_fl, slip_fr, slip_rl, slip_rr,
@@ -334,6 +335,7 @@ Normalized sample units:
 t: elapsed s                      dist: cumulative m
 speed: km/h                       throttle,brake,filtered inputs: percent
 coast: flag                       pos_x,pos_y,pos_z: m
+velocity_x,velocity_y,velocity_z: m/s
 orientation_x/y/z/w: unitless     body_height,sus_fl/fr/rl/rr: mm
 fuel: L                           tt_fl/fr/rl/rr: degrees Celsius
 boost: bar                        steering: rad

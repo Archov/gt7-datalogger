@@ -9,6 +9,7 @@ import { CHART_COLORS, EChart } from "@/components/EChart";
 import { channelValues, type ChannelDef } from "@/lib/channels";
 import { lapColor } from "@/lib/colors";
 import { speedUnit, type Units } from "@/lib/format";
+import type { TimelineDensity } from "@/lib/analysisWorkspace";
 import { AIDS_ASM, AIDS_TCS, type CompareResult, type LapEvent } from "@/lib/types";
 
 interface PanelDef {
@@ -22,7 +23,7 @@ interface PanelDef {
 
 // The time-diff panel is the anchor of the view and always first;
 // every other panel comes from the channel picker.
-const DELTA_PANEL: PanelDef = { key: "delta", title: "Time diff (s)", height: 1.2 };
+const DELTA_PANEL: PanelDef = { key: "delta", title: "Time diff (s; + slower)", height: 1.2 };
 
 type MarkAreaBand = [{ xAxis: number }, { xAxis: number }];
 type MarkAreaData = MarkAreaBand[];
@@ -82,6 +83,9 @@ export function StackedCharts({
   onCursorDist,
   zoomRange,
   onZoomChange,
+  panelHeight = 110,
+  timelineDensity = "normal",
+  onTimelineDensityChange,
 }: {
   data: CompareResult;
   lapLabels: Record<string, string>;
@@ -92,6 +96,9 @@ export function StackedCharts({
   onCursorDist?: (dist: number | null) => void;
   zoomRange?: [number, number] | null;
   onZoomChange?: (range: [number, number] | null) => void;
+  panelHeight?: number;
+  timelineDensity?: TimelineDensity;
+  onTimelineDensityChange?: (density: TimelineDensity) => void;
 }) {
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -114,9 +121,9 @@ export function StackedCharts({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    chart.getDom().style.height = `${panels.length * 110 + TOP_PAD + PANEL_GAP}px`;
+    chart.getDom().style.height = `${panels.length * panelHeight + TOP_PAD + PANEL_GAP}px`;
     chart.resize();
-  }, [panels.length]);
+  }, [panels.length, panelHeight]);
   // True while WE dispatch a zoom action, so the resulting dataZoom event
   // isn't echoed back through onZoomChange (which would loop).
   const applyingZoom = useRef(false);
@@ -457,7 +464,7 @@ export function StackedCharts({
 
   return (
     <div className="flex flex-col">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-edge/60 pb-2 text-xs">
+      <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-edge/60 bg-panel pb-2 text-xs">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-ink-dim">Zoom Level:</span>
           {zoomRange ? (
@@ -504,6 +511,23 @@ export function StackedCharts({
           >
             S3 (66-100%)
           </button>
+          <span className="ml-1 border-l border-edge pl-2 text-[10px] uppercase tracking-wide text-ink-dim">
+            Density
+          </span>
+          {(["compact", "normal", "large"] as const).map((density) => (
+            <button
+              key={density}
+              onClick={() => onTimelineDensityChange?.(density)}
+              aria-pressed={timelineDensity === density}
+              className={`rounded border px-2 py-0.5 text-[11px] capitalize transition-colors ${
+                timelineDensity === density
+                  ? "border-accent bg-accent/15 text-accent"
+                  : "border-edge text-ink-dim hover:border-edge-bright hover:text-ink"
+              }`}
+            >
+              {density}
+            </button>
+          ))}
         </div>
       </div>
       <div className="relative w-full select-none" onDoubleClick={() => onZoomChange?.(null)}>
@@ -514,7 +538,7 @@ export function StackedCharts({
           replaceMerge={REPLACE_SERIES}
           onInit={(chart) => {
             chartRef.current = chart;
-            chart.getDom().style.height = `${panels.length * 110 + TOP_PAD + PANEL_GAP}px`;
+            chart.getDom().style.height = `${panels.length * panelHeight + TOP_PAD + PANEL_GAP}px`;
             chart.resize();
             chart.on("updateAxisPointer", (e) => {
               const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo;

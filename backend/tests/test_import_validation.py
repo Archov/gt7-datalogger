@@ -70,6 +70,21 @@ async def test_string_sample_values_400(client) -> None:
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize("version", [1, 2, 3])
+async def test_legacy_import_without_native_velocity_remains_valid(client, version: int) -> None:
+    c, service = client
+    payload = await exported_lap(c, service)
+    payload["version"] = version
+    for channel in ("velocity_x", "velocity_y", "velocity_z"):
+        payload["lap"]["samples"].pop(channel)
+
+    response = await c.post("/api/laps/import", json=payload)
+
+    assert response.status_code == 200
+    imported = (await c.get(f"/api/laps/{response.json()['id']}")).json()
+    assert "velocity_x" not in imported["samples"]
+
+
 async def test_non_finite_values_400(client) -> None:
     c, service = client
     payload = await exported_lap(c, service)
