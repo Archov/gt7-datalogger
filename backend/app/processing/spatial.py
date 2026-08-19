@@ -281,8 +281,9 @@ def _project_in_window(
         projected_progress = p0 + fraction * (p1 - p0)
         px, pz = x0 + fraction * dx, z0 + fraction * dz
         py = float(y0) + fraction * dy if path.y is not None and y0 is not None else None
-        distance = _distance(x, y, z, px, py, pz, use_y=use_y)
-        key = (distance * distance, abs(projected_progress - expected), i)
+        delta_y = float(py) - float(y) if use_y and py is not None and y is not None else 0.0
+        distance_squared = (px - x) ** 2 + delta_y**2 + (pz - z) ** 2
+        key = (distance_squared, abs(projected_progress - expected), i)
         value = (projected_progress, px, py, pz)
         if best is None or key < best[0]:
             best = (key, value)
@@ -393,15 +394,39 @@ def project_lap(
             continue
         raw_progress, _px, _py, _pz = projected
         velocity = _source_velocity(samples, i, use_y=use_y)
-        tangent = _path_tangent(path, raw_progress, use_y=use_y)
+        tangent_left = max(0.0, raw_progress - TANGENT_HALF_WINDOW_M)
+        tangent_right = min(path.total, raw_progress + TANGENT_HALF_WINDOW_M)
+        tx0, ty0, tz0 = path_point(path, tangent_left)
+        tx1, ty1, tz1 = path_point(path, tangent_right)
+        tangent_dx, tangent_dz = tx1 - tx0, tz1 - tz0
+        tangent_dy = (
+            float(ty1) - float(ty0)
+            if use_y and ty0 is not None and ty1 is not None
+            else 0.0
+        )
+        tangent_length_3d = math.sqrt(
+            tangent_dx * tangent_dx
+            + tangent_dy * tangent_dy
+            + tangent_dz * tangent_dz
+        )
+        tangent = (
+            (
+                tangent_dx / tangent_length_3d,
+                tangent_dy / tangent_length_3d,
+                tangent_dz / tangent_length_3d,
+            )
+            if tangent_length_3d > EPSILON
+            else (0.0, 0.0, 0.0)
+        )
         along_track_speed = 3.6 * sum(
             component * direction
             for component, direction in zip(velocity, tangent, strict=True)
         )
         progress = max(last_progress, raw_progress) if projected_progress else raw_progress
         px, py, pz = path_point(path, progress)
-        tx0, _ty0, tz0 = path_point(path, max(0.0, progress - 0.5))
-        tx1, _ty1, tz1 = path_point(path, min(path.total, progress + 0.5))
+        if progress != raw_progress:
+            tx0, _ty0, tz0 = path_point(path, max(0.0, progress - TANGENT_HALF_WINDOW_M))
+            tx1, _ty1, tz1 = path_point(path, min(path.total, progress + TANGENT_HALF_WINDOW_M))
         tangent_length = math.hypot(tx1 - tx0, tz1 - tz0)
         lateral = (
             (x - px) * (-(tz1 - tz0) / tangent_length)

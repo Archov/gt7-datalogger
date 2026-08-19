@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo
-from app.processing.tracks import TrackSignature, matches
+from app.processing.tracks import IDENTIFY_MIN_TICKS, TrackSignature, matches
 from app.storage.db import (
     CarDrivetrainRow,
     LapRow,
@@ -28,7 +28,15 @@ from app.storage.db import (
 EXPORT_VERSION = 3
 
 
-def lap_summary(row: LapRow, metrics_revision: int | None = None) -> dict[str, Any]:
+def lap_summary(
+    row: LapRow,
+    metrics_revision: int | None = None,
+    additive: tuple[str, int] | None = None,
+) -> dict[str, Any]:
+    car_category, off_survey_count = additive or (
+        str(row.__dict__.get("car_category", "")),
+        int(row.__dict__.get("off_survey_count", -1)),
+    )
     return {
         "id": row.id,
         "session_id": row.session_id,
@@ -36,6 +44,7 @@ def lap_summary(row: LapRow, metrics_revision: int | None = None) -> dict[str, A
         "time_ms": row.time_ms,
         "finished_at": row.finished_at,
         "car_id": row.car_id,
+        "car_category": car_category,
         "fuel_start": row.fuel_start,
         "fuel_end": row.fuel_end,
         "fuel_consumed": row.fuel_consumed,
@@ -54,6 +63,7 @@ def lap_summary(row: LapRow, metrics_revision: int | None = None) -> dict[str, A
         "min_oil_pressure": row.min_oil_pressure,
         "counts_for_best": row.counts_for_best,
         "off_track_count": row.off_track_count,
+        "off_survey_count": off_survey_count,
         "clean_lap": row.clean_lap,
         "metrics_revision": metrics_revision or row.__dict__.get("metrics_revision", 1),
         "event_counts": _event_counts(row.events_json),
@@ -130,6 +140,28 @@ async def _lap_revisions(db: AsyncSession, lap_ids: list[int]) -> dict[int, int]
     return {int(row_id): int(revision) for row_id, revision in rows}
 
 
+async def _lap_additive_metadata(
+    db: AsyncSession, lap_ids: list[int]
+) -> dict[int, tuple[str, int]]:
+    """Read upstream lap additions without breaking old read-only fixtures."""
+    if not lap_ids:
+        return {}
+    try:
+        rows = (
+            await db.execute(
+                select(LapRow.id, LapRow.car_category, LapRow.off_survey_count).where(
+                    LapRow.id.in_(lap_ids)
+                )
+            )
+        ).all()
+    except OperationalError:
+        return {lap_id: ("", -1) for lap_id in lap_ids}
+    return {
+        int(row_id): (str(category or ""), int(survey_count if survey_count is not None else -1))
+        for row_id, category, survey_count in rows
+    }
+
+
 class Repository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -148,7 +180,10 @@ class Repository:
 
     async def create_session(self, info: SessionInfo, car_name: str) -> int:
         async with self._sf() as db:
-            row = SessionRow(started_at=info.started_at, car_id=info.car_id, car_name=car_name)
+            row = SessionRow(
+                started_at=info.started_at, car_id=info.car_id, car_name=car_name,
+                car_category=info.car_category,
+            )
             db.add(row)
             await db.commit()
             return row.id
@@ -313,6 +348,7 @@ class Repository:
             row = LapRow(
                 session_id=session_id,
                 number=lap.number,
+                car_category=lap.car_category,
                 time_ms=lap.time_ms,
                 finished_at=lap.finished_at,
                 car_id=lap.car_id,
@@ -331,6 +367,7 @@ class Repository:
                 asm_active_pct=lap.asm_active_pct,
                 counts_for_best=lap.counts_for_best,
                 off_track_count=lap.off_track_count,
+                off_survey_count=lap.off_survey_count,
                 clean_lap=lap.clean_lap,
                 max_water_temp=lap.max_water_temp,
                 max_oil_temp=lap.max_oil_temp,
@@ -354,16 +391,27 @@ class Repository:
             self._notify_metrics("lap", row.id, lap)
             return row.id
 
-    async def list_sessions(self) -> list[dict[str, Any]]:
+    async def list_sessions(self, category: str | None = None) -> list[dict[str, Any]]:
         # One aggregate query for all sessions; the outer join keeps lap-less
         # sessions and only touches LapRow ids/times (never samples_json).
         async with self._sf() as db:
             # Best excludes partial laps (pit out-laps, counts_for_best=0):
             # their GT7-reported "times" aren't full-lap times.
             best_expr = func.min(case((LapRow.counts_for_best, LapRow.time_ms)))
+            # The session row's category comes from the FIRST packet of the
+            # session, which is packet A/B often enough — a heartbeat format
+            # that carries no category at all, or one sent before the console
+            # switched. The laps know better, and max() over them picks the
+            # non-empty value ('' sorts lowest). Without this, a session whose
+            # laps are all plainly Gr.3 sits outside the Gr.3 filter (#19).
             rows = (
                 await db.execute(
-                    select(SessionRow, func.count(LapRow.id), best_expr)
+                    select(
+                        SessionRow,
+                        func.count(LapRow.id),
+                        best_expr,
+                        func.max(LapRow.car_category),
+                    )
                     .outerjoin(LapRow, LapRow.session_id == SessionRow.id)
                     .group_by(SessionRow.id)
                     .order_by(SessionRow.id.desc())
@@ -378,13 +426,16 @@ class Repository:
             except OperationalError:
                 # Direct readers of an old database may not have run init_db yet.
                 overrides = {}
-            revisions = await _session_revisions(db, [s.id for s, _count, _best in rows])
-            return [
+            revisions = await _session_revisions(
+                db, [s.id for s, _count, _best, _lap_category in rows]
+            )
+            sessions = [
                 {
                     "id": s.id,
                     "started_at": s.started_at,
                     "car_id": s.car_id,
                     "car_name": s.car_name,
+                    "car_category": s.__dict__.get("car_category", "") or lap_category or "",
                     "note": s.note,
                     "track_name": s.track_name,
                     "lap_count": count,
@@ -392,8 +443,57 @@ class Repository:
                     "drivetrain_override": overrides.get(s.car_id),
                     "metrics_revision": revisions.get(s.id, 1),
                 }
-                for s, count, best in rows
+                for s, count, best, lap_category in rows
             ]
+            if category:
+                sessions = [s for s in sessions if s["car_category"] == category]
+            return sessions
+
+    async def best_lap_in(self, track: str, category: str) -> dict[str, Any] | None:
+        """Fastest full lap ever recorded at a circuit in a car category.
+
+        Scoped by category because a Gr.3 lap and an N100 lap around the same
+        circuit are not the same achievement, and one leaderboard over both is
+        a leaderboard about the car (#19). Partial out-laps are excluded for
+        the same reason they never own a session best.
+        """
+        if not track or not category:
+            return None
+        async with self._sf() as db:
+            row = (
+                await db.execute(
+                    select(
+                        LapRow,
+                        SessionRow.car_name,
+                        SessionRow.started_at,
+                        LapRow.off_survey_count,
+                    )
+                    .join(SessionRow, SessionRow.id == LapRow.session_id)
+                    .where(
+                        SessionRow.track_name == track,
+                        LapRow.car_category == category,
+                        LapRow.counts_for_best,
+                    )
+                    .order_by(LapRow.time_ms)
+                    .limit(1)
+                )
+            ).first()
+            if row is None:
+                return None
+            lap, car_name, started_at, off_survey_count = row
+            return {
+                "lap_id": lap.id,
+                "session_id": lap.session_id,
+                "number": lap.number,
+                "time_ms": lap.time_ms,
+                "car_id": lap.car_id,
+                "car_name": car_name,
+                "car_category": category,
+                "track_name": track,
+                "clean_lap": lap.clean_lap,
+                "off_survey_count": off_survey_count,
+                "finished_at": lap.finished_at or started_at,
+            }
 
     async def get_session_metadata(self, session_id: int) -> dict[str, Any] | None:
         """Load lightweight session fields without materializing any lap samples."""
@@ -462,6 +562,22 @@ class Repository:
             await db.commit()
         self._notify_metrics("reconcile")
 
+    async def set_lap_survey_verdict(
+        self, lap_id: int, off_survey_count: int, clean_lap: bool | None
+    ) -> None:
+        """Re-judge a stored lap against the surveyed road (#41).
+
+        Backfill path: laps saved before the session's circuit was identified
+        went to the DB unjudged, and identification lands one lap late.
+        """
+        async with self._sf() as db:
+            await db.execute(
+                update(LapRow)
+                .where(LapRow.id == lap_id)
+                .values(off_survey_count=off_survey_count, clean_lap=clean_lap)
+            )
+            await db.commit()
+
     async def list_laps(self, session_id: int | None = None) -> list[dict[str, Any]]:
         async with self._sf() as db:
             q = select(LapRow).order_by(LapRow.id.desc())
@@ -469,7 +585,10 @@ class Repository:
                 q = q.where(LapRow.session_id == session_id)
             rows = list((await db.execute(q)).scalars())
             revisions = await _lap_revisions(db, [row.id for row in rows])
-            return [lap_summary(row, revisions.get(row.id, 1)) for row in rows]
+            additive = await _lap_additive_metadata(db, [row.id for row in rows])
+            return [
+                lap_summary(row, revisions.get(row.id, 1), additive.get(row.id)) for row in rows
+            ]
 
     async def get_lap(self, lap_id: int, with_samples: bool = True) -> dict[str, Any] | None:
         async with self._sf() as db:
@@ -477,7 +596,8 @@ class Repository:
             if row is None:
                 return None
             revision = (await _lap_revisions(db, [lap_id])).get(lap_id, 1)
-            data = lap_summary(row, revision)
+            additive = (await _lap_additive_metadata(db, [lap_id])).get(lap_id)
+            data = lap_summary(row, revision, additive)
             data["events"] = json.loads(row.events_json or "[]")
             data["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
             if with_samples:
@@ -523,6 +643,7 @@ class Repository:
             hydration_by_id = await _hydration_metadata(db, session_ids)
             session_revisions = await _session_revisions(db, session_ids)
             lap_revisions = await _lap_revisions(db, [row.id for row in lap_rows])
+            additive = await _lap_additive_metadata(db, [row.id for row in lap_rows])
             bundles: dict[int, dict[str, Any]] = {}
             for session in session_rows:
                 bundles[session.id] = {
@@ -543,7 +664,7 @@ class Repository:
                 bundle = bundles.get(row.session_id)
                 if bundle is None:
                     continue
-                lap = lap_summary(row, lap_revisions.get(row.id, 1))
+                lap = lap_summary(row, lap_revisions.get(row.id, 1), additive.get(row.id))
                 lap["events"] = json.loads(row.events_json or "[]")
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
                 lap["samples"] = json.loads(row.samples_json)
@@ -570,9 +691,10 @@ class Repository:
             hydration_meta = (await _hydration_metadata(db, [session_id])).get(session_id)
             session_revision = (await _session_revisions(db, [session_id])).get(session_id, 1)
             lap_revisions = await _lap_revisions(db, [row.id for row in rows])
+            additive = await _lap_additive_metadata(db, [row.id for row in rows])
             laps: list[dict[str, Any]] = []
             for row in rows:
-                lap = lap_summary(row, lap_revisions.get(row.id, 1))
+                lap = lap_summary(row, lap_revisions.get(row.id, 1), additive.get(row.id))
                 lap["events"] = json.loads(row.events_json or "[]")
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
                 lap["samples"] = json.loads(row.samples_json)
@@ -682,6 +804,70 @@ class Repository:
         async with self._sf() as db:
             await db.execute(delete(TrackRow).where(TrackRow.id == track_id))
             await db.commit()
+
+    async def unnamed_sessions_with_lap(self) -> list[tuple[int, int]]:
+        """(session_id, lap_id) for every session with no circuit label.
+
+        The lap chosen is the shortest FULL one. Full matters: a bundle match
+        is a share of whatever samples it is given, so a pit out-lap covering
+        only tarmac two layouts share can score 100 % while saying nothing
+        about which was driven. Shortest matters too, for a duller reason —
+        every lap is a sample blob of a few hundred kilobytes, and this is the
+        difference between reading a gigabyte and reading a fraction of it.
+        Being full costs nothing on top: a lap that covers the route is the
+        route however quickly it was driven.
+
+        Sessions with no full lap fall back to their longest, which is the best
+        evidence they have; the matcher then decides whether it is enough.
+        """
+        async with self._sf() as db:
+            shortest = (
+                select(LapRow.id)
+                .where(
+                    LapRow.session_id == SessionRow.id,
+                    LapRow.total_ticks >= IDENTIFY_MIN_TICKS,
+                )
+                .order_by(
+                    LapRow.counts_for_best.desc(),
+                    case(
+                        (LapRow.counts_for_best, LapRow.total_ticks),
+                        else_=-LapRow.total_ticks,
+                    ),
+                )
+                .limit(1)
+                .correlate(SessionRow)
+                .scalar_subquery()
+            )
+            rows = (
+                await db.execute(
+                    select(SessionRow.id, shortest)
+                    .where(SessionRow.track_name == "")
+                    .order_by(SessionRow.id.desc())
+                )
+            ).all()
+            return [(sid, lid) for sid, lid in rows if lid is not None]
+
+    async def lap_samples_json(self, lap_id: int) -> str | None:
+        """A lap's raw sample blob, unparsed — the caller decodes it off the
+        event loop, which is the whole cost of reading one."""
+        async with self._sf() as db:
+            return (
+                await db.execute(
+                    select(LapRow.samples_json).where(LapRow.id == lap_id)
+                )
+            ).scalar_one_or_none()
+
+    async def track_for_lap(self, lap_id: int) -> str:
+        """The circuit label of the session a lap belongs to, if it has one."""
+        async with self._sf() as db:
+            name = (
+                await db.execute(
+                    select(SessionRow.track_name)
+                    .join(LapRow, LapRow.session_id == SessionRow.id)
+                    .where(LapRow.id == lap_id)
+                )
+            ).scalar_one_or_none()
+            return name or ""
 
     async def set_session_track(self, session_id: int, track_name: str) -> None:
         async with self._sf() as db:

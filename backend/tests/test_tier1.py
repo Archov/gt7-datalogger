@@ -8,7 +8,11 @@ from app.main import create_app
 from app.models import AidsBits, SimulatorFlags
 from app.processing.cars import CarDatabase
 from app.processing.events import detect_events
-from app.processing.laps import CORE_SAMPLE_COLUMNS, CompletedLap, new_sample_store
+from app.processing.laps import (
+    CORE_SAMPLE_COLUMNS,
+    CompletedLap,
+    new_sample_store,
+)
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
 from app.storage.repository import Repository

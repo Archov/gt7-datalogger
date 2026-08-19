@@ -23,6 +23,14 @@ The **Auto/FWD/RWD/AWD** selector sets the powered-wheel model used by wheelspin
 characterization for that car ID. The selection applies to all existing and future
 sessions for the same car. **Auto** keeps torque-derived inference; an explicit override
 remains visible alongside contrary inferred evidence rather than erasing it.
+## Category filter
+
+When GT7 broadcasts the car's class (packet C — "Gr.3", "Gr.4", "N300"…), it appears as
+a chip on each row and a filter strip above the list: *show me only the Gr.3 runs*. Only
+classes actually present are offered, so the strip disappears entirely on a history
+recorded before packet C, and **All** is the only way back to sessions that have no
+class at all. A session whose own class is blank — its very first packet was a narrower
+format — takes the class its laps recorded.
 
 ## Lap table
 
@@ -31,6 +39,17 @@ full-brake %, coasting %, tire-spin %, events, and max speed.
 
 The **Events** column is a compact code — `2L·1S·3B·1K` means 2 lockups, 1 wheelspin,
 3 suspension bottomings, 1 kerb strike; `–` means a clean lap.
+
+The **Off-track** column can carry two figures, because two different judges
+watch the lap. The first counts excursions by GT7's own per-wheel surface
+flags (three or more wheels on the loose) — which are blind to paved run-off:
+running wide over asphalt reads as tarmac and stays "clean". The second
+appears once the circuit has been [surveyed](tracks-view.md) well enough
+(≥ 50 % of the road resolved): the lap's positions are judged against the
+**surveyed edges**, and sustained excursions beyond them count even on
+pavement. Unsurveyed stretches never count against a lap, and laps recorded
+before the session was identified are re-judged the moment it is. A lap is
+*clean* only when both judges agree.
 
 Row actions:
 

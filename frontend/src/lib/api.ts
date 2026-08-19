@@ -4,19 +4,26 @@ import type {
   AdminStats,
   ArchiveHydrationMode,
   ArchiveHydrationStatus,
+  AuthoredCorner,
+  AuthoredSection,
+  CategoryBest,
   CompareResult,
   ConnectionStatus,
   DeviationResult,
   FuelMapResult,
   LapSummary,
   LogRecord,
+  OfficialMatch,
   RaceEngineerDiagnostics,
   SessionSummary,
   SurveyEdge,
+  SurveyLog,
   SurveyStatus,
   Track,
   TrackBundleInfo,
   TrackCatalog,
+  TrackOutline,
+  TrackOverview,
   VoiceCallout,
 } from "./types";
 
@@ -36,6 +43,28 @@ export function setAdminToken(token: string): void {
 function authHeaders(): Record<string, string> {
   const t = getAdminToken();
   return t ? { "X-API-Key": t } : {};
+}
+
+// A whole bundle document, as exported and as import consumes it.
+export interface TrackBundleDoc {
+  format: string;
+  version: number;
+  meta: { track: string; runs: number; source_runs: Record<string, number>;
+          updated_at: string; official: OfficialMatch | null };
+  edges: SurveyEdge[];
+  finish_crossings: { x: number; z: number; hx: number; hz: number; lap: number }[];
+  corners: AuthoredCorner[];
+  sections: AuthoredSection[];
+}
+
+export interface BundleMergeResult {
+  track: string;
+  slug: string;
+  points: number;
+  added_points: number;
+  runs: number;
+  sources: number;
+  corners_kept?: boolean;
 }
 
 async function fail(url: string, resp: Response): Promise<never> {
@@ -90,12 +119,22 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
 
 export const api = {
   status: () => get<ConnectionStatus>("/api/status"),
-  sessions: () => get<SessionSummary[]>("/api/sessions"),
+  // `category` is the packet-C car class; blank includes older recordings.
+  sessions: (category = "") =>
+    get<SessionSummary[]>(
+      `/api/sessions${category ? `?category=${encodeURIComponent(category)}` : ""}`,
+    ),
   setCarDrivetrain: (carId: number, drivetrain: "auto" | "fwd" | "rwd" | "awd") =>
     send<{ car_id: number; drivetrain_override: "fwd" | "rwd" | "awd" | null }>(
       `/api/cars/${carId}/drivetrain`,
       "PUT",
       { drivetrain },
+    ),
+  // Fastest full lap at a circuit in a car category (#19); null when nothing
+  // has been recorded there in that class yet.
+  categoryBest: (track: string, category: string) =>
+    get<CategoryBest | null>(
+      `/api/laps/best?track=${encodeURIComponent(track)}&category=${encodeURIComponent(category)}`,
     ),
   sessionLaps: (id: number) => get<LapSummary[]>(`/api/sessions/${id}/laps`),
   exportSessionForLlm: (id: number) =>
@@ -127,6 +166,8 @@ export const api = {
         track,
       }),
     stop: () => send<SurveyStatus>("/api/survey/stop", "POST"),
+    setTrack: (track: string) =>
+      send<SurveyStatus>("/api/survey/track", "POST", { track }),
     trail: (since: number, epoch: number) =>
       get<{ epoch: number; since: number; points: [number, number][]; total: number }>(
         `/api/survey/trail?since=${since}&epoch=${epoch}`,
@@ -139,15 +180,89 @@ export const api = {
       send<SurveyStatus>("/api/survey/mark", "POST", { side, kind }),
     packet: () => get<{ packet: Record<string, unknown> | null }>("/api/survey/packet"),
     exportUrl: "/api/survey/export.jsonl",
+    // Every run's JSONL, and whether it ever reached a circuit. A run that
+    // went nowhere exists only as this file.
+    logs: () => get<SurveyLog[]>("/api/survey/logs"),
+    assignLog: (name: string, track: string) =>
+      send<Record<string, unknown>>(
+        `/api/survey/logs/${encodeURIComponent(name)}/assign`,
+        "POST",
+        { track },
+      ),
+    // Raw JSONL transport (#40): a log downloaded here can be uploaded — or
+    // assigned — on any other installation, moving the run itself.
+    logDownloadUrl: (name: string) =>
+      `/api/survey/logs/${encodeURIComponent(name)}/download`,
+    uploadLog: async (file: File): Promise<SurveyLog> => {
+      const url = `/api/survey/logs/upload?name=${encodeURIComponent(file.name)}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/jsonl" },
+        body: file,
+      });
+      if (!resp.ok) await fail(url, resp);
+      return resp.json() as Promise<SurveyLog>;
+    },
   },
+
+  // The surveyed road for a circuit, compiled server-side (#51). Always
+  // resolves — a circuit with no bundle answers with an empty outline.
+  trackOutline: (track: string) =>
+    get<TrackOutline>(`/api/track-outline?track=${encodeURIComponent(track)}`),
 
   tracks: () => get<Track[]>("/api/tracks"),
   trackCatalog: () => get<TrackCatalog>("/api/track-catalog"),
   trackBundles: () => get<TrackBundleInfo[]>("/api/track-bundles"),
+  trackOverview: () => get<TrackOverview>("/api/track-overview"),
+  // Name every unlabelled session that was driven on a surveyed circuit (#41).
+  // New sessions do this for themselves as they are recorded; this is for the
+  // history that predates the bundles.
+  identifySessions: () =>
+    send<{ checked: number; identified: number; tracks: Record<string, number> }>(
+      "/api/tracks/identify",
+      "POST",
+    ),
   createTrack: (name: string, lapId: number) =>
     send<{ id: number; name: string }>("/api/tracks", "POST", { name, lap_id: lapId }),
   deleteTrack: (id: number) => send<{ status: string }>(`/api/tracks/${id}`, "DELETE"),
   lapCsvUrl: (lapId: number) => `/api/laps/${lapId}/export.csv`,
+
+  bundles: {
+    get: (slug: string) => get<TrackBundleDoc>(`/api/track-bundles/${slug}`),
+    downloadUrl: (slug: string) => `/api/track-bundles/${slug}`,
+    // `track` collapses a near-miss name onto an existing circuit rather than
+    // importing it as a second bundle of the same tarmac.
+    import: (doc: unknown, track?: string) =>
+      send<BundleMergeResult>(
+        `/api/track-bundles/import${track ? `?track=${encodeURIComponent(track)}` : ""}`,
+        "POST",
+        doc,
+      ),
+    rename: (slug: string, track: string) =>
+      send<BundleMergeResult>(`/api/track-bundles/${slug}`, "PATCH", { track }),
+    setOfficial: (slug: string, official: OfficialMatch | null) =>
+      send<{ slug: string }>(`/api/track-bundles/${slug}`, "PATCH", {
+        official,
+        set_official: true,
+      }),
+    remove: (slug: string) => send<{ status: string }>(`/api/track-bundles/${slug}`, "DELETE"),
+    corners: (slug: string) =>
+      get<{
+        track: string;
+        corners: AuthoredCorner[];
+        sections: AuthoredSection[];
+        official: OfficialMatch | null;
+      }>(`/api/track-bundles/${slug}/corners`),
+    setCorners: (
+      slug: string,
+      body: { corners?: AuthoredCorner[]; sections?: AuthoredSection[] },
+    ) =>
+      send<{ track: string; corners: AuthoredCorner[]; sections: AuthoredSection[] }>(
+        `/api/track-bundles/${slug}/corners`,
+        "PUT",
+        body,
+      ),
+  },
 
   layouts: {
     list: () => get<LayoutSummary[]>("/api/layouts"),

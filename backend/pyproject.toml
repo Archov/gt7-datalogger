@@ -1,6 +1,6 @@
 [project]
 name = "gt7-datalogger"
-version = "0.4.1"
+version = "0.5.0"
 description = "GT7 telemetry datalogger and analysis dashboard"
 license = "MIT"
 requires-python = ">=3.12"
@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "pycryptodome>=3.20",
     "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
     "aiosqlite>=0.20",
     "websockets>=12.0",
     "httpx>=0.27",
@@ -27,6 +28,11 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+# Alembic loads env.py and the revision files by path, so they have to ship
+# with the package, not just be importable.
+[tool.setuptools.package-data]
+"app.migrations" = ["script.py.mako"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

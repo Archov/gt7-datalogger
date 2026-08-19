@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from app.processing.laps import SAMPLE_COLUMNS
+from app.processing.laps import STORED_SAMPLE_COLUMNS
 from app.processing.orientation import ORIENTATION_CHANNELS
 from app.processing.telemetry_resolution import (
     persisted_session_view,
@@ -85,9 +85,9 @@ def _replay_all_channels(
 ) -> dict[str, Any]:
     """Run the parser/LapProcessor replay in a worker-owned event loop."""
     coroutine = (
-        resolve_session_telemetry(bundle, set(SAMPLE_COLUMNS), data_root, force_replay=True)
+        resolve_session_telemetry(bundle, set(STORED_SAMPLE_COLUMNS), data_root, force_replay=True)
         if force_replay
-        else resolve_session_telemetry(bundle, set(SAMPLE_COLUMNS), data_root)
+        else resolve_session_telemetry(bundle, set(STORED_SAMPLE_COLUMNS), data_root)
     )
     return asyncio.run(coroutine)
 
@@ -130,7 +130,7 @@ class TelemetryHydrationManager:
 
     async def resolve(self, bundle: dict[str, Any], requested_channels: set[str]) -> dict[str, Any]:
         """Hydrate once when needed, then return a persisted-only view."""
-        requested = set(requested_channels).intersection(SAMPLE_COLUMNS)
+        requested = set(requested_channels).intersection(STORED_SAMPLE_COLUMNS)
         lap_ids = {int(lap["id"]) for lap in bundle.get("laps") or []}
         if not requested or not _missing_requested(bundle, requested):
             return persisted_session_view(bundle, requested)

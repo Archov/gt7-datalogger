@@ -67,10 +67,37 @@ Open questions to answer while driving:
 ## 2. Wheel-contact derivation (fill in)
 
 Contact point = car position + heading rotation of (±wheelbase/2, ±track/2).
-Wheelbase is broadcast in packet C; **track width is not** — the survey
-starts from an assumption (the input next to Start survey, default 1.6 m)
-and then **measures** it: ride all four wheels over one edge and back. The
-same wheel's out/back crossings pin the edge's direction, opposite-side
+Wheelbase is broadcast in packet C; **track width is not broadcast directly
+— but it is derivable, and every corner derives it.** The outer wheels of an
+axle cover a larger arc than the inner ones, so their rolling speeds differ
+by exactly the yaw rate times the axle track:
+
+```
+|v_outer - v_inner| = |yaw rate| * track_width       v = wheel_rps * tire_radius
+```
+
+`wheel_rps`, `tire_radius` and `angular_velocity_y` are all broadcast and
+were already decoded, so this costs nothing and needs no special driving. It
+reached a trusted 1.74 m within ~12 seconds of ordinary laps on real
+hardware. Taking magnitudes means GT7's yaw sign convention never has to be
+pinned down.
+
+Two things learned doing it on hardware:
+
+- **A locked/spool differential makes its axle useless here.** The test car's
+  rear wheels report identical speeds to the centimetre even coasting
+  (`-82.31 / -82.31` at zero throttle), so the rear axle answers ~0. Both
+  axles are therefore offered each tick and the plausible range picks the
+  free one — no drivetrain layout ever has to be declared, and a locked axle
+  self-rejects.
+- **Braking corrupts it; throttle does not.** ABS modulates wheels
+  individually: the same capture that gave a steady 1.7–1.8 m produced 1.22,
+  2.03 and 4.87 m under brake pressure. Throttle needs no gate, because
+  wheelspin lifts an axle's *mean* off the car's speed and is caught by the
+  slip check — gating throttle would discard most of a racing lap.
+
+The older fallback still exists: ride all four wheels over one edge and back.
+The same wheel's out/back crossings pin the edge's direction, opposite-side
 crossings of the same line fix the width, and remaining same-side crossings
 must agree the points are collinear (which rejects two-edged strips, curved
 kerbs and mid-corner crossings). Once three rides agree, the measured median
@@ -78,6 +105,20 @@ replaces the assumption for contact derivation — the status line shows which
 is in force, and every JSONL record carries the `tw_m` it was derived with.
 Heading currently comes from ground-plane velocity; the native `(x,y,z,w)` vehicle
 orientation quaternion is logged alongside it for comparison.
+kerbs and mid-corner crossings). It is exact when it fires, but it demands a
+deliberate manoeuvre and across a full real session of heavy edge riding it
+accepted **zero** samples — which is why cornering outranks it. The status
+line names whichever is in force, and every JSONL record carries the `tw_m`
+it was derived with.
+
+**Scale check, before anyone plans a backfill:** the measured 1.74 m against
+the 1.6 m assumption is a 0.14 m width error, so points laid under the
+assumption sit **7 cm** off laterally — 7% of the 1 m dedup cell. Recording
+`tw` per point keeps correction possible, but at this magnitude the grid
+cannot represent the correction and re-deriving old points is not worth
+doing. It would take a width error above ~2 m to move a point a full cell.
+Heading comes from ground-plane velocity; the raw rotation floats +
+`rel_orientation_to_north` are logged for offline comparison.
 
 Method: drive slowly over a kerb whose edge is visible on the race-line map,
 one wheel at a time, from both directions. The transition record pins where
@@ -112,7 +153,7 @@ always has everything).
 
 Track knowledge also outlives the run: each circuit's perimeter evidence and
 finish crossings merge into a **track bundle**
-(`data/track-bundles/<slug>.json`, grid-deduped to one point per meter so it
+(`data/track-bundles/<slug>.json`, one record per meter per side so it
 converges instead of growing). A new survey on the same circuit resumes from
 its bundle — the map opens with everything ever mapped — and saves back on
 stop and on circuit changes (a run's evidence is flushed and cleared when
@@ -121,6 +162,56 @@ Bundles are versioned, self-describing documents downloadable via
 `/api/track-bundles/{slug}`, designed to graduate into their own repo and be
 imported at build time like `data/tracks.json`. Width calibration stays out:
 it belongs to the car, not the circuit.
+
+A meter of border is **one fact, voted on** (format v2). Each record carries
+`votes[kind][source] = [count, last_run]`, and the kind it resolves to
+follows one rule: **hand-marked kinds beat inferred ones outright**, majority inside
+each tier. That is not a tie-break preference — the surface chars are
+*blind* to walls and paved run-off (both read as plain `T`), so an
+auto/straddle point at a marked meter is not evidence against the mark, only
+evidence that the char stream could not see it. Majority within the manual
+tier is the way back from a mis-mark (mark it correctly twice and it wins).
+
+Format v1 keyed on kind as well, so contradictions were stored side by side
+instead of resolved, and the consumer kept both: it drops `runoff` points
+from the road fill, but the co-located twin survived the filter and held the
+meter in the road anyway. Measured on the author's real bundles, v1 →v2
+found 892 of 4634 contested cells at Lago Centre (19%), including **105
+meters where a hand-marked run-off limit had been silently overruled** by an
+auto/straddle point. Bundles upgrade in place on load, voting everything v1
+recorded as run 0 so the next real run outranks it.
+
+Votes count **runs, not samples** — the ~60 s autosave re-merges the same
+run's evidence repeatedly, and without the run stamp a long session would
+inflate its own votes by however many times it happened to autosave.
+
+They also count runs **per source** (format v4). Run ordinals are local: my
+run 7 and your run 7 are unrelated facts, so a merge keyed on the ordinal
+alone would double-count one and silently drop the other depending on which
+ordinals happened to collide, and the counts would stop being a census of
+independent observations — which is the only reading under which "majority"
+resolves anything. Every installation stamps a **source id** (12 hex
+characters, generated once into `data/source-id.json`) on the votes it casts,
+and a merge advances each source's own highest run. Two people who each drove
+a meter once have seen it twice between them; re-pulling the same shared
+bundle changes nothing. That is what made import and cross-machine merge
+possible ([#47](https://github.com/jbhoorasingh/gt7-datalogger/issues/47)) —
+see the [format reference](../reference/track-bundle-format.md).
+
+Bundles also carry **authored** knowledge from v4: corners and sections
+labelled by hand in the [Tracks view](../guide/tracks-view.md), anchored to
+world positions rather than lap distances. Authored data outranks derived
+data — the same principle the voting already follows — so a labelled circuit's
+corner numbering stops being re-inferred from each lap's curvature
+([#48](https://github.com/jbhoorasingh/gt7-datalogger/issues/48)).
+
+Records also carry the provenance needed to second-guess them: `run` (which
+run first evidenced the meter) and `tw` (the axle track width in use when it
+was laid). `tw` earns its bytes because straddle points — 52% of Lago
+Centre, 88% of East End — sit at ±tw/2 from the car centre and carry the
+whole width-estimate error; recording it keeps open the option of correcting
+their lateral offset offline once a better width is known. Position itself
+stays first-seen, which keeps file diffs small.
 
 The **Track completeness** card answers "is it ready?": per-border coverage
 of the driven loop (percent + the largest remaining gap, i.e. where to
@@ -139,14 +230,44 @@ left wheels just off, one lap mirrored on the right — both perimeters trace
 themselves continuously and the road fill appears between them.
 
 **Manual boundary marking** covers what surface chars cannot see: arm
-*Mark boundary: left/right* + a kind (*edge*, *run-off limit*, *wall*) and
+*Mark boundary: left/right* + a kind (*edge*, *run-off edge*, *wall*) and
 drive along the boundary — the survey records an edge point from that side's
 wheel line every ~2 m. Wall-lined track produces no surface transitions at
 all, and the outer limit of paved run-off reads as plain tarmac, so the
 driven line is the only reliable source for both. Marked points render in
-their own colors (purple = run-off limit, red = wall), are stamped into the
-JSONL as `mark` records, and run-off limits are excluded from the road fill
-(they bound the run-off, not the road).
+their own colors (purple = run-off edge, red = wall) and are stamped into
+the JSONL as `mark` records.
+
+### Which tag to use
+
+All three tags mark the **same thing**: the edge of the racing surface, in
+places the surface chars cannot see it because there is tarmac on both
+sides. They differ only in *what lies beyond* — which is exactly what
+lap-validity judging needs, since running wide onto pavement is not the same
+as running wide into gravel.
+
+| Tag | Marks | Beyond it |
+|-----|-------|-----------|
+| `edge` | the track edge | nothing notable |
+| `runoff` | the track edge | paved run-off |
+| `wall` | the track edge | a wall, barrier or fence |
+
+All three count as road, so the fill reaches all of them.
+
+`runoff` originally meant the *outer limit* of the paved area, and was
+excluded from the road fill on the reading that it bounded the run-off
+rather than the road. Nobody used it that way. Measured across the author's
+three circuits, **all 946 run-off marks sit with the opposite border 12-14 m
+across**, against a measured road width of 12.7 m — every one of them is a
+track edge. The exclusion meant the map drew no road at all through exactly
+the corners someone had taken the trouble to survey, so the tag now means
+what it was being used for.
+
+Marking is the one input nothing can check against, and since v2 a
+hand-marked kind deliberately **outranks** automatic evidence — so a mis-tag
+beats the `auto`/`straddle` points that were right. Recovering one: majority
+applies within the manual tier, so re-driving a metre and marking it
+correctly **twice** outvotes a stale mark.
 
 **Raw packet inspector**: the collapsible panel at the bottom of the Survey
 view shows every decoded packet field live (2 Hz), highlighting values that
@@ -165,15 +286,51 @@ racing surface. Things to establish on hardware, in order of leverage:
    live per-wheel "crossed the band vs bounced back" verdict is genuinely
    ambiguous (driving straight across an angled kerb produces zero lateral
    displacement in the car frame — there is no local signal to project
-   against), so the honest solution is offline in the grid build (#38):
-   flood-fill tarmac cells from the racing corridor; tarmac regions
-   reachable only across a border band are runoff.
+   against), so the verdict has to come from the track's shape rather than
+   from any single tick.
 
-## 3. Verdict → survey grid design (fill in)
+**In practice the `runoff` tag already answers this by hand**: it marks the
+track edge at places with pavement beyond, which is precisely the fact a
+per-tick reading cannot supply. 946 metres of it are mapped across three
+circuits.
 
-- Error bound on a wheel-contact sample: **± __ m** (lateral), **± __ m**
-  (longitudinal).
-- Recommended survey grid cell size for #38: **__ m** (expected 0.25–0.5 m —
-  it should comfortably exceed the error bound above).
-- Surface chars worth separate grid classes: ______
-- Encoding changes needed in `app/processing/surface.py`: ______
+For deriving it automatically, this note used to call for flood-filling
+tarmac cells from the racing corridor in a grid build (#38). That is one way,
+but it is not the only one and it is the expensive one — a filled grid at the
+0.25 m cell size suggested below is ~92× more records than the border store
+(~406k cells for Deep Forest). The argument is about *connectivity across a
+boundary*, and a closed border curve answers it just as well: order the
+border points into the racing-surface region, then any trail point reading
+all-`T` while sitting **outside** that region is paved run-off. That needs
+only what the bundles already hold, plus the point ordering that drawing a
+real outline (#41) needs anyway. Both approaches share one hard limit: run-off
+that was never driven on cannot be classified either way.
+
+## 3. Verdict → no filled grid; the border curve instead
+
+Resolved (2026-08, #38/#40): the filled classification grid was **not built**,
+and the blanks this section used to carry are moot. The border store stays the
+only evidence store, and the ordering argued for above is what shipped —
+`app/processing/track_compile.py` walks each side's border cells into ordered
+polylines (96–99% of cells chain on the surveyed circuits, usually into one
+closed loop per side), pairs the left border *across to the right border
+curve* to produce a centerline with width and elevation, and tiles the road
+surface between them as quads.
+
+That one ordering pass is what the grid was going to be for:
+
+- **Road region**: the quad strip answers point-inside-road directly (used by
+  edge-based lap validity, #41) — no flood fill needed.
+- **Coverage** is measured against the boundary itself — surveyed metres over
+  total boundary metres, gaps and loop closure in the denominator — rather
+  than against the driven trail (#38's metric).
+- **Paved run-off** derivation stays possible exactly as described above: a
+  point outside the road region reading all-`T`. Not yet implemented; the
+  `runoff` tag keeps answering it by hand.
+
+Costs that made the grid the wrong call, for the record: ~92× the records of
+the border store at the 0.25 m cell size this section contemplated, a second
+Alembic-managed store, and no answer the ordering doesn't already give. The
+compiled geometry is derived data (`data/track-bundles/compiled/`, format in
+[the bundle reference](../reference/track-bundle-format.md)) and is
+recompiled whenever the bundle changes.

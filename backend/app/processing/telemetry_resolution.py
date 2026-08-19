@@ -142,7 +142,9 @@ def persisted_session_view(bundle: dict[str, Any], requested_channels: set[str])
         laps.append(lap)
     resolved["laps"] = laps
     requested = {
-        channel for channel in requested_channels if channel in lap_processing.SAMPLE_COLUMNS
+        channel
+        for channel in requested_channels
+        if channel in lap_processing.STORED_SAMPLE_COLUMNS
     }
     provenance: dict[int, dict[str, list[str]]] = {}
     for lap in laps:
