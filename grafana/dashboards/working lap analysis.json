@@ -1,0 +1,682 @@
+{
+  "apiVersion": "dashboard.grafana.app/v2",
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "dfvlfzkr14em8c"
+  },
+  "spec": {
+    "annotations": [
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "builtIn": true,
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "query": {
+            "datasource": {
+              "name": "-- Grafana --"
+            },
+            "group": "grafana",
+            "kind": "DataQuery",
+            "spec": {},
+            "version": "v0"
+          }
+        }
+      }
+    ],
+    "cursorSync": "Off",
+    "editable": true,
+    "elements": {
+      "panel-1": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "dfvlfzkr14em8c"
+                      },
+                      "group": "frser-sqlite-datasource",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "queryText": "SELECT ${x_axis:raw} AS time, ${channel:raw} AS value, 'Lap ' || lap_id AS metric FROM samples WHERE lap_id IN (${lap:csv}) AND ${channel:raw} IS NOT NULL ORDER BY lap_id,sample_index",
+                        "queryType": "time_series",
+                        "rawQueryText": "SELECT ${x_axis:raw} AS time, ${channel:raw} AS value, 'Lap ' || lap_id AS metric FROM samples WHERE lap_id IN (${lap:csv}) AND ${channel:raw} IS NOT NULL ORDER BY lap_id,sample_index",
+                        "timeColumns": [
+                          "time"
+                        ]
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Select any numeric native, unknown, or derived channel. Native unknowns retain offset names and raw units.",
+          "id": 1,
+          "links": [],
+          "title": "$channel by $x_axis",
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "axisBorderShow": false,
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.6,
+                    "drawStyle": "line",
+                    "fillOpacity": 0,
+                    "gradientMode": "none",
+                    "hideFrom": {
+                      "legend": false,
+                      "tooltip": false,
+                      "viz": false
+                    },
+                    "insertNulls": false,
+                    "lineInterpolation": "linear",
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "scaleDistribution": {
+                      "type": "linear"
+                    },
+                    "showPoints": "auto",
+                    "showValues": false,
+                    "spanNulls": false,
+                    "stacking": {
+                      "group": "A",
+                      "mode": "none"
+                    },
+                    "thresholdsStyle": {
+                      "mode": "off"
+                    }
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "red",
+                        "value": 80
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": {
+                  "calcs": [],
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              }
+            },
+            "version": "13.2.0"
+          }
+        }
+      },
+      "panel-2": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "dfvlfzkr14em8c"
+                      },
+                      "group": "frser-sqlite-datasource",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "queryText": "SELECT number,time_ms,max_speed,fuel_consumed,clean_lap,off_track_count,packet_format,native_provenance FROM laps WHERE id IN (${lap:csv}) ORDER BY number",
+                        "queryType": "table",
+                        "rawQueryText": "SELECT number,time_ms,max_speed,fuel_consumed,clean_lap,off_track_count,packet_format,native_provenance FROM laps WHERE id IN (${lap:csv}) ORDER BY number",
+                        "timeColumns": [
+                          "time",
+                          "ts"
+                        ]
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Lap timing, fuel, cleanliness, packet format, and capture provenance.",
+          "id": 2,
+          "links": [],
+          "title": "Lap summary",
+          "vizConfig": {
+            "group": "table",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "custom": {
+                    "align": "auto",
+                    "cellOptions": {
+                      "type": "auto"
+                    },
+                    "footer": {
+                      "reducers": []
+                    },
+                    "hideFrom": {
+                      "viz": false
+                    },
+                    "inspect": false
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "red",
+                        "value": 80
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "cellHeight": "sm",
+                "showHeader": true
+              }
+            },
+            "version": "13.2.0"
+          }
+        }
+      },
+      "panel-3": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "dfvlfzkr14em8c"
+                      },
+                      "group": "frser-sqlite-datasource",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "queryText": "SELECT lap_id,\"type\",start_dist,end_dist,severity,wheel_fl,wheel_fr,wheel_rl,wheel_rr FROM events WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,event_index",
+                        "queryType": "table",
+                        "rawQueryText": "SELECT lap_id,\"type\",start_dist,end_dist,severity,wheel_fl,wheel_fr,wheel_rl,wheel_rr FROM events WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,event_index",
+                        "timeColumns": [
+                          "time",
+                          "ts"
+                        ]
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Flattened chassis and track events with independent wheel flags.",
+          "id": 3,
+          "links": [],
+          "title": "Detected events",
+          "vizConfig": {
+            "group": "table",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "custom": {
+                    "align": "auto",
+                    "cellOptions": {
+                      "type": "auto"
+                    },
+                    "footer": {
+                      "reducers": []
+                    },
+                    "hideFrom": {
+                      "viz": false
+                    },
+                    "inspect": false
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "red",
+                        "value": 80
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "cellHeight": "sm",
+                "showHeader": true
+              }
+            },
+            "version": "13.2.0"
+          }
+        }
+      },
+      "panel-4": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "dfvlfzkr14em8c"
+                      },
+                      "group": "frser-sqlite-datasource",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "queryText": "SELECT t AS time,speed,throttle,brake,rpm FROM samples WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,sample_index",
+                        "queryType": "time_series",
+                        "rawQueryText": "SELECT t AS time,speed,throttle,brake,rpm FROM samples WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,sample_index",
+                        "timeColumns": [
+                          "time"
+                        ]
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "dfvlfzkr14em8c"
+                      },
+                      "group": "frser-sqlite-datasource",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "queryText": "SELECT t AS time,slip_fl,slip_fr,slip_rl,slip_rr FROM samples WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,sample_index",
+                        "queryType": "time_series",
+                        "rawQueryText": "SELECT t AS time,slip_fl,slip_fr,slip_rl,slip_rr FROM samples WHERE lap_id IN (${lap:csv}) ORDER BY lap_id,sample_index",
+                        "timeColumns": [
+                          "time"
+                        ]
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Compatibility channels covering speed, inputs, engine, tires, suspension, transmission, motion, racing line, flags, aids, and surface state. Use the channel selector above for every native field.",
+          "id": 4,
+          "links": [],
+          "title": "Speed, inputs, engine, and wheels",
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "axisBorderShow": false,
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.6,
+                    "drawStyle": "line",
+                    "fillOpacity": 0,
+                    "gradientMode": "none",
+                    "hideFrom": {
+                      "legend": false,
+                      "tooltip": false,
+                      "viz": false
+                    },
+                    "insertNulls": false,
+                    "lineInterpolation": "linear",
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "scaleDistribution": {
+                      "type": "linear"
+                    },
+                    "showPoints": "auto",
+                    "showValues": false,
+                    "spanNulls": false,
+                    "stacking": {
+                      "group": "A",
+                      "mode": "none"
+                    },
+                    "thresholdsStyle": {
+                      "mode": "off"
+                    }
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "red",
+                        "value": 80
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              },
+              "options": {
+                "legend": {
+                  "calcs": [],
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              }
+            },
+            "version": "13.2.0"
+          }
+        }
+      }
+    },
+    "layout": {
+      "kind": "GridLayout",
+      "spec": {
+        "items": [
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-1"
+              },
+              "height": 10,
+              "width": 24,
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-2"
+              },
+              "height": 7,
+              "width": 12,
+              "x": 0,
+              "y": 10
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-3"
+              },
+              "height": 7,
+              "width": 12,
+              "x": 12,
+              "y": 10
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-4"
+              },
+              "height": 7,
+              "width": 24,
+              "x": 0,
+              "y": 17
+            }
+          }
+        ]
+      }
+    },
+    "links": [],
+    "liveNow": false,
+    "preferences": {
+      "layout": {
+        "kind": "GridLayout",
+        "spec": {
+          "items": []
+        }
+      }
+    },
+    "preload": false,
+    "tags": [
+      "gt7",
+      "telemetry"
+    ],
+    "timeSettings": {
+      "autoRefresh": "30s",
+      "autoRefreshIntervals": [
+        "5s",
+        "10s",
+        "30s",
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ],
+      "fiscalYearStartMonth": 0,
+      "from": "1970-01-01T00:00:00.000Z",
+      "hideTimepicker": false,
+      "timezone": "browser",
+      "to": "1970-01-01T00:08:28.300Z"
+    },
+    "title": "GT7 Lap Analysis",
+    "variables": [
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "allowCustomValue": false,
+          "current": {
+            "text": "97: Car 2187 / Nürburgring Endurance",
+            "value": "97"
+          },
+          "definition": "SELECT\n    id AS __value,\n    id || ': Car ' || car_id || ' / ' ||\n    COALESCE(NULLIF(track_name, ''), 'Unknown track') AS __text\nFROM sessions\nORDER BY id DESC;",
+          "hide": "dontHide",
+          "includeAll": false,
+          "label": "Session",
+          "multi": false,
+          "name": "session",
+          "options": [],
+          "query": {
+            "datasource": {
+              "name": "dfvlfzkr14em8c"
+            },
+            "group": "frser-sqlite-datasource",
+            "kind": "DataQuery",
+            "spec": {
+              "__legacyStringValue": "SELECT\n    id AS __value,\n    id || ': Car ' || car_id || ' / ' ||\n    COALESCE(NULLIF(track_name, ''), 'Unknown track') AS __text\nFROM sessions\nORDER BY id DESC;"
+            },
+            "version": "v0"
+          },
+          "refresh": "onDashboardLoad",
+          "regex": "",
+          "regexApplyTo": "value",
+          "skipUrlSync": false,
+          "sort": "disabled"
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "allowCustomValue": false,
+          "current": {
+            "text": [
+              "Lap 2 — 8:45.744"
+            ],
+            "value": [
+              "407"
+            ]
+          },
+          "definition": "SELECT\n    id AS __value,\n    'Lap ' || number || ' — ' ||\n    printf(\n        '%d:%06.3f',\n        time_ms / 60000,\n        (time_ms % 60000) / 1000.0\n    ) AS __text\nFROM laps\nWHERE session_id = ${session:raw}\nORDER BY number;",
+          "hide": "dontHide",
+          "includeAll": false,
+          "label": "Lap",
+          "multi": true,
+          "name": "lap",
+          "options": [],
+          "query": {
+            "datasource": {
+              "name": "dfvlfzkr14em8c"
+            },
+            "group": "frser-sqlite-datasource",
+            "kind": "DataQuery",
+            "spec": {
+              "__legacyStringValue": "SELECT\n    id AS __value,\n    'Lap ' || number || ' — ' ||\n    printf(\n        '%d:%06.3f',\n        time_ms / 60000,\n        (time_ms % 60000) / 1000.0\n    ) AS __text\nFROM laps\nWHERE session_id = ${session:raw}\nORDER BY number;"
+            },
+            "version": "v0"
+          },
+          "refresh": "onDashboardLoad",
+          "regex": "",
+          "regexApplyTo": "value",
+          "skipUrlSync": false,
+          "sort": "disabled"
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "allowCustomValue": false,
+          "current": {
+            "text": "body_height [see documentation; verified]",
+            "value": "body_height"
+          },
+          "definition": "SELECT\n    name AS __value,\n    name || ' [' || unit || '; ' || confidence || ']' AS __text\nFROM channel_catalog\nWHERE storage_type IN ('real', 'integer')\nORDER BY layer, name;",
+          "hide": "dontHide",
+          "includeAll": false,
+          "label": "Channel",
+          "multi": false,
+          "name": "channel",
+          "options": [],
+          "query": {
+            "datasource": {
+              "name": "dfvlfzkr14em8c"
+            },
+            "group": "frser-sqlite-datasource",
+            "kind": "DataQuery",
+            "spec": {
+              "__legacyStringValue": "SELECT\n    name AS __value,\n    name || ' [' || unit || '; ' || confidence || ']' AS __text\nFROM channel_catalog\nWHERE storage_type IN ('real', 'integer')\nORDER BY layer, name;"
+            },
+            "version": "v0"
+          },
+          "refresh": "onDashboardLoad",
+          "regex": "",
+          "regexApplyTo": "value",
+          "skipUrlSync": false,
+          "sort": "disabled"
+        }
+      },
+      {
+        "kind": "CustomVariable",
+        "spec": {
+          "allowCustomValue": false,
+          "current": {
+            "text": "t",
+            "value": "t"
+          },
+          "hide": "dontHide",
+          "includeAll": false,
+          "label": "X axis",
+          "multi": false,
+          "name": "x_axis",
+          "options": [],
+          "query": "sample_time_unix_s,t,sample_index,dist",
+          "skipUrlSync": false,
+          "valuesFormat": "csv"
+        }
+      }
+    ]
+  }
+}
