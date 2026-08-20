@@ -9,8 +9,8 @@ from typing import Any
 from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.processing.laps import CompletedLap, SessionInfo
-from app.processing.tracks import TrackSignature, matches
+from app.processing.laps import CompletedLap, SessionInfo, normalize_sample_columns
+from app.processing.tracks import IDENTIFY_MIN_TICKS, TrackSignature, matches
 from app.storage.db import LapRow, LayoutRow, SessionRow, SettingRow, TrackRow
 
 # v3: extended packet channels plus per-lap static telemetry metadata.
@@ -26,6 +26,7 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "time_ms": row.time_ms,
         "finished_at": row.finished_at,
         "car_id": row.car_id,
+        "car_category": row.car_category,
         "fuel_start": row.fuel_start,
         "fuel_end": row.fuel_end,
         "fuel_consumed": row.fuel_consumed,
@@ -44,6 +45,7 @@ def lap_summary(row: LapRow) -> dict[str, Any]:
         "min_oil_pressure": row.min_oil_pressure,
         "counts_for_best": row.counts_for_best,
         "off_track_count": row.off_track_count,
+        "off_survey_count": row.off_survey_count,
         "clean_lap": row.clean_lap,
         "event_counts": _event_counts(row.events_json),
         "telemetry_meta": (
@@ -70,13 +72,21 @@ def _json_object(raw: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _decode_samples(raw: str) -> dict[str, list[float]]:
+    value: dict[str, list[float]] = json.loads(raw)
+    return normalize_sample_columns(value)
+
+
 class Repository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
 
     async def create_session(self, info: SessionInfo, car_name: str) -> int:
         async with self._sf() as db:
-            row = SessionRow(started_at=info.started_at, car_id=info.car_id, car_name=car_name)
+            row = SessionRow(
+                started_at=info.started_at, car_id=info.car_id, car_name=car_name,
+                car_category=info.car_category,
+            )
             db.add(row)
             await db.commit()
             return row.id
@@ -143,6 +153,7 @@ class Repository:
             row = LapRow(
                 session_id=session_id,
                 number=lap.number,
+                car_category=lap.car_category,
                 time_ms=lap.time_ms,
                 finished_at=lap.finished_at,
                 car_id=lap.car_id,
@@ -161,6 +172,7 @@ class Repository:
                 asm_active_pct=lap.asm_active_pct,
                 counts_for_best=lap.counts_for_best,
                 off_track_count=lap.off_track_count,
+                off_survey_count=lap.off_survey_count,
                 clean_lap=lap.clean_lap,
                 max_water_temp=lap.max_water_temp,
                 max_oil_temp=lap.max_oil_temp,
@@ -178,34 +190,90 @@ class Repository:
             await db.commit()
             return row.id
 
-    async def list_sessions(self) -> list[dict[str, Any]]:
+    async def list_sessions(self, category: str | None = None) -> list[dict[str, Any]]:
         # One aggregate query for all sessions; the outer join keeps lap-less
         # sessions and only touches LapRow ids/times (never samples_json).
         async with self._sf() as db:
             # Best excludes partial laps (pit out-laps, counts_for_best=0):
             # their GT7-reported "times" aren't full-lap times.
             best_expr = func.min(case((LapRow.counts_for_best, LapRow.time_ms)))
+            # The session row's category comes from the FIRST packet of the
+            # session, which is packet A/B often enough — a heartbeat format
+            # that carries no category at all, or one sent before the console
+            # switched. The laps know better, and max() over them picks the
+            # non-empty value ('' sorts lowest). Without this, a session whose
+            # laps are all plainly Gr.3 sits outside the Gr.3 filter (#19).
             rows = (
                 await db.execute(
-                    select(SessionRow, func.count(LapRow.id), best_expr)
+                    select(
+                        SessionRow,
+                        func.count(LapRow.id),
+                        best_expr,
+                        func.max(LapRow.car_category),
+                    )
                     .outerjoin(LapRow, LapRow.session_id == SessionRow.id)
                     .group_by(SessionRow.id)
                     .order_by(SessionRow.id.desc())
                 )
             ).all()
-            return [
+            sessions = [
                 {
                     "id": s.id,
                     "started_at": s.started_at,
                     "car_id": s.car_id,
                     "car_name": s.car_name,
+                    "car_category": s.car_category or lap_category or "",
                     "note": s.note,
                     "track_name": s.track_name,
                     "lap_count": count,
                     "best_lap_time_ms": best,
                 }
-                for s, count, best in rows
+                for s, count, best, lap_category in rows
             ]
+            if category:
+                sessions = [s for s in sessions if s["car_category"] == category]
+            return sessions
+
+    async def best_lap_in(self, track: str, category: str) -> dict[str, Any] | None:
+        """Fastest full lap ever recorded at a circuit in a car category.
+
+        Scoped by category because a Gr.3 lap and an N100 lap around the same
+        circuit are not the same achievement, and one leaderboard over both is
+        a leaderboard about the car (#19). Partial out-laps are excluded for
+        the same reason they never own a session best.
+        """
+        if not track or not category:
+            return None
+        async with self._sf() as db:
+            row = (
+                await db.execute(
+                    select(LapRow, SessionRow.car_name, SessionRow.started_at)
+                    .join(SessionRow, SessionRow.id == LapRow.session_id)
+                    .where(
+                        SessionRow.track_name == track,
+                        LapRow.car_category == category,
+                        LapRow.counts_for_best,
+                    )
+                    .order_by(LapRow.time_ms)
+                    .limit(1)
+                )
+            ).first()
+            if row is None:
+                return None
+            lap, car_name, started_at = row
+            return {
+                "lap_id": lap.id,
+                "session_id": lap.session_id,
+                "number": lap.number,
+                "time_ms": lap.time_ms,
+                "car_id": lap.car_id,
+                "car_name": car_name,
+                "car_category": lap.car_category,
+                "track_name": track,
+                "clean_lap": lap.clean_lap,
+                "off_survey_count": lap.off_survey_count,
+                "finished_at": lap.finished_at or started_at,
+            }
 
     async def get_session_metadata(self, session_id: int) -> dict[str, Any] | None:
         """Load lightweight session fields without materializing any lap samples."""
@@ -262,6 +330,22 @@ class Repository:
             )
             await db.commit()
 
+    async def set_lap_survey_verdict(
+        self, lap_id: int, off_survey_count: int, clean_lap: bool | None
+    ) -> None:
+        """Re-judge a stored lap against the surveyed road (#41).
+
+        Backfill path: laps saved before the session's circuit was identified
+        went to the DB unjudged, and identification lands one lap late.
+        """
+        async with self._sf() as db:
+            await db.execute(
+                update(LapRow)
+                .where(LapRow.id == lap_id)
+                .values(off_survey_count=off_survey_count, clean_lap=clean_lap)
+            )
+            await db.commit()
+
     async def list_laps(self, session_id: int | None = None) -> list[dict[str, Any]]:
         async with self._sf() as db:
             q = select(LapRow).order_by(LapRow.id.desc())
@@ -279,13 +363,13 @@ class Repository:
             data["events"] = json.loads(row.events_json or "[]")
             data["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
             if with_samples:
-                data["samples"] = json.loads(row.samples_json)
+                data["samples"] = _decode_samples(row.samples_json)
             return data
 
     async def get_laps_samples(self, lap_ids: list[int]) -> dict[int, dict[str, list[float]]]:
         async with self._sf() as db:
             rows = (await db.execute(select(LapRow).where(LapRow.id.in_(lap_ids)))).scalars()
-            return {r.id: json.loads(r.samples_json) for r in rows}
+            return {r.id: _decode_samples(r.samples_json) for r in rows}
 
     async def get_laps_events(self, lap_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         async with self._sf() as db:
@@ -316,7 +400,7 @@ class Repository:
                 lap = lap_summary(row)
                 lap["events"] = json.loads(row.events_json or "[]")
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
-                lap["samples"] = json.loads(row.samples_json)
+                lap["samples"] = _decode_samples(row.samples_json)
                 laps.append(lap)
             return {
                 "session": {
@@ -391,6 +475,70 @@ class Repository:
         async with self._sf() as db:
             await db.execute(delete(TrackRow).where(TrackRow.id == track_id))
             await db.commit()
+
+    async def unnamed_sessions_with_lap(self) -> list[tuple[int, int]]:
+        """(session_id, lap_id) for every session with no circuit label.
+
+        The lap chosen is the shortest FULL one. Full matters: a bundle match
+        is a share of whatever samples it is given, so a pit out-lap covering
+        only tarmac two layouts share can score 100 % while saying nothing
+        about which was driven. Shortest matters too, for a duller reason —
+        every lap is a sample blob of a few hundred kilobytes, and this is the
+        difference between reading a gigabyte and reading a fraction of it.
+        Being full costs nothing on top: a lap that covers the route is the
+        route however quickly it was driven.
+
+        Sessions with no full lap fall back to their longest, which is the best
+        evidence they have; the matcher then decides whether it is enough.
+        """
+        async with self._sf() as db:
+            shortest = (
+                select(LapRow.id)
+                .where(
+                    LapRow.session_id == SessionRow.id,
+                    LapRow.total_ticks >= IDENTIFY_MIN_TICKS,
+                )
+                .order_by(
+                    LapRow.counts_for_best.desc(),
+                    case(
+                        (LapRow.counts_for_best, LapRow.total_ticks),
+                        else_=-LapRow.total_ticks,
+                    ),
+                )
+                .limit(1)
+                .correlate(SessionRow)
+                .scalar_subquery()
+            )
+            rows = (
+                await db.execute(
+                    select(SessionRow.id, shortest)
+                    .where(SessionRow.track_name == "")
+                    .order_by(SessionRow.id.desc())
+                )
+            ).all()
+            return [(sid, lid) for sid, lid in rows if lid is not None]
+
+    async def lap_samples_json(self, lap_id: int) -> str | None:
+        """A lap's raw sample blob, unparsed — the caller decodes it off the
+        event loop, which is the whole cost of reading one."""
+        async with self._sf() as db:
+            return (
+                await db.execute(
+                    select(LapRow.samples_json).where(LapRow.id == lap_id)
+                )
+            ).scalar_one_or_none()
+
+    async def track_for_lap(self, lap_id: int) -> str:
+        """The circuit label of the session a lap belongs to, if it has one."""
+        async with self._sf() as db:
+            name = (
+                await db.execute(
+                    select(SessionRow.track_name)
+                    .join(LapRow, LapRow.session_id == SessionRow.id)
+                    .where(LapRow.id == lap_id)
+                )
+            ).scalar_one_or_none()
+            return name or ""
 
     async def set_session_track(self, session_id: int, track_name: str) -> None:
         async with self._sf() as db:

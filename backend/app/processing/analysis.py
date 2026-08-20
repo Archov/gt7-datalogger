@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_left
 from dataclasses import dataclass
+from typing import Any
 
 Samples = dict[str, list[float]]
 
@@ -384,6 +385,249 @@ def detect_corners(samples: Samples) -> list[dict[str, float | int | str]]:
     return corners
 
 
+# --- authored corners (#48) ---------------------------------------------------
+# Hand-labelled corners live in the track bundle and outrank detection. The
+# reason is not only accuracy: detect_corners() runs PER LAP, so a lap that
+# carries less speed through a shallow bend may not register it as a corner at
+# all, and every corner after it renumbers. Cross-lap and cross-session
+# comparison — the ground #21's report card and #22's sectors are built on —
+# cannot rest on numbering that moves. Authored corners are stable by
+# construction; all a lap contributes is where along ITS distance axis they
+# fell.
+
+# An apex anchor further than this from anything the lap drove is not on this
+# lap: a bundle for a different layout, or a corner marked off the road.
+CORNER_ANCHOR_MAX_M = 60.0
+# Extent used when a corner was labelled with an apex but no entry/exit. Half
+# of a fairly generous corner, clipped at the midpoint to its neighbours —
+# enough for "which corner is this braking event for" without pretending the
+# turn-in point is known.
+CORNER_DEFAULT_HALF_M = 75.0
+
+
+def _lap_path(samples: Samples) -> tuple[list[float], list[float], list[float], list[float]]:
+    """Strictly-increasing (dist, x, z, speed) — duplicates break projection."""
+    dist = samples.get("dist") or []
+    xs = samples.get("pos_x") or []
+    zs = samples.get("pos_z") or []
+    speed = samples.get("speed") or []
+    n = min(len(dist), len(xs), len(zs))
+    if n < 2:
+        return [], [], [], []
+    speed = speed[:n] if len(speed) >= n else [0.0] * n
+    keep = [0]
+    for i in range(1, n):
+        if dist[i] > dist[keep[-1]]:
+            keep.append(i)
+    return (
+        [dist[i] for i in keep], [xs[i] for i in keep],
+        [zs[i] for i in keep], [speed[i] for i in keep],
+    )
+
+
+def _nearest_index(xs: list[float], zs: list[float], x: float, z: float) -> tuple[int, float]:
+    best_i, best_d2 = 0, float("inf")
+    for i in range(len(xs)):
+        d2 = (xs[i] - x) ** 2 + (zs[i] - z) ** 2
+        if d2 < best_d2:
+            best_i, best_d2 = i, d2
+    return best_i, math.sqrt(best_d2)
+
+
+def project_corners(
+    samples: Samples, authored: list[dict[str, Any]]
+) -> list[dict[str, float | int | str]]:
+    """Place a circuit's authored corners on one lap's distance axis.
+
+    Corners are anchored to world POSITIONS, not lap distances, because
+    distance depends on the racing line taken — a corner pinned at 1,240 m on
+    one lap sits somewhere else on the next. So each lap resolves its own
+    apex/entry/exit distances by finding where it passed the anchor, and the
+    identity (number, name, direction) comes from the bundle unchanged.
+    """
+    d, xs, zs, speeds = _lap_path(samples)
+    if len(d) < 8:
+        return []
+    placed: list[tuple[float, dict[str, Any], int]] = []
+    for corner in authored:
+        apex = corner.get("apex") or {}
+        try:
+            ax, az = float(apex["x"]), float(apex["z"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        i, gap = _nearest_index(xs, zs, ax, az)
+        if gap > CORNER_ANCHOR_MAX_M:
+            continue  # this corner is not on this lap
+        placed.append((d[i], corner, i))
+    if not placed:
+        return []
+    placed.sort(key=lambda t: t[0])
+
+    out: list[dict[str, float | int | str]] = []
+    for pos, (apex_dist, corner, apex_i) in enumerate(placed):
+        far = CORNER_DEFAULT_HALF_M * 2  # no neighbour on this side to clip to
+        prev_dist = placed[pos - 1][0] if pos > 0 else d[0] - far
+        next_dist = placed[pos + 1][0] if pos + 1 < len(placed) else d[-1] + far
+        entry = _anchor_dist(corner.get("entry"), d, xs, zs)
+        exit_ = _anchor_dist(corner.get("exit"), d, xs, zs)
+        if entry is None:
+            entry = max(apex_dist - CORNER_DEFAULT_HALF_M, (apex_dist + prev_dist) / 2, d[0])
+        if exit_ is None:
+            exit_ = min(apex_dist + CORNER_DEFAULT_HALF_M, (apex_dist + next_dist) / 2, d[-1])
+        lo = bisect_left(d, entry)
+        hi = bisect_left(d, exit_)
+        window = speeds[lo : max(hi + 1, lo + 1)] or [speeds[apex_i]]
+        out.append({
+            "n": int(corner.get("n", pos + 1)),
+            "name": str(corner.get("name") or ""),
+            # The apex is the AUTHORED position, not the nearest sample: it is
+            # the same point on every lap, which is the whole point.
+            "apex_dist": round(apex_dist, 1),
+            "apex_x": round(float(corner["apex"]["x"]), 1),
+            "apex_z": round(float(corner["apex"]["z"]), 1),
+            "entry_dist": round(entry, 1),
+            "exit_dist": round(exit_, 1),
+            "direction": str(corner.get("direction") or _turn_direction(xs, zs, lo, hi)),
+            "min_speed": round(min(window), 1),
+            "angle_deg": round(_turn_angle_deg(xs, zs, lo, hi), 1),
+            "authored": True,
+        })
+    return out
+
+
+def _anchor_dist(
+    point: Any, d: list[float], xs: list[float], zs: list[float]
+) -> float | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        px, pz = float(point["x"]), float(point["z"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    i, gap = _nearest_index(xs, zs, px, pz)
+    return d[i] if gap <= CORNER_ANCHOR_MAX_M else None
+
+
+def _turn_angle_deg(xs: list[float], zs: list[float], lo: int, hi: int) -> float:
+    """Heading change the lap actually made across the corner's extent.
+
+    Descriptive only — unlike detection, nothing here decides whether the
+    corner exists. A driver who straightlined a chicane gets a small number
+    against a corner that is still corner 7.
+    """
+    if hi - lo < 4:
+        return 0.0
+    total = 0.0
+    step = max(1, (hi - lo) // 16)
+    prev: float | None = None
+    for i in range(lo, hi + 1, step):
+        j = min(i + step, hi)
+        dx, dz = xs[j] - xs[i], zs[j] - zs[i]
+        if dx == 0 and dz == 0:
+            continue
+        heading = math.atan2(dz, dx)
+        if prev is not None:
+            total += _wrap_angle(heading - prev)
+        prev = heading
+    return abs(math.degrees(total))
+
+
+def _turn_direction(xs: list[float], zs: list[float], lo: int, hi: int) -> str:
+    if hi - lo < 4:
+        return "R"
+    dx0, dz0 = xs[lo + 1] - xs[lo], zs[lo + 1] - zs[lo]
+    dx1, dz1 = xs[hi] - xs[hi - 1], zs[hi] - zs[hi - 1]
+    turn = _wrap_angle(math.atan2(dz1, dx1) - math.atan2(dz0, dx0))
+    # Positive heading delta is CCW in raw x/z, but the map (and GT7's own
+    # view) renders z inverted — that's a right-hander.
+    return "R" if turn > 0 else "L"
+
+
+def corners_for_lap(
+    samples: Samples, authored: list[dict[str, Any]] | None = None
+) -> list[dict[str, float | int | str]]:
+    """A lap's corners: the circuit's authored ones if it has any, else detected.
+
+    Falling back on an empty projection is deliberate — an authored set that
+    places nothing on this lap means the bundle describes a different layout,
+    and generic corners beat no corners.
+    """
+    if authored:
+        projected = project_corners(samples, authored)
+        if projected:
+            return projected
+    return detect_corners(samples)
+
+
+# --- per-corner report card (#21) ---------------------------------------------
+
+# Slack allowed when judging whether a lap covers a corner window: reference
+# corner distances land on the detection grid (2 m) and lap lengths differ by
+# line taken, so an exit a metre past this lap's last sample is still "driven".
+GRID_TOLERANCE_M = 2.0
+
+
+def corner_report(
+    corners: list[dict[str, Any]], samples: Samples
+) -> list[dict[str, float | int]]:
+    """One lap's entry/min/exit speed and time-through for each corner.
+
+    `corners` is the REFERENCE lap's set (authored or detected), so every lap
+    in a comparison is measured through the same entry/exit windows — the same
+    distance-from-start approximation the delta chart already rests on. A
+    corner whose window runs past this lap's recording is omitted rather than
+    clamped: the time through part of a corner reported as the whole corner
+    would sort itself to the top of the report as a phantom gain.
+    """
+    dist = samples.get("dist") or []
+    t = samples.get("t") or []
+    speed = samples.get("speed") or []
+    n = min(len(dist), len(t), len(speed))
+    if n < 2:
+        return []
+    # Strictly increasing distance only — duplicates (pause edges, imports)
+    # break interpolation, same as everywhere else distance is an axis.
+    keep = [0]
+    for i in range(1, n):
+        if dist[i] > dist[keep[-1]]:
+            keep.append(i)
+    if len(keep) < 2:
+        return []
+    d = [dist[i] for i in keep]
+    ts = [t[i] for i in keep]
+    sp = [speed[i] for i in keep]
+
+    out: list[dict[str, float | int]] = []
+    for c in corners:
+        entry, exit_ = float(c["entry_dist"]), float(c["exit_dist"])
+        if entry <= exit_:
+            if entry < d[0] - GRID_TOLERANCE_M or exit_ > d[-1] + GRID_TOLERANCE_M:
+                continue  # this lap never drove the full window
+            time_s = _interp(d, ts, exit_) - _interp(d, ts, entry)
+            lo, hi = bisect_left(d, entry), bisect_left(d, exit_)
+            window = sp[lo:hi] or [_interp(d, sp, (entry + exit_) / 2)]
+        else:
+            # A start/finish-stitched corner wraps the lap boundary: its time
+            # is the tail of this lap plus the head of it — so the lap must
+            # cover BOTH: a short lap that never reached the entry would
+            # otherwise clamp to its last sample and report the head alone,
+            # a phantom gain sorted straight to the top of the card.
+            if exit_ > d[-1] + GRID_TOLERANCE_M or entry > d[-1] + GRID_TOLERANCE_M:
+                continue
+            time_s = (ts[-1] - _interp(d, ts, entry)) + (_interp(d, ts, exit_) - ts[0])
+            lo = bisect_left(d, entry)
+            hi = bisect_left(d, exit_)
+            window = (sp[lo:] + sp[:hi]) or [sp[0]]
+        out.append({
+            "n": int(c["n"]),
+            "entry_speed": round(_interp(d, sp, entry), 1),
+            "min_speed": round(min(window), 1),
+            "exit_speed": round(_interp(d, sp, exit_), 1),
+            "time_ms": round(time_s * 1000, 1),
+        })
+    return out
+
+
 def _thresholds(curv: list[float]) -> tuple[float, float]:
     """Hysteresis thresholds anchored to this lap's curvature noise floor.
 
@@ -493,6 +737,199 @@ def _apex_index(a: _Arc, curv: list[float]) -> int:
         return idx0
     idx1, t1 = centroid(*a.wrap)
     return idx0 if t0 >= t1 else idx1
+
+
+# --- Accelerometer calibration (#16) -----------------------------------------
+#
+# GT7 broadcasts `sway`/`heave`/`surge` (packet B) with no documented unit and
+# no documented sign convention, and the simulator source cannot prove what a
+# real console sends — which is exactly why #16 said "validate before building
+# UI". So the app validates them against physics it already records, per lap:
+#
+#   lateral       a = v * omega      omega = signed heading rate from the path
+#   longitudinal  a = dv/dt          from the speed trace
+#
+# Both references are in m/s^2 and both are signed, so a least-squares slope
+# through the origin recovers the broadcast channel's UNIT (slope ~1 means it
+# is m/s^2, ~0.102 means it is already g) and its SIGN at the same time. What
+# comes back is a multiplier to g, so a g-g diagram reads correctly whichever
+# convention the console turns out to use — and says so when the fit is too
+# weak to trust.
+
+GRAVITY = 9.80665
+
+# A lap has thousands of ticks; a fit resting on a handful of them is noise.
+ACC_MIN_SAMPLES = 150
+# Share of the channel's magnitude the scaled reference has to explain. This
+# is R² about ZERO, not about the mean: the model is forced through the origin
+# (see _fit_through_origin), and a mean-centred correlation collapses on
+# exactly the cleanest case there is — a long constant-rate braking zone,
+# where both series are near-constant and Pearson r becomes numerical noise.
+ACC_MIN_R2 = 0.75
+# Only fit where the reference itself is large enough to have a meaningful
+# ratio: near zero the quotient is dominated by jitter in both series.
+ACC_MIN_REF = 1.5  # m/s^2
+ACC_MIN_SPEED = 8.0  # m/s — below this, heading from position is noise
+# A slope this small would mean the channel is ~flat against the reference;
+# inverting it produces an absurd scale rather than a calibration.
+ACC_MIN_SLOPE = 1e-3
+
+
+def _fit_through_origin(xs: list[float], ys: list[float]) -> tuple[float, float]:
+    """(slope, R² about zero) for y = slope * x, forced through the origin.
+
+    The intercept is fixed at zero on purpose: zero reference acceleration
+    must mean zero broadcast acceleration, and a free intercept would happily
+    absorb a systematic offset that is the very thing worth seeing. The
+    goodness measure is taken about zero for the same reason — how much of the
+    channel's own magnitude the scaled reference accounts for. It is 1 for a
+    perfect fit and goes negative for a channel the reference does not
+    describe at all.
+    """
+    if len(xs) < 2:
+        return 0.0, 0.0
+    sxx = sum(x * x for x in xs)
+    syy = sum(y * y for y in ys)
+    if sxx <= 0 or syy <= 0:
+        return 0.0, 0.0
+    slope = sum(x * y for x, y in zip(xs, ys, strict=True)) / sxx
+    sse = sum((y - slope * x) ** 2 for x, y in zip(xs, ys, strict=True))
+    return slope, 1.0 - sse / syy
+
+
+# Half-window for the path heading, in METRES of track rather than ticks.
+# Positions are stored rounded to a centimetre, so heading resolution is
+# 0.01 / chord: over the ~1 m a tick covers at speed that is 0.01 rad, which
+# swamps the 0.002 rad/tick a real corner turns, and differencing consecutive
+# ticks yields a staircase of quantisation noise rather than a yaw rate. Over
+# 8 m the same rounding is 0.001 rad, two orders below what a 46 m radius
+# turns across that distance. Distance-based because the tick spacing itself
+# varies with speed by a factor of five.
+HEADING_SPAN_M = 8.0
+
+
+def _heading_rate(samples: Samples) -> list[float]:
+    """Signed yaw rate (rad/s) from the driven path, per tick.
+
+    The stored `yaw_rate` column is an ABSOLUTE value, so it cannot settle
+    which way `sway` counts positive. Positive here is the same convention
+    corner detection uses: a positive heading delta in raw x/z, which the map
+    (z inverted, as GT7 draws it) renders as a right-hander.
+
+    The chord-heading-difference scheme is the one `detect_corners` uses, for
+    the same reason: it measures the turn over a fixed length of road instead
+    of a fixed number of samples.
+    """
+    t = samples.get("t") or []
+    xs = samples.get("pos_x") or []
+    zs = samples.get("pos_z") or []
+    dist = samples.get("dist") or []
+    n = min(len(t), len(xs), len(zs), len(dist))
+    out = [0.0] * n
+    if n < 5:
+        return out
+    for i in range(n):
+        lo = bisect_left(dist, dist[i] - HEADING_SPAN_M, 0, i)
+        hi = bisect_left(dist, dist[i] + HEADING_SPAN_M, i, n)
+        hi = min(hi, n - 1)
+        if hi - i < 1 or i - lo < 1:
+            continue
+        before = math.atan2(zs[i] - zs[lo], xs[i] - xs[lo])
+        after = math.atan2(zs[hi] - zs[i], xs[hi] - xs[i])
+        # The two chords represent the heading at their own midpoints in time.
+        dt = (t[hi] - t[lo]) / 2
+        if dt > 0:
+            out[i] = _wrap_angle(after - before) / dt
+    return out
+
+
+def _axis(
+    raw: list[float], reference: list[float], mask: list[bool]
+) -> dict[str, Any]:
+    """Calibrate one accelerometer axis against a physical reference."""
+    xs = [reference[i] for i, ok in enumerate(mask) if ok]
+    ys = [raw[i] for i, ok in enumerate(mask) if ok]
+    slope, r2 = _fit_through_origin(xs, ys)
+    ok = len(xs) >= ACC_MIN_SAMPLES and r2 >= ACC_MIN_R2 and abs(slope) >= ACC_MIN_SLOPE
+    return {
+        "slope": round(slope, 5),  # broadcast units per m/s^2
+        "r2": round(r2, 4),
+        "samples": len(xs),
+        "fitted": ok,
+        # What a consumer multiplies the raw channel by to get g. Carries the
+        # sign, so a channel that counts the other way comes out upright.
+        "g_per_unit": round(1.0 / (slope * GRAVITY), 6) if ok else round(1.0 / GRAVITY, 6),
+    }
+
+
+def accel_calibration(samples: Samples) -> dict[str, Any]:
+    """Unit + sign calibration for a lap's broadcast accelerometer channels.
+
+    Returns `available: False` for a recording made on packet A (no
+    accelerometer at all). When a fit is too weak the axis falls back to
+    assuming m/s^2 and reports `fitted: False`, so the UI can show the
+    diagram and still say the calibration is unproven.
+    """
+    lat_raw = samples.get("sway") or []
+    long_raw = samples.get("surge") or []
+    t = samples.get("t") or []
+    speed = samples.get("speed") or []
+    heading = _heading_rate(samples)
+    n = min(len(t), len(speed), len(lat_raw), len(long_raw), len(heading))
+    if n < ACC_MIN_SAMPLES:
+        return {"available": False}
+
+    v = [speed[i] / 3.6 for i in range(n)]  # km/h -> m/s
+    lat_ref = [v[i] * heading[i] for i in range(n)]
+    long_ref = [0.0] * n
+    for i in range(1, n - 1):
+        dt = t[i + 1] - t[i - 1]
+        if dt > 0:
+            long_ref[i] = (v[i + 1] - v[i - 1]) / dt
+
+    moving = [v[i] >= ACC_MIN_SPEED for i in range(n)]
+    lat = _axis(
+        lat_raw[:n], lat_ref, [moving[i] and abs(lat_ref[i]) >= ACC_MIN_REF for i in range(n)]
+    )
+    lon = _axis(
+        long_raw[:n], long_ref, [moving[i] and abs(long_ref[i]) >= ACC_MIN_REF for i in range(n)]
+    )
+    return {
+        "available": True,
+        "lateral": lat,
+        "longitudinal": lon,
+        # One line a human can read: what the broadcast unit appears to be.
+        "unit": _unit_guess(lat, lon),
+    }
+
+
+def _unit_guess(lat: dict[str, Any], lon: dict[str, Any]) -> str:
+    slopes = [abs(a["slope"]) for a in (lat, lon) if a["fitted"]]
+    if not slopes:
+        return "unverified"
+    mean = sum(slopes) / len(slopes)
+    if 0.7 <= mean <= 1.4:
+        return "m/s^2"
+    if 0.07 <= mean <= 0.14:
+        return "g"
+    return f"1 unit = {round(1 / mean, 3)} m/s^2"
+
+
+def gg_extremes(samples: Samples, calibration: dict[str, Any]) -> dict[str, float]:
+    """Peak g actually used, in each direction — the corners of the envelope."""
+    lat_k = calibration.get("lateral", {}).get("g_per_unit", 1 / GRAVITY)
+    long_k = calibration.get("longitudinal", {}).get("g_per_unit", 1 / GRAVITY)
+    lat = [v * lat_k for v in samples.get("sway") or []]
+    lon = [v * long_k for v in samples.get("surge") or []]
+    # Clamped at zero: a direction the lap never went in used no g at all, and
+    # an oval driven one way round would otherwise report a negative peak for
+    # the side it never turned to.
+    return {
+        "lat_right": round(max(0.0, max(lat, default=0.0)), 3),
+        "lat_left": round(max(0.0, -min(lat, default=0.0)), 3),
+        "accel": round(max(0.0, max(lon, default=0.0)), 3),
+        "braking": round(max(0.0, -min(lon, default=0.0)), 3),
+    }
 
 
 # --- Fuel map ---------------------------------------------------------------

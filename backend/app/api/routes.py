@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -14,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.api.auth import require_admin
 from app.export_filenames import (
@@ -23,7 +24,7 @@ from app.export_filenames import (
     session_export_filename,
 )
 from app.processing import analysis
-from app.processing.laps import SAMPLE_COLUMNS
+from app.processing.laps import SAMPLE_COLUMNS, normalize_sample_columns
 from app.processing.llm_export import (
     Detail,
     ExportInputError,
@@ -33,6 +34,7 @@ from app.processing.llm_export import (
 from app.processing.orientation import ORIENTATION_CHANNELS
 from app.processing.telemetry_resolution import resolve_session_telemetry
 from app.processing.tracks import signature_from_samples
+from app.race_engineer import replay
 
 if TYPE_CHECKING:
     from app.service import TelemetryService
@@ -59,8 +61,13 @@ async def status(request: Request) -> dict[str, Any]:
 
 
 @router.get("/sessions")
-async def sessions(request: Request) -> list[dict[str, Any]]:
-    return await svc(request).repo.list_sessions()
+async def sessions(
+    request: Request,
+    category: str = Query(
+        "", max_length=16, description="car category (packet C), e.g. Gr.3 — all when blank"
+    ),
+) -> list[dict[str, Any]]:
+    return await svc(request).repo.list_sessions(category.strip() or None)
 
 
 @router.get("/sessions/{session_id}/export.llm.json")
@@ -130,6 +137,20 @@ async def laps(request: Request) -> list[dict[str, Any]]:
     for lap in laps:
         lap["car_name"] = cars.name(lap["car_id"])
     return laps
+
+
+@router.get("/laps/best")
+async def best_lap(
+    request: Request,
+    track: str = Query(..., min_length=1, max_length=80),
+    category: str = Query(..., min_length=1, max_length=16),
+) -> dict[str, Any] | None:
+    """Fastest full lap at a circuit in one car category (#19).
+
+    Declared BEFORE /laps/{lap_id}: FastAPI matches in declaration order, and
+    "best" would otherwise be handed to the lap-id route as a path parameter.
+    """
+    return await svc(request).repo.best_lap_in(track.strip(), category.strip())
 
 
 @router.get("/laps/{lap_id}")
@@ -296,6 +317,10 @@ async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any
     await service.repo.set_session_track(lap["session_id"], name)
     if service.session_id == lap["session_id"]:
         service.track_name = name
+        # Naming the circuit you are on labels a survey running on it, unless
+        # the driver already named it themselves.
+        if service.survey.active and not service.survey.track_locked:
+            service.survey.set_track(name)
     return {"id": track_id, "name": name}
 
 
@@ -303,26 +328,6 @@ async def create_track(request: Request, payload: TrackPayload) -> dict[str, Any
 async def delete_track(request: Request, track_id: int) -> dict[str, str]:
     await svc(request).repo.delete_track(track_id)
     return {"status": "deleted"}
-
-
-@lru_cache(maxsize=1)
-def _load_track_catalog(path: str) -> dict[str, Any]:
-    # The bundled file only changes with a release; cache the parse.
-    data: dict[str, Any] = json.loads(Path(path).read_text(encoding="utf-8"))
-    return data
-
-
-@router.get("/track-catalog")
-async def track_catalog(request: Request) -> dict[str, Any]:
-    """Official GT7 track/layout metadata (bundled data/tracks.json)."""
-    path = svc(request).settings.tracks_json
-    if not path.exists():
-        # The default is relative to backend/; dev servers often run from the
-        # repo root (cars.csv papers over this with GT7_CARS_CSV in .env).
-        path = Path(__file__).resolve().parents[2] / "data" / "tracks.json"
-    if not path.exists():
-        raise HTTPException(404, "track catalog not bundled")
-    return _load_track_catalog(str(path))
 
 
 class ImportPayload(BaseModel):
@@ -375,6 +380,7 @@ class LapImportModel(BaseModel):
 
 
 def _validate_import_samples(samples: dict[str, list[float]]) -> dict[str, list[float]]:
+    normalize_sample_columns(samples)
     samples = {k: v for k, v in samples.items() if k in SAMPLE_COLUMNS}
     missing = REQUIRED_IMPORT_COLUMNS - samples.keys()
     if missing:
@@ -479,7 +485,27 @@ async def compare(
         raise HTTPException(404, f"reference lap {ref} not found")
     events_by_id = await svc(request).repo.get_laps_events(lap_ids)
 
-    out: dict[str, Any] = {"ref": ref, "step": step, "channels": list(columns), "laps": {}}
+    # The circuit's authored corners, if it has been labelled (#48). Reading
+    # them parses the track bundle the first time, which is a multi-megabyte
+    # document — off the event loop.
+    track = await svc(request).repo.track_for_lap(ref)
+    authored = await asyncio.to_thread(svc(request).authored_corners, track)
+    # Corner numbering comes from the reference lap only, so every overlaid
+    # lap shares one consistent set of map markers — and from the circuit's
+    # authored corners when it has them, so the numbering is the same in
+    # every session too, not just within this one.
+    ref_corners = analysis.corners_for_lap(samples_by_id[ref], authored)
+
+    out: dict[str, Any] = {
+        "ref": ref,
+        "step": step,
+        "channels": list(columns),
+        # Unit + sign calibration for the broadcast accelerometer, fitted on
+        # the REFERENCE lap and applied to every lap in the comparison, so the
+        # g-g diagram plots them all on one axis (#16).
+        "accel": analysis.accel_calibration(samples_by_id[ref]),
+        "laps": {},
+    }
     for lap_id, samples in samples_by_id.items():
         present = tuple(c for c in columns if c in samples)
         entry: dict[str, Any] = {
@@ -487,14 +513,53 @@ async def compare(
             "peaks_valleys": analysis.speed_peaks_valleys(samples),
             "events": events_by_id.get(lap_id, []),
         }
+        if out["accel"]["available"] and "sway" in samples:
+            # Peaks come from the RAW ticks, not the resampled series the
+            # scatter draws: distance resampling smooths exactly the moments a
+            # traction-circle readout is about.
+            entry["gg"] = analysis.gg_extremes(samples, out["accel"])
         if lap_id == ref:
-            # Corner numbering comes from the reference lap only, so every
-            # overlaid lap shares one consistent set of map markers.
-            entry["corners"] = analysis.detect_corners(samples)
+            entry["corners"] = ref_corners
         else:
             entry["delta"] = analysis.time_delta_series(samples, samples_by_id[ref], step)
+        if ref_corners:
+            # Every lap measured through the SAME corner windows (the
+            # reference's), which is what makes the per-corner report card's
+            # time-lost column mean something (#21).
+            entry["corner_report"] = analysis.corner_report(ref_corners, samples)
         out["laps"][str(lap_id)] = entry
     return out
+
+
+@router.get("/analysis/coaching")
+async def coaching(request: Request, session_id: int) -> dict[str, Any]:
+    """The race engineer's post-lap coaching notes for a stored session (#23).
+
+    Replayed through the live CoachingDetector rather than recorded from it,
+    so the notes exist for sessions driven with voice off — which is the
+    point: the findings were speech-only before this. See
+    app.race_engineer.replay for what is (and isn't) faithful to live.
+    """
+    service = svc(request)
+    lap_rows = await service.repo.list_laps(session_id)
+    lap_rows = [r for r in lap_rows if (r["total_ticks"] or 0) > 0]
+    if not lap_rows:
+        return {"session_id": session_id, "laps": []}
+    lap_ids = [r["id"] for r in lap_rows]
+    samples_by_id = await service.repo.get_laps_samples(lap_ids)
+    events_by_id = await service.repo.get_laps_events(lap_ids)
+    track = await service.repo.track_for_lap(lap_ids[0])
+
+    def _replay() -> list[dict[str, Any]]:
+        authored = service.authored_corners(track)
+        return replay.coaching_notes(
+            lap_rows, samples_by_id, events_by_id, authored,
+            service.settings.race_engineer_units,
+        )
+
+    # Corner detection runs once per new session best inside the replay —
+    # tens of milliseconds a time, far too much for the event loop.
+    return {"session_id": session_id, "laps": await asyncio.to_thread(_replay)}
 
 
 @router.get("/analysis/deviation")
@@ -532,6 +597,25 @@ async def fuel(request: Request, lap_id: int) -> dict[str, Any]:
 # --- surface survey (issue #37) ----------------------------------------------
 
 
+class SurveyTrackPayload(BaseModel):
+    track: str = Field(..., min_length=1, max_length=80)
+
+    @field_validator("track")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Reject a name that is only whitespace.
+
+        `min_length` passes "   ", which strips to nothing — and assigning an
+        empty label would LOCK the survey against auto-identification while
+        still leaving it unlabeled. That is strictly worse than the bug this
+        endpoint exists to fix: the run could then never be rescued at all.
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("track name cannot be blank")
+        return stripped
+
+
 class SurveyStartPayload(BaseModel):
     # Track width isn't broadcast by GT7; the survey applies this assumption
     # to derive wheel-contact points and measures how far off it lands.
@@ -563,6 +647,29 @@ async def survey_start(request: Request, payload: SurveyStartPayload) -> dict[st
 async def survey_stop(request: Request) -> dict[str, Any]:
     svc(request).survey.stop()
     return svc(request).survey.status()
+
+
+@router.post("/survey/track", dependencies=[Depends(require_admin)])
+async def survey_set_track(request: Request, payload: SurveyTrackPayload) -> dict[str, Any]:
+    """Name the circuit a running survey is describing.
+
+    A run started before the track was known accumulates border evidence
+    against no circuit at all, and a survey with no label saves no bundle —
+    so without this, an hour of driving can only be recovered from its JSONL.
+    Assigning a label to an unlabeled run keeps everything it has gathered
+    and merges it into that circuit's bundle.
+
+    Re-assigning an ALREADY labeled run is a circuit change, not a
+    correction: the accumulated evidence is flushed to the previous circuit
+    first, so one track's driving can never land in another's bundle. To fix
+    a wrong label, rebuild from the JSONL instead
+    (`scripts/jsonl_to_bundle.py`).
+    """
+    survey = svc(request).survey
+    if not survey.active:
+        raise HTTPException(409, "no survey is running")
+    survey.set_track(payload.track, lock=True)
+    return survey.status()
 
 
 @router.get("/survey/status")
@@ -651,29 +758,9 @@ async def survey_export(request: Request) -> PlainTextResponse:
     )
 
 
-# --- track bundles (persistent survey knowledge per circuit) ------------------
-
-
-@router.get("/track-bundles")
-async def track_bundles(request: Request) -> list[dict[str, Any]]:
-    """Every circuit's accumulated survey bundle (perimeters, finish line)."""
-    from app.processing import track_bundle
-
-    return track_bundle.list_bundles(svc(request).settings.db_path.parent)
-
-
-@router.get("/track-bundles/{slug}")
-async def track_bundle_download(request: Request, slug: str) -> dict[str, Any]:
-    """One bundle document — the export unit for a future track-data repo."""
-    from app.processing import track_bundle
-
-    if not re.fullmatch(r"[a-z0-9-]+", slug):
-        raise HTTPException(400, "invalid bundle name")
-    path = svc(request).settings.db_path.parent / track_bundle.BUNDLE_DIR / f"{slug}.json"
-    if not path.exists():
-        raise HTTPException(404, "no bundle for this track")
-    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-    return data
+# Track bundles, the track catalog and the merged management view live in
+# app/api/tracks.py — they are one subject (what this installation knows about
+# circuits) and they outgrew being a section of this file.
 
 
 # --- controls ---------------------------------------------------------------

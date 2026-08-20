@@ -256,6 +256,23 @@ async def test_export_import_roundtrip_v3(client) -> None:
     assert detail["telemetry_meta"]["packet_format"] == "A"
 
 
+async def test_import_normalizes_legacy_main_channel_names(client) -> None:
+    c, service = client
+    await drive_laps(service)
+    lap_id = (await c.get("/api/laps")).json()[0]["id"]
+    exported = (await c.get(f"/api/laps/{lap_id}/export")).json()
+    samples = exported["lap"]["samples"]
+    samples["steer"] = [0.25] * len(samples["t"])
+    samples["acc_lat"] = [1.5] * len(samples["t"])
+
+    imported = (await c.post("/api/laps/import", json=exported)).json()
+    detail = (await c.get(f"/api/laps/{imported['id']}")).json()
+
+    assert detail["samples"]["steering_wheel_rad"][0] == 0.25
+    assert detail["samples"]["sway"][0] == 1.5
+    assert "steer" not in detail["samples"] and "acc_lat" not in detail["samples"]
+
+
 @pytest.mark.parametrize("version", [1, 2, 3])
 async def test_import_file_without_new_columns(client, version: int) -> None:
     c, service = client

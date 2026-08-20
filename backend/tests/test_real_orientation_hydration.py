@@ -47,6 +47,24 @@ async def test_session_17_hydrates_orientation_on_standard_http_export_after_res
         source.backup(target)
     shutil.copy2(REAL_ARCHIVE, archive_root / REAL_ARCHIVE.name)
 
+    # This acceptance test exercises hydration of a historical session. The
+    # ignored developer fixture may itself have been hydrated by a newer local
+    # run, so recreate the original missing-channel state in the disposable
+    # copy without touching the user's database.
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            "SELECT id, samples_json FROM laps WHERE session_id = 17"
+        ).fetchall()
+        for lap_id, raw in rows:
+            samples = json.loads(raw)
+            for channel in ORIENTATION_CHANNELS:
+                samples.pop(channel, None)
+            connection.execute(
+                "UPDATE laps SET samples_json = ? WHERE id = ?",
+                (json.dumps(samples, separators=(",", ":")), lap_id),
+            )
+        connection.commit()
+
     before = _session_sample_blobs(database)
     assert before
     for blob in before.values():

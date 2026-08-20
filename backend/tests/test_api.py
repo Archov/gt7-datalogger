@@ -205,3 +205,104 @@ async def test_fuel_endpoint(client) -> None:
     resp = await c.get(f"/api/analysis/fuel?lap_id={laps[0]['id']}")
     assert resp.status_code == 200
     assert len(resp.json()["rows"]) == 11
+
+
+async def test_survey_edges_serve_the_shape_the_map_draws(client, tmp_path) -> None:
+    """/survey/edges is the map's only source of border geometry.
+
+    It must carry a resolved `kind` per metre — the frontend colours ticks and
+    excludes run-off from the road fill by it, and must never have to reduce
+    votes itself — with the evidence alongside for the raw inspector.
+    """
+    c, service = client
+    survey = service.survey
+    survey.start(tmp_path, track_width_m=1.6, track="Ring", track_user_set=True)
+    survey._append_edge(x=10.0, z=5.0, hx=1.0, hz=0.0, side="L", kind="straddle", pid=1)
+    survey._append_edge(x=10.2, z=5.0, hx=1.0, hz=0.0, side="L", kind="runoff", pid=2)
+
+    body = (await c.get("/api/survey/edges")).json()
+    assert body["total"] == 1  # one metre of border, not two points
+    point = body["points"][0]
+    assert point["kind"] == "runoff"  # the hand mark, resolved server-side
+    # Votes are per kind per SOURCE — the installation id is what keeps two
+    # people's run ordinals from being read as the same fact (#47).
+    src = body["points"][0]["votes"]["runoff"]
+    assert list(src.values()) == [[1, 1]]
+    assert point["votes"] == {"straddle": src, "runoff": src}
+    assert point["run"] == 1 and point["tw"] == 1.6
+    assert {"x", "z", "hx", "hz", "side"} <= set(point)
+    survey.stop()
+
+
+async def test_car_category_is_persisted_and_served(client) -> None:
+    """Packet C broadcasts the category ("Gr.3", "Gr.4"...) and it was being
+    dropped. It is the free grouping key for "best in a Gr.3 car here" (#19),
+    so it has to survive onto the session AND the lap — denormalised like
+    car_id, so filtering never needs a join.
+    """
+    c, service = client
+    for lap in range(1, 3):
+        for tick in range(60):
+            await service.processor.feed(
+                parse_packet(build_packet(
+                    fmt="C", car_id=42, car_category="Gr.3", current_lap=lap,
+                    last_lap_time_ms=61_000 if lap > 1 else -1,
+                    flags=ON_TRACK, packet_id=lap * 100 + tick,
+                    position=(float(tick), 0.0, 0.0), surface_types="TTTT",
+                ))
+            )
+
+    sessions = (await c.get("/api/sessions")).json()
+    assert sessions, "a session should have been created"
+    assert sessions[0]["car_category"] == "Gr.3"
+
+    laps = (await c.get("/api/laps")).json()
+    assert laps and laps[0]["car_category"] == "Gr.3"
+
+
+async def test_laps_without_packet_c_have_a_blank_category(client) -> None:
+    """Format A carries no category; blank must not read as a real one."""
+    c, service = client
+    await drive_laps(service, laps=1)
+    laps = (await c.get("/api/laps")).json()
+    assert laps[0]["car_category"] == ""
+
+
+async def test_survey_track_can_be_assigned_mid_run(client, tmp_path) -> None:
+    """A survey started before the circuit was known must be attachable to
+    one without losing what it gathered (#45)."""
+    c, service = client
+    service.survey.start(tmp_path, track_width_m=1.6, track="")
+    assert (await c.get("/api/survey/status")).json()["track"] == ""
+
+    resp = await c.post("/api/survey/track", json={"track": "Dragon Trail - Gardens"})
+    assert resp.status_code == 200
+    assert resp.json()["track"] == "Dragon Trail - Gardens"
+    assert service.survey.track_locked is True  # auto-ID must not override
+    service.survey.stop()
+
+
+async def test_assigning_a_track_needs_a_running_survey(client) -> None:
+    c, _ = client
+    resp = await c.post("/api/survey/track", json={"track": "Somewhere"})
+    assert resp.status_code == 409
+
+
+async def test_assigning_rejects_an_empty_track(client, tmp_path) -> None:
+    c, service = client
+    service.survey.start(tmp_path, track_width_m=1.6, track="")
+    assert (await c.post("/api/survey/track", json={"track": ""})).status_code == 422
+    service.survey.stop()
+
+
+async def test_a_blank_track_never_locks_an_unlabeled_survey(client, tmp_path) -> None:
+    """A whitespace-only name is worse than no name: stripped it labels
+    nothing, and locking on it would block auto-identification from ever
+    rescuing the run — leaving a survey that can only ever write no bundle."""
+    c, service = client
+    service.survey.start(tmp_path, track_width_m=1.6, track="")
+    resp = await c.post("/api/survey/track", json={"track": "   "})
+    assert resp.status_code == 422
+    assert service.survey.track == ""
+    assert service.survey.track_locked is False  # auto-ID must still be able to
+    service.survey.stop()

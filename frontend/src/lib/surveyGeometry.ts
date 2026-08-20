@@ -1,22 +1,34 @@
 // Geometry for the survey map's forming track: the run's accumulated border
-// edge points pair up left↔right wherever they face each other across the
-// road, filling in the confirmed surface span by span. Matching is purely
-// local — no lap ordering or centerline needed — so partial coverage just
-// fills in as laps add evidence.
+// edge points pair up left↔right wherever both borders are surveyed across
+// the road from each other, filling in the confirmed surface span by span.
+// Matching is purely local — no lap ordering or centerline needed — so
+// partial coverage just fills in as laps add evidence.
 
 import type { SurveyEdge } from "@/lib/types";
 
 // Matched pairs must look like a road cross-section: the line from the left
-// point to the right point should run along the car's right-normal, between
-// plausible road widths, with both contacts driven in the same direction.
+// point across should run along its right-normal, between plausible widths.
+// The across gate is sign-free (|dot|) and matches track_compile's: border
+// evidence is recorded from both directions of travel, so headings carry no
+// usable sign.
 const ROAD_WIDTH_MIN_M = 3;
 const ROAD_WIDTH_MAX_M = 40;
-const ACROSS_MIN_DOT = 0.85; // L→R direction vs right-normal: cos ~32°
-const HEADING_MIN_DOT = 0.7; // both points from the same direction of travel
+const ACROSS_MIN_DOT = 0.7; // L→across direction vs right-normal: cos ~45°
 const QUAD_HALF_LENGTH_M = 2.5; // along-track extent of one filled span
-// Spatial hash cell for the right-side candidates: one cell spans the whole
-// search radius, so scanning the 3×3 neighborhood covers every match. Keeps
-// the pairing near-linear as edge points accumulate into the thousands.
+// Left points pair against the right border CURVE, not against individual
+// right points: L and R evidence come from different laps, so on real
+// bundles the two sides' points almost never sit directly opposite each
+// other — point-to-point pairing filled 1-4% of a well-surveyed circuit
+// (#44). The curve is approximated by linking each right point to its
+// nearest same-side neighbours; a left point then pairs with the nearest
+// point ON those segments, which exists wherever the right border is
+// surveyed at all on that stretch. Same idea as the server-side compiler
+// (backend/app/processing/track_compile.py), which fixed the same defect
+// for bundle maps.
+const SEG_LINK_M = 6; // max neighbour spacing that still reads as one border
+// Spatial hash cell spanning the whole search radius, so scanning the 3×3
+// neighborhood covers every match. Keeps the pairing near-linear as edge
+// points accumulate into the thousands.
 const CELL_M = ROAD_WIDTH_MAX_M;
 
 // The trail is a time sequence, not a continuous path: pit returns, resets
@@ -88,17 +100,35 @@ export interface Coverage {
 //   heading ~180° across a few dozen meters, so the corner's own evidence
 //   is heavily rotated yet CLOSE — without this tier hairpins report
 //   eternal gaps in sections the driver plainly traced.
-// - Opposite (beyond ~120°): never — that's the other leg of the hairpin,
-//   which is the ghost the heading gate exists to prevent.
+// - Opposite (beyond ~120°): a SHORT radius only — shorter than the rotated
+//   tier. This used to be "never, at any distance", on the theory that
+//   antiparallel evidence must belong to the other leg of a hairpin. That
+//   produced a reproducible false gap: on a real East End run the car drove
+//   127 m down the middle of a fully-mapped 12.7 m road, left evidence 7.8 m
+//   to port and right evidence 5.6 m to starboard, and BOTH borders reported
+//   a gap because every point there had been recorded traversing that
+//   stretch the other way (dot -1.00). The beacon then sent the driver back
+//   over finished ground. A border belongs to the road, not to the direction
+//   it was first seen from; at these distances nothing else can physically
+//   be beside you. The far leg of a hairpin sits well outside this radius,
+//   so the ghost it was guarding against stays guarded.
 const COVER_RADIUS_M = 30;
 const COVER_RADIUS_NEAR_M = 15;
+const COVER_RADIUS_OPPOSITE_M = 10;
 const HEADING_ALIGN_MIN_DOT = 0.5;
 const HEADING_OPPOSITE_DOT = -0.5;
 const COVER_MIN_TRAIL = 50; // too little driving to grade against
 const CLOSED_MIN_PCT = 97;
 const CLOSED_MAX_GAP_M = 40;
 const GAP_MIN_DRAW_M = 12; // don't clutter the map with sub-noise stretches
-const GAP_OFFSET_M = 4; // drawn beside the trail, toward the gap's side
+// Gap beacons are drawn out where the border should be, not beside the
+// driven line: a fixed 4 m offset put them ~2.5 m INSIDE a 13 m road, so the
+// marker sat between the two borders and pointed at tarmac rather than at
+// the edge the driver is being sent to touch. The offset instead follows the
+// road's own half-width, taken from how far evidence actually sits from the
+// trail on the stretches that DO have it.
+const GAP_OFFSET_FALLBACK_M = 6;
+const GAP_OFFSET_MIN_M = 3;
 
 // Grade the border evidence against the driven loop: for every trail point,
 // is there border evidence of each side nearby? The trail is the reference
@@ -117,24 +147,29 @@ export function borderCoverage(
     R: new Map(),
   };
   for (const e of edges) {
-    // Run-off limits are excluded from the road FILL (they bound the
-    // run-off, not the road) but they absolutely count as coverage: the
-    // driver traced that section's boundary on purpose, and grading it as
-    // a gap forever would send them back to re-drive finished work.
+    // Every kind counts as coverage: the driver traced that section's
+    // boundary on purpose, and grading it as a gap forever would send them
+    // back to re-drive finished work.
     const key = `${Math.floor(e.x / COVER_RADIUS_M)}:${Math.floor(e.z / COVER_RADIUS_M)}`;
     const bucket = cellsBySide[e.side].get(key);
     if (bucket) bucket.push(e);
     else cellsBySide[e.side].set(key, [e]);
   }
+  // Distance to the nearest qualifying evidence, or null when this side is
+  // unevidenced here. The distance feeds the gap beacons' offset: on the
+  // stretches that ARE mapped it is how far the border sits from the driven
+  // line, which is the best estimate available for where to draw the border
+  // on the stretches that are not.
   const near = (
     cells: Map<string, SurveyEdge[]>,
     x: number,
     z: number,
     tdx: number,
     tdz: number,
-  ): boolean => {
+  ): number | null => {
     const cx = Math.floor(x / COVER_RADIUS_M);
     const cz = Math.floor(z / COVER_RADIUS_M);
+    let best: number | null = null;
     for (let gx = cx - 1; gx <= cx + 1; gx++) {
       for (let gz = cz - 1; gz <= cz + 1; gz++) {
         for (const e of cells.get(`${gx}:${gz}`) ?? []) {
@@ -144,16 +179,17 @@ export function borderCoverage(
               ? COVER_RADIUS_M
               : dot >= HEADING_OPPOSITE_DOT
                 ? COVER_RADIUS_NEAR_M
-                : 0;
-          if (reach === 0) continue;
+                : COVER_RADIUS_OPPOSITE_M;
           const dx = e.x - x;
           const dz = e.z - z;
-          if (dx * dx + dz * dz > reach * reach) continue;
-          return true;
+          const d2 = dx * dx + dz * dz;
+          if (d2 > reach * reach) continue;
+          const d = Math.sqrt(d2);
+          if (best === null || d < best) best = d;
         }
       }
     }
-    return false;
+    return best;
   };
 
   interface Gap {
@@ -162,6 +198,7 @@ export function borderCoverage(
     lengthM: number;
   }
   const covered = { L: 0, R: 0 };
+  const borderDistances: number[] = [];
   let both = 0;
   const gaps: Record<"L" | "R", Gap[]> = { L: [], R: [] };
   const open: Record<"L" | "R", Gap | null> = { L: null, R: null };
@@ -190,8 +227,10 @@ export function borderCoverage(
     const tdz = (bz - az) / dirLen;
     let onRoad = true;
     for (const side of ["L", "R"] as const) {
-      if (near(cellsBySide[side], x, z, tdx, tdz)) {
+      const distance = near(cellsBySide[side], x, z, tdx, tdz);
+      if (distance !== null) {
         covered[side]++;
+        borderDistances.push(distance);
         if (open[side]) {
           gaps[side].push(open[side]);
           open[side] = null;
@@ -212,8 +251,17 @@ export function borderCoverage(
     if (open[side]) gaps[side].push(open[side]);
   }
 
+  // How far this track's border sits from the driven line, median over the
+  // stretches that have evidence (see `near`). A gap has none of its own, so
+  // its border position can only be inferred from the rest of the lap.
+  const borderOffsetM = (() => {
+    if (!borderDistances.length) return GAP_OFFSET_FALLBACK_M;
+    const sorted = [...borderDistances].sort((a, b) => a - b);
+    return Math.max(GAP_OFFSET_MIN_M, sorted[Math.floor(sorted.length / 2)]);
+  })();
+
   // A gap drawn ON the trail would be ambiguous between sides — offset each
-  // stretch a few meters toward the side whose border is missing there.
+  // stretch out toward the side whose border is missing there.
   const offsetSegment = (start: number, end: number, sign: number): [number, number][] => {
     const points: [number, number][] = [];
     for (let i = start; i <= end; i++) {
@@ -224,7 +272,7 @@ export function borderCoverage(
       const dx = (bx - ax) / len;
       const dz = (bz - az) / len;
       // Right normal is (dz, -dx); the left side sits along its negation.
-      points.push([x + sign * dz * GAP_OFFSET_M, z + sign * -dx * GAP_OFFSET_M]);
+      points.push([x + sign * dz * borderOffsetM, z + sign * -dx * borderOffsetM]);
     }
     return points;
   };
@@ -259,52 +307,125 @@ export function borderCoverage(
 }
 
 // Quads [x1,z1, x2,z2, x3,z3, x4,z4] spanning left→right wherever a left
-// border point has a right border point directly across from it. Run-off
-// limits bound the run-off, not the road, so they never contribute.
+// border point has the right border curve across from it (see SEG_LINK_M).
+//
+// Every kind contributes, "runoff" included. It used to be excluded, on the
+// reading that it bounded the run-off rather than the road — but that is not
+// how it gets used, and measurably so: all 946 run-off marks across the
+// author's three circuits sit with the OPPOSITE border 12-14 m across,
+// against a measured road width of 12.7 m. They are track edges that happen
+// to have pavement beyond them. Excluding them drew no road at all through
+// exactly the corners someone had taken the trouble to survey.
 export function roadQuads(edges: SurveyEdge[]): number[][] {
-  const usable = edges.filter((e) => e.kind !== "runoff");
-  const rights = new Map<string, SurveyEdge[]>();
-  for (const e of usable) {
-    if (e.side !== "R") continue;
-    const key = `${Math.floor(e.x / CELL_M)}:${Math.floor(e.z / CELL_M)}`;
-    const bucket = rights.get(key);
-    if (bucket) bucket.push(e);
-    else rights.set(key, [e]);
+  const rights = edges.filter((e) => e.side === "R");
+
+  // The right border as a segment soup: each right point linked to its
+  // nearest neighbour on either side of it (split by its own heading, sign
+  // irrelevant). No global ordering needed — nearest-point-on-curve queries
+  // work on unordered segments — and capping at two links per point keeps
+  // kerb-chatter clusters from exploding into O(n²) segments.
+  const linkCells = new Map<string, number[]>();
+  rights.forEach((r, i) => {
+    const key = `${Math.floor(r.x / SEG_LINK_M)}:${Math.floor(r.z / SEG_LINK_M)}`;
+    const bucket = linkCells.get(key);
+    if (bucket) bucket.push(i);
+    else linkCells.set(key, [i]);
+  });
+  // Segments as [ax, az, bx, bz]; isolated right points stay in as
+  // zero-length segments so sparse evidence still pairs like it used to.
+  const segments: number[][] = [];
+  const linked = new Set<string>();
+  rights.forEach((r, i) => {
+    let fwd = -1;
+    let fwdDist = SEG_LINK_M;
+    let back = -1;
+    let backDist = SEG_LINK_M;
+    const cx = Math.floor(r.x / SEG_LINK_M);
+    const cz = Math.floor(r.z / SEG_LINK_M);
+    for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gz = cz - 1; gz <= cz + 1; gz++) {
+        for (const j of linkCells.get(`${gx}:${gz}`) ?? []) {
+          if (j === i) continue;
+          const q = rights[j];
+          const d = Math.hypot(q.x - r.x, q.z - r.z);
+          if ((q.x - r.x) * r.hx + (q.z - r.z) * r.hz >= 0) {
+            if (d < fwdDist) {
+              fwd = j;
+              fwdDist = d;
+            }
+          } else if (d < backDist) {
+            back = j;
+            backDist = d;
+          }
+        }
+      }
+    }
+    let isolated = true;
+    for (const j of [fwd, back]) {
+      if (j < 0) continue;
+      isolated = false;
+      const key = i < j ? `${i}:${j}` : `${j}:${i}`;
+      if (linked.has(key)) continue;
+      linked.add(key);
+      segments.push([r.x, r.z, rights[j].x, rights[j].z]);
+    }
+    if (isolated) segments.push([r.x, r.z, r.x, r.z]);
+  });
+
+  // Segments bucketed by midpoint; segments are ≤ SEG_LINK_M long and the
+  // query radius is ROAD_WIDTH_MAX_M = CELL_M, so the 3×3 scan sees them all.
+  const segCells = new Map<string, number[][]>();
+  for (const s of segments) {
+    const key = `${Math.floor((s[0] + s[2]) / 2 / CELL_M)}:${Math.floor((s[1] + s[3]) / 2 / CELL_M)}`;
+    const bucket = segCells.get(key);
+    if (bucket) bucket.push(s);
+    else segCells.set(key, [s]);
   }
+
   const quads: number[][] = [];
-  for (const l of usable) {
+  for (const l of edges) {
     if (l.side !== "L") continue;
     const rnx = l.hz; // right-normal of the left point's heading
     const rnz = -l.hx;
-    let best: SurveyEdge | null = null;
+    // Nearest point on the right border curve, gated to a plausible
+    // cross-section: within road widths and near-perpendicular to travel.
+    let bestX = 0;
+    let bestZ = 0;
     let bestDist = ROAD_WIDTH_MAX_M;
+    let found = false;
     const cx = Math.floor(l.x / CELL_M);
     const cz = Math.floor(l.z / CELL_M);
     for (let gx = cx - 1; gx <= cx + 1; gx++) {
       for (let gz = cz - 1; gz <= cz + 1; gz++) {
-        for (const r of rights.get(`${gx}:${gz}`) ?? []) {
-          const dx = r.x - l.x;
-          const dz = r.z - l.z;
-          const dist = Math.hypot(dx, dz);
+        for (const [ax2, az2, bx2, bz2] of segCells.get(`${gx}:${gz}`) ?? []) {
+          const dx = bx2 - ax2;
+          const dz = bz2 - az2;
+          const seg2 = dx * dx + dz * dz;
+          const t =
+            seg2 < 1e-12
+              ? 0
+              : Math.max(0, Math.min(1, ((l.x - ax2) * dx + (l.z - az2) * dz) / seg2));
+          const px = ax2 + dx * t;
+          const pz = az2 + dz * t;
+          const dist = Math.hypot(px - l.x, pz - l.z);
           if (dist < ROAD_WIDTH_MIN_M || dist >= bestDist) continue;
-          if ((dx * rnx + dz * rnz) / dist < ACROSS_MIN_DOT) continue;
-          if (l.hx * r.hx + l.hz * r.hz < HEADING_MIN_DOT) continue;
-          best = r;
+          if (Math.abs(((px - l.x) * rnx + (pz - l.z) * rnz) / dist) < ACROSS_MIN_DOT)
+            continue;
+          bestX = px;
+          bestZ = pz;
           bestDist = dist;
+          found = true;
         }
       }
     }
-    if (!best) continue;
-    let ax = l.hx + best.hx;
-    let az = l.hz + best.hz;
-    const alen = Math.hypot(ax, az) || 1;
-    ax = (ax / alen) * QUAD_HALF_LENGTH_M;
-    az = (az / alen) * QUAD_HALF_LENGTH_M;
+    if (!found) continue;
+    const ax = l.hx * QUAD_HALF_LENGTH_M;
+    const az = l.hz * QUAD_HALF_LENGTH_M;
     quads.push([
       l.x - ax, l.z - az,
       l.x + ax, l.z + az,
-      best.x + ax, best.z + az,
-      best.x - ax, best.z - az,
+      bestX + ax, bestZ + az,
+      bestX - ax, bestZ - az,
     ]);
   }
   return quads;

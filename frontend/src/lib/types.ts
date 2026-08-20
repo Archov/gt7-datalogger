@@ -61,6 +61,7 @@ export interface LapSummary {
   finished_at?: string;
   car_id?: number;
   car_name?: string;
+  car_category?: string; // packet C: "Gr.3", "Gr.4", "N300"…; "" when unknown
   fuel_consumed: number;
   full_throttle_pct: number;
   full_brake_pct: number;
@@ -77,6 +78,7 @@ export interface LapSummary {
   min_oil_pressure?: number; // -1 = unknown
   counts_for_best?: boolean; // false = partial lap (pit out-lap)
   off_track_count?: number; // excursions past track limits; -1 = unknown
+  off_survey_count?: number; // excursions beyond the SURVEYED road edge; -1 = unknown
   clean_lap?: boolean | null; // null = unknown (no surface data recorded)
   event_counts?: Record<string, number>;
 }
@@ -149,13 +151,24 @@ export interface SurveyTransition {
 // while one side's wheels are held off the tarmac (the border traces itself
 // as you drive along it); "edge"/"runoff"/"wall" come from the driver
 // holding a marking button while driving the boundary.
+export type SurveyKind = "auto" | "straddle" | "edge" | "runoff" | "wall";
+
 export interface SurveyEdge {
   x: number;
   z: number;
   hx: number; // travel-direction unit at the moment of evidence
   hz: number;
   side: "L" | "R";
-  kind: "auto" | "straddle" | "edge" | "runoff" | "wall";
+  // One metre of border is one record; `kind` is what its votes settled on
+  // (hand-marked kinds beat inferred ones — the surface chars cannot see a
+  // wall or paved run-off). Resolved server-side, so consumers can just read
+  // it; `votes` is the evidence behind it, as [count, last run] per kind PER
+  // SOURCE — the installation id is what stops two people's run ordinals
+  // being read as one fact when their bundles merge (#47).
+  kind: SurveyKind;
+  votes?: Partial<Record<SurveyKind, Record<string, [number, number]>>>;
+  run?: number; // run ordinal that first evidenced this metre
+  tw?: number | null; // axle track width in use when it was laid
 }
 
 // Start/finish line located from lap rollovers (GT7 increments current_lap
@@ -171,6 +184,25 @@ export interface SurveyFinish {
   confident: boolean;
 }
 
+// Which official GT7 configuration a bundle is, once a human has confirmed
+// it. Never inferred silently: GT7 broadcasts no track id and the catalog
+// carries no world coordinates, so the match is a suggestion, not a lookup.
+export interface OfficialMatch {
+  track: string;
+  layout: string;
+  official_id: string;
+  official_name: string;
+  turns: number;
+  length_m: number;
+  reverse: boolean;
+}
+
+// The same shape as the server suggests it, with its reasoning attached.
+export interface OfficialSuggestion extends OfficialMatch {
+  confidence: number;
+  why: string;
+}
+
 // A circuit's persisted survey bundle, as listed by /api/track-bundles.
 export interface TrackBundleInfo {
   track: string;
@@ -179,6 +211,75 @@ export interface TrackBundleInfo {
   updated_at: string;
   points: number;
   finish_crossings: number;
+  // Elevation only fills in by RE-DRIVING: bundles built before v3 sit near
+  // 0 % until their metres are driven again.
+  elevation_points: number;
+  elevation_pct: number;
+  manual_points: number;
+  corners: number;
+  sections: number;
+  sources: number; // installations whose evidence is in this bundle
+  official: OfficialMatch | null;
+  source_runs: Record<string, number>;
+  // Compiled fidelity score (#40): how much of the boundary the evidence
+  // actually establishes. Absent when the bundle has not compiled.
+  coverage?: TrackCoverage;
+  compiled_at?: string;
+}
+
+// One hand-labelled corner. Anchored to a POSITION, not a lap distance —
+// distance depends on the racing line taken (#48).
+export interface AuthoredCorner {
+  n: number;
+  name: string;
+  direction: "L" | "R" | null;
+  apex: { x: number; z: number };
+  entry: { x: number; z: number } | null;
+  exit: { x: number; z: number } | null;
+  note: string;
+}
+
+export interface AuthoredSection {
+  n: number;
+  name: string;
+  start: { x: number; z: number };
+  end: { x: number; z: number };
+}
+
+// A survey run's JSONL. `orphaned` = it gathered evidence and never reached a
+// circuit, so it saved no bundle at all and exists only as this file (#45).
+export interface SurveyLog {
+  name: string;
+  track: string;
+  started_at: string;
+  session_id: number | null;
+  track_width_m: number | null;
+  marks: number;
+  transitions: number;
+  finish_crossings: number;
+  bytes: number;
+  orphaned: boolean;
+}
+
+// One circuit as the management view sees it: the three sources of track
+// knowledge joined, so the rows where they disagree are visible (#46).
+export interface TrackOverviewRow {
+  slug: string;
+  name: string;
+  named: boolean; // in the DB tracks table -> auto-identification works
+  track_id: number | null;
+  length_m: number | null;
+  bundle: TrackBundleInfo | null;
+  sessions: number;
+  official: OfficialMatch | null;
+  suggestion: OfficialSuggestion | null;
+}
+
+export interface TrackOverview {
+  source: string; // this installation's id
+  tracks: TrackOverviewRow[];
+  logs: SurveyLog[];
+  catalog_configs: number;
 }
 
 export interface SurveyStatus {
@@ -190,6 +291,17 @@ export interface SurveyStatus {
   width_estimate_m: number | null; // median of measured edge crossings
   width_samples: number; // accepted crossing measurements so far
   width_in_use_m: number; // what contact derivation actually uses
+  // Axle track measured from cornering — every corner is a sample, so this
+  // normally settles long before a deliberate edge ride produces anything.
+  width_source: "cornering" | "car-memory" | "edge-ride" | "assumed";
+  car_id: number | null;
+  remembered_width_m: number | null; // measured for this car on an earlier run
+  yaw_width_m: number | null;
+  yaw_samples: number;
+  yaw_needed: number;
+  yaw_rejects: Partial<Record<
+    "slow" | "straight" | "on_pedals" | "slip" | "implausible", number
+  >>;
   trail_points: number;
   trail_epoch: number;
   edge_points: number;
@@ -236,6 +348,7 @@ export interface SessionSummary {
   started_at: string;
   car_id: number;
   car_name: string;
+  car_category: string; // packet C: "Gr.3", "Gr.4", "N300"...; "" when unknown
   note: string;
   track_name: string;
   lap_count: number;
@@ -247,6 +360,23 @@ export interface Track {
   name: string;
   length_m: number;
   created_at: string;
+}
+
+// Fastest full lap at one circuit in one car category — the reference a lap
+// is worth being compared against, since a Gr.3 time and an N100 time around
+// the same corners are not the same achievement (#19).
+export interface CategoryBest {
+  lap_id: number;
+  session_id: number;
+  number: number;
+  time_ms: number;
+  car_id: number;
+  car_name: string;
+  car_category: string;
+  track_name: string;
+  clean_lap: boolean | null;
+  off_survey_count?: number; // excursions beyond the SURVEYED road edge; -1 = unknown
+  finished_at: string;
 }
 
 // Official GT7 track/layout metadata (bundled data/tracks.json — only the
@@ -272,7 +402,10 @@ export interface PeakValley {
   z: number;
 }
 
-// Auto-detected corner on the reference lap (numbered from the start line)
+// A corner on the reference lap, numbered from the start line. Detected from
+// this lap's curvature, unless the circuit has authored corners in its
+// bundle — those outrank detection and keep their numbering across laps and
+// sessions (`authored`, and they may carry a name).
 export interface Corner {
   n: number;
   apex_dist: number;
@@ -283,6 +416,47 @@ export interface Corner {
   direction: "L" | "R";
   min_speed: number;
   angle_deg: number;
+  name?: string;
+  authored?: boolean;
+}
+
+// One accelerometer axis, checked against physics the recording already
+// carries (lateral vs v·ω from the driven path, longitudinal vs dv/dt).
+// `slope` is broadcast units per m/s²; `g_per_unit` is what the UI multiplies
+// the raw channel by to get g — signed, so a channel that counts the other way
+// comes out upright. Mirrors backend analysis.accel_calibration (#16).
+export interface AccelAxis {
+  slope: number;
+  r2: number; // share of the channel the scaled reference explains (about zero)
+  samples: number;
+  fitted: boolean; // false = too weak to trust; g_per_unit assumes m/s²
+  g_per_unit: number;
+}
+
+export interface AccelCalibration {
+  available: boolean; // false on recordings without packet-B accelerometer
+  lateral?: AccelAxis;
+  longitudinal?: AccelAxis;
+  unit?: string; // "m/s^2" | "g" | "unverified" | "1 unit = … m/s^2"
+}
+
+// Corners of the traction circle a lap actually reached, in g.
+export interface GGExtremes {
+  lat_right: number;
+  lat_left: number;
+  accel: number;
+  braking: number;
+}
+
+// One corner of the report card (#21): this lap measured through the
+// REFERENCE lap's corner window, so time-through is comparable across laps.
+// A corner the lap never fully drove is absent from its report.
+export interface CornerReportRow {
+  n: number;
+  entry_speed: number;
+  min_speed: number;
+  exit_speed: number;
+  time_ms: number;
 }
 
 export interface CompareLapEntry {
@@ -291,12 +465,72 @@ export interface CompareLapEntry {
   events?: LapEvent[];
   delta?: { dist: number[]; delta_ms: number[] };
   corners?: Corner[]; // reference lap only
+  corner_report?: CornerReportRow[]; // every lap, on the reference's corners
+  gg?: GGExtremes; // peaks from the raw ticks, not the resampled series
 }
 
 export interface CompareResult {
   ref: number;
   step: number;
+  accel: AccelCalibration;
   laps: Record<string, CompareLapEntry>;
+}
+
+// One post-lap coaching note (#23) — the race engineer's finding, in the
+// exact wording voice would have used. `corner` is set when it names one.
+export interface CoachingFinding {
+  type: string;
+  text: string;
+  corner: number | null;
+}
+
+export interface CoachingLapNotes {
+  lap_id: number;
+  number: number;
+  findings: CoachingFinding[];
+}
+
+export interface CoachingNotes {
+  session_id: number;
+  laps: CoachingLapNotes[];
+}
+
+// One border's coverage, measured against the compiled boundary itself (#38):
+// surveyed metres over total boundary metres, gaps in the denominator.
+export interface SideCoverage {
+  surveyed_m: number;
+  gap_m: number;
+  pct: number;
+  closed: boolean; // the border forms a complete loop
+}
+
+export interface TrackCoverage {
+  L: SideCoverage;
+  R: SideCoverage;
+  road_pct: number; // share of surveyed border with the road resolved across
+}
+
+// The surveyed road under a lap, compiled server-side from the circuit's
+// track bundle (#51). Empty when the circuit has never been surveyed.
+export interface TrackOutline {
+  track: string;
+  slug: string | null;
+  // Road surface as quads [x1,z1,x2,z2,x3,z3,x4,z4], one per paired metre of
+  // left/right border — order-free, so no centerline has to be reconstructed.
+  road: number[][];
+  // Border evidence as short segments [x, z, hx, hz] along travel direction,
+  // split by what the votes settled on.
+  edges: number[][];
+  walls: number[][];
+  // Start/finish line as [x1, z1, x2, z2]; null until a survey located it.
+  finish: number[] | null;
+  runs: number;
+  updated_at: string;
+  // Survey holes in the compiled borders as [x1,z1,x2,z2] spans (#44) —
+  // stretches of boundary the ordering knows about but nobody has driven.
+  // Absent/empty on the legacy fallback pathway.
+  gaps?: number[][];
+  coverage?: TrackCoverage | null;
 }
 
 export interface DeviationResult {

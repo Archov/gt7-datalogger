@@ -47,6 +47,8 @@ async def test_old_lap_row_without_telemetry_metadata_is_readable(tmp_path) -> N
         "body_height": [80.0, 80.0],
         "pos_x": [0.0, 50.0],
         "pos_z": [0.0, 0.0],
+        "steer": [0.1, 0.2],
+        "acc_lat": [1.5, 1.6],
     }
     db.execute(
         "INSERT INTO sessions (id, started_at, car_id, car_name) VALUES (1, 'old', 7, 'Car')"
@@ -70,5 +72,8 @@ async def test_old_lap_row_without_telemetry_metadata_is_readable(tmp_path) -> N
     lap = await repo.get_lap(1)
     assert lap is not None
     assert lap["telemetry_meta"] is None
+    assert lap["samples"]["steering_wheel_rad"] == [0.1, 0.2]
+    assert lap["samples"]["sway"] == [1.5, 1.6]
+    assert "steer" not in lap["samples"] and "acc_lat" not in lap["samples"]
     assert await repo.get_session_archive_metadata(1) is None
     await engine.dispose()

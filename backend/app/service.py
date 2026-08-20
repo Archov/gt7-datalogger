@@ -16,6 +16,7 @@ from fastapi import WebSocket
 from app.config import Settings
 from app.models import TelemetryPacket
 from app.notify import Notifier
+from app.processing import track_bundle, track_limits, tracks
 from app.processing.analysis import Samples, time_delta_at
 from app.processing.cars import CarDatabase
 from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
@@ -65,6 +66,14 @@ async def _close_ws(ws: WebSocket) -> None:
         pass
 
 
+def _judge_samples_json(judge: track_limits.RoadJudge, raw: str) -> int:
+    """Decode + judge a stored lap's blob in one worker-thread hop: the
+    samples_json of a real lap is hundreds of kilobytes, and parsing it on
+    the event loop is the cost the repository API exists to avoid."""
+    samples = json.loads(raw)
+    return judge.excursions(samples.get("pos_x") or [], samples.get("pos_z") or [])
+
+
 def _count_events(events: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for e in events:
@@ -108,6 +117,9 @@ class TelemetryService:
             categories=settings.enabled_callout_categories(),
             units=settings.race_engineer_units,
         )
+        # Authored corners outrank detection, and the bundles they live in are
+        # this class's business, not the engineer's (#48).
+        self.engineer.corner_source = self.authored_corners
         # client_id of the browser currently allowed to speak, and the last
         # one that held the claim (restored when the same page reconnects).
         self._active_voice_client = ""
@@ -124,6 +136,28 @@ class TelemetryService:
         self._clients: dict[WebSocket, _ClientStream] = {}
         self._last_ws_send = 0.0
         self._ws_interval = 1.0 / settings.ws_rate
+        # Authored corners per circuit slug, read out of the track bundle
+        # (#48). Cached because the bundle is a multi-megabyte document and
+        # the corners in it are a few hundred bytes — parsing the whole thing
+        # at every lap boundary to re-read seventeen apexes would be absurd.
+        # Invalidated when the refine view saves.
+        self._authored: dict[str, list[dict[str, Any]]] = {}
+
+    def authored_corners(self, track: str) -> list[dict[str, Any]]:
+        """A circuit's hand-labelled corners, if it has any. Blocking: the
+        callers run it on a worker thread."""
+        if not track:
+            return []
+        key = track_bundle.slugify(track)
+        corners = self._authored.get(key)
+        if corners is None:
+            doc = track_bundle.load(self.settings.db_path.parent, track)
+            corners = doc["corners"] if doc else []
+            self._authored[key] = corners
+        return corners
+
+    def invalidate_authored_corners(self, track: str) -> None:
+        self._authored.pop(track_bundle.slugify(track), None)
 
     async def start(self) -> None:
         await self._recover_interrupted_archives()
@@ -360,6 +394,11 @@ class TelemetryService:
     async def _on_lap(self, lap: CompletedLap) -> None:
         if self.session_id is None:
             return
+        # Judge against the surveyed road edges BEFORE the save, so the row
+        # carries the verdict (#41). Needs the circuit's name — the session's
+        # first lap is judged retroactively by _identify_track instead.
+        if self.track_name:
+            await self._judge_against_survey(lap)
         lap_id = await self.repo.save_lap(self.session_id, lap)
         log.info("lap %d saved (%d ms, id=%d)", lap.number, lap.time_ms, lap_id)
 
@@ -416,8 +455,10 @@ class TelemetryService:
             "number": lap.number,
             "time_ms": lap.time_ms,
             "car_id": lap.car_id,
+            "car_category": lap.car_category,
             "counts_for_best": lap.counts_for_best,
             "off_track_count": lap.off_track_count,
+            "off_survey_count": lap.off_survey_count,
             "clean_lap": lap.clean_lap,
             "car_name": self.cars.name(lap.car_id),
             "fuel_consumed": round(lap.fuel_consumed, 3),
@@ -437,7 +478,18 @@ class TelemetryService:
         sig = signature_from_samples(lap.samples)
         if sig is None or self.session_id is None:
             return
+        # A signature a human created outranks anything inferred; the survey
+        # bundles answer when there is no signature, which is the normal state
+        # for someone who has surveyed circuits but never named one (#41).
         name = await self.repo.find_track(sig)
+        source = "signature"
+        if not name:
+            hit = await asyncio.to_thread(
+                tracks.identify_from_bundles, self.settings.db_path.parent, lap.samples
+            )
+            if hit is not None:
+                name, cover = hit
+                source = f"survey bundle, {cover:.0%} of the lap on mapped road"
         if name:
             self.track_name = name
             await self.repo.set_session_track(self.session_id, name)
@@ -445,22 +497,64 @@ class TelemetryService:
             # up now; an explicit user-picked label is never overwritten.
             if self.survey.active and not self.survey.track_locked:
                 self.survey.set_track(name)
-            log.info("track identified: %s", name)
+            log.info("track identified: %s (%s)", name, source)
+            # Identification lands one lap late by construction, so whatever
+            # this session already saved went to the DB unjudged against the
+            # surveyed edges — re-judge those rows now (#41). `lap` rides
+            # along because its own WS event is emitted AFTER this returns
+            # and must not carry the pre-judgement verdict.
+            await self._backfill_survey_verdicts(lap)
             self._publish({"type": "session", "data": await self.status()})
 
-    async def name_current_track(self, name: str, lap_samples: dict[str, list[float]]) -> None:
-        """Save the current circuit under a name and tag the session with it."""
-        sig = signature_from_samples(lap_samples)
-        if sig is None:
-            raise ValueError("lap has no position data")
-        await self.repo.create_track(name, sig)
-        self.track_name = name
-        if self.survey.active and not self.survey.track_locked:
-            self.survey.set_track(name)
-        if self.session_id is not None:
-            await self.repo.set_session_track(self.session_id, name)
-        log.info("track saved: %s (%.0f m)", name, sig.length_m)
-        self._publish({"type": "session", "data": await self.status()})
+    # --- surveyed-edge track limits (#41) -----------------------------------
+
+    async def _survey_judge(self) -> track_limits.RoadJudge | None:
+        """The judge for the current circuit (#41), asked fresh every time:
+        a bundle write (survey save, import) must reach the very next lap,
+        so no judge state lives here. track_limits caches by the compiled
+        document's identity, which makes the repeat call cheap."""
+        return await asyncio.to_thread(
+            track_limits.judge_for_track,
+            self.settings.db_path.parent, self.track_name,
+        )
+
+    async def _judge_against_survey(self, lap: CompletedLap) -> None:
+        judge = await self._survey_judge()
+        if judge is None:
+            return
+        s = lap.samples
+        count = await asyncio.to_thread(
+            judge.excursions, s.get("pos_x") or [], s.get("pos_z") or []
+        )
+        lap.apply_survey_verdict(count)
+
+    async def _backfill_survey_verdicts(self, current: CompletedLap | None = None) -> None:
+        if self.session_id is None:
+            return
+        judge = await self._survey_judge()
+        if judge is None:
+            return
+        for row in await self.repo.list_laps(self.session_id):
+            raw = await self.repo.lap_samples_json(row["id"])
+            if not raw:
+                continue
+            count = await asyncio.to_thread(_judge_samples_json, judge, raw)
+            # The lap still in memory — the one whose WS event has not been
+            # emitted yet — must carry the same verdict as its row: a client
+            # hears one event per lap, ever, and it has to match the DB.
+            if current is not None and row["number"] == current.number:
+                current.apply_survey_verdict(count)
+            if count == row["off_survey_count"]:
+                continue
+            # Same broadening as CompletedLap.apply_survey_verdict: an
+            # excursion past the surveyed edge spoils cleanliness, unknown
+            # leaves the surface-flag verdict alone.
+            clean = False if count > 0 else row["clean_lap"]
+            await self.repo.set_lap_survey_verdict(row["id"], count, clean)
+            log.info(
+                "lap %d re-judged against surveyed edges: %d excursion(s)",
+                row["number"], count,
+            )
 
     # --- live stream --------------------------------------------------------
 
@@ -505,6 +599,7 @@ class TelemetryService:
             "surface": encode_surface(p.surface_types),
             "car_id": p.car_id,
             "car_name": self.cars.name(p.car_id),
+            "car_category": p.car_category or "",
             "session_best_ms": session.best_lap_time_ms if session else -1,
             "prev_best_ms": self._prev_best_ms if self._prev_best_ms is not None else -1,
             "delta_ms": delta_ms,
@@ -524,6 +619,11 @@ class TelemetryService:
             # 60 Hz frames the console numbered but we never received
             # (distinct from packets_dropped: queue overflow on our side).
             "frames_dropped": self.processor.dropped_frames,
+            # Cross-check of our integrated time axis against GT7's own lap
+            # clock (packet C); all zero below packet C (#20).
+            "lap_clock_drift_ms": self.processor.lap_clock_drift_ms,
+            "lap_clock_drift_worst_ms": self.processor.lap_clock_drift_worst_ms,
+            "lap_clock_samples": self.processor.lap_clock_samples,
             **self.source.stats,
         }
 
@@ -760,5 +860,7 @@ class TelemetryService:
             counts_for_best=False,
         )
         lap.compute_metrics()
+        if self.track_name:
+            await self._judge_against_survey(lap)
         lap_id = await self.repo.save_lap(self.session_id, lap)
         return {"id": lap_id, "number": lap.number, "time_ms": lap.time_ms}

@@ -14,6 +14,7 @@ from typing import Any, Literal, TypeGuard, cast
 
 from app.models import AidsBits
 from app.processing import analysis, events, spatial
+from app.processing.laps import SAMPLE_COLUMNS
 from app.processing.orientation import ORIENTATION_CHANNELS, normalize_quaternion
 from app.processing.surface import (
     LOOSE_CODES,
@@ -29,6 +30,7 @@ Table = dict[str, Any]
 
 FORMAT = "gt7-datalogger-llm-session"
 VERSION = 1
+CANONICAL_SAMPLE_COLUMNS = frozenset(SAMPLE_COLUMNS)
 TRACE_STEP_M = 5.0
 THROTTLE_REAPPLICATION_PCT = 70.0
 POWERED_THROTTLE_PCT = 70.0
@@ -216,6 +218,8 @@ def _available_channels(samples: Samples) -> list[str]:
     )
     out: list[str] = []
     for key, values in samples.items():
+        if key not in CANONICAL_SAMPLE_COLUMNS:
+            continue
         if len(values) != n:
             continue
         if key == "surface" and (not values or all(int(v) == SURFACE_NONE for v in values)):

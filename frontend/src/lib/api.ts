@@ -2,19 +2,27 @@ import type { LayoutConfig, LayoutSummary } from "./layout";
 import type {
   AdminSettings,
   AdminStats,
+  AuthoredCorner,
+  AuthoredSection,
+  CategoryBest,
+  CoachingNotes,
   CompareResult,
   ConnectionStatus,
   DeviationResult,
   FuelMapResult,
   LapSummary,
   LogRecord,
+  OfficialMatch,
   RaceEngineerDiagnostics,
   SessionSummary,
   SurveyEdge,
+  SurveyLog,
   SurveyStatus,
   Track,
   TrackBundleInfo,
   TrackCatalog,
+  TrackOutline,
+  TrackOverview,
   VoiceCallout,
 } from "./types";
 
@@ -36,15 +44,64 @@ function authHeaders(): Record<string, string> {
   return t ? { "X-API-Key": t } : {};
 }
 
+// A whole bundle document, as exported and as import consumes it.
+export interface TrackBundleDoc {
+  format: string;
+  version: number;
+  meta: { track: string; runs: number; source_runs: Record<string, number>;
+          updated_at: string; official: OfficialMatch | null };
+  edges: SurveyEdge[];
+  finish_crossings: { x: number; z: number; hx: number; hz: number; lap: number }[];
+  corners: AuthoredCorner[];
+  sections: AuthoredSection[];
+}
+
+export interface BundleMergeResult {
+  track: string;
+  slug: string;
+  points: number;
+  added_points: number;
+  runs: number;
+  sources: number;
+  corners_kept?: boolean;
+}
+
+// One bundle a shared repo offers (#47). points/runs/updated_at are the
+// index's advisory numbers — the truth is whatever the pull validates.
+export interface SharedBundleEntry {
+  track: string;
+  slug: string;
+  url: string;
+  points?: number;
+  runs?: number;
+  updated_at?: string;
+}
+
+export interface SharedBundles {
+  configured: boolean;
+  url?: string;
+  bundles: SharedBundleEntry[];
+}
+
+// Error carrying the HTTP status, so callers can distinguish auth failures
+// (401/403 — a token problem) from an unreachable backend (502 from the proxy).
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function fail(url: string, resp: Response): Promise<never> {
   if (resp.status === 401 || resp.status === 403) {
-    throw new Error(
+    throw new ApiError(
       resp.status === 401
         ? "admin token required — set it in Admin → Connection"
         : "admin token rejected — check it in Admin → Connection",
+      resp.status,
     );
   }
-  throw new Error(`${url}: ${resp.status} ${await resp.text()}`);
+  throw new ApiError(`${url}: ${resp.status} ${await resp.text()}`, resp.status);
 }
 
 async function get<T>(url: string): Promise<T> {
@@ -88,7 +145,18 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
 
 export const api = {
   status: () => get<ConnectionStatus>("/api/status"),
-  sessions: () => get<SessionSummary[]>("/api/sessions"),
+  // `category` is the packet-C car class ("Gr.3", "N300"…); blank = every
+  // session, which is also the only way to reach pre-packet-C recordings.
+  sessions: (category = "") =>
+    get<SessionSummary[]>(
+      `/api/sessions${category ? `?category=${encodeURIComponent(category)}` : ""}`,
+    ),
+  // Fastest full lap at a circuit in a car category (#19); null when nothing
+  // has been recorded there in that class yet.
+  categoryBest: (track: string, category: string) =>
+    get<CategoryBest | null>(
+      `/api/laps/best?track=${encodeURIComponent(track)}&category=${encodeURIComponent(category)}`,
+    ),
   sessionLaps: (id: number) => get<LapSummary[]>(`/api/sessions/${id}/laps`),
   exportSessionForLlm: (id: number) =>
     getBlob(`/api/sessions/${id}/export.llm.json?detail=standard&segment_m=100`),
@@ -106,6 +174,10 @@ export const api = {
     ),
   deviation: (sessionId: number, count = 5) =>
     get<DeviationResult>(`/api/analysis/deviation?session_id=${sessionId}&count=${count}`),
+  // The race engineer's post-lap notes, replayed from the stored session —
+  // present whether or not voice was ever enabled (#23).
+  coachingNotes: (sessionId: number) =>
+    get<CoachingNotes>(`/api/analysis/coaching?session_id=${sessionId}`),
   fuelMap: (lapId: number) => get<FuelMapResult>(`/api/analysis/fuel?lap_id=${lapId}`),
   setRecording: (recording: boolean) =>
     send<ConnectionStatus>("/api/control/recording", "POST", { recording }),
@@ -119,6 +191,8 @@ export const api = {
         track,
       }),
     stop: () => send<SurveyStatus>("/api/survey/stop", "POST"),
+    setTrack: (track: string) =>
+      send<SurveyStatus>("/api/survey/track", "POST", { track }),
     trail: (since: number, epoch: number) =>
       get<{ epoch: number; since: number; points: [number, number][]; total: number }>(
         `/api/survey/trail?since=${since}&epoch=${epoch}`,
@@ -131,15 +205,97 @@ export const api = {
       send<SurveyStatus>("/api/survey/mark", "POST", { side, kind }),
     packet: () => get<{ packet: Record<string, unknown> | null }>("/api/survey/packet"),
     exportUrl: "/api/survey/export.jsonl",
+    // Every run's JSONL, and whether it ever reached a circuit. A run that
+    // went nowhere exists only as this file.
+    logs: () => get<SurveyLog[]>("/api/survey/logs"),
+    assignLog: (name: string, track: string) =>
+      send<Record<string, unknown>>(
+        `/api/survey/logs/${encodeURIComponent(name)}/assign`,
+        "POST",
+        { track },
+      ),
+    // Raw JSONL transport (#40): a log downloaded here can be uploaded — or
+    // assigned — on any other installation, moving the run itself.
+    logDownloadUrl: (name: string) =>
+      `/api/survey/logs/${encodeURIComponent(name)}/download`,
+    uploadLog: async (file: File): Promise<SurveyLog> => {
+      const url = `/api/survey/logs/upload?name=${encodeURIComponent(file.name)}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/jsonl" },
+        body: file,
+      });
+      if (!resp.ok) await fail(url, resp);
+      return resp.json() as Promise<SurveyLog>;
+    },
   },
+
+  // The surveyed road for a circuit, compiled server-side (#51). Always
+  // resolves — a circuit with no bundle answers with an empty outline.
+  trackOutline: (track: string) =>
+    get<TrackOutline>(`/api/track-outline?track=${encodeURIComponent(track)}`),
 
   tracks: () => get<Track[]>("/api/tracks"),
   trackCatalog: () => get<TrackCatalog>("/api/track-catalog"),
   trackBundles: () => get<TrackBundleInfo[]>("/api/track-bundles"),
+  trackOverview: () => get<TrackOverview>("/api/track-overview"),
+  // Name every unlabelled session that was driven on a surveyed circuit (#41).
+  // New sessions do this for themselves as they are recorded; this is for the
+  // history that predates the bundles.
+  identifySessions: () =>
+    send<{ checked: number; identified: number; tracks: Record<string, number> }>(
+      "/api/tracks/identify",
+      "POST",
+    ),
   createTrack: (name: string, lapId: number) =>
     send<{ id: number; name: string }>("/api/tracks", "POST", { name, lap_id: lapId }),
   deleteTrack: (id: number) => send<{ status: string }>(`/api/tracks/${id}`, "DELETE"),
   lapCsvUrl: (lapId: number) => `/api/laps/${lapId}/export.csv`,
+
+  bundles: {
+    // The configured shared repo's offerings; `configured: false` hides the
+    // feature. Pulling merges through exactly the same path as import (#47).
+    shared: () => get<SharedBundles>("/api/track-bundles/shared"),
+    pullShared: (slug: string, track?: string) =>
+      send<BundleMergeResult>(
+        `/api/track-bundles/shared/${slug}/pull${track ? `?track=${encodeURIComponent(track)}` : ""}`,
+        "POST",
+      ),
+    get: (slug: string) => get<TrackBundleDoc>(`/api/track-bundles/${slug}`),
+    downloadUrl: (slug: string) => `/api/track-bundles/${slug}`,
+    // `track` collapses a near-miss name onto an existing circuit rather than
+    // importing it as a second bundle of the same tarmac.
+    import: (doc: unknown, track?: string) =>
+      send<BundleMergeResult>(
+        `/api/track-bundles/import${track ? `?track=${encodeURIComponent(track)}` : ""}`,
+        "POST",
+        doc,
+      ),
+    rename: (slug: string, track: string) =>
+      send<BundleMergeResult>(`/api/track-bundles/${slug}`, "PATCH", { track }),
+    setOfficial: (slug: string, official: OfficialMatch | null) =>
+      send<{ slug: string }>(`/api/track-bundles/${slug}`, "PATCH", {
+        official,
+        set_official: true,
+      }),
+    remove: (slug: string) => send<{ status: string }>(`/api/track-bundles/${slug}`, "DELETE"),
+    corners: (slug: string) =>
+      get<{
+        track: string;
+        corners: AuthoredCorner[];
+        sections: AuthoredSection[];
+        official: OfficialMatch | null;
+      }>(`/api/track-bundles/${slug}/corners`),
+    setCorners: (
+      slug: string,
+      body: { corners?: AuthoredCorner[]; sections?: AuthoredSection[] },
+    ) =>
+      send<{ track: string; corners: AuthoredCorner[]; sections: AuthoredSection[] }>(
+        `/api/track-bundles/${slug}/corners`,
+        "PUT",
+        body,
+      ),
+  },
 
   layouts: {
     list: () => get<LayoutSummary[]>("/api/layouts"),

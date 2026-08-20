@@ -40,10 +40,10 @@ async def test_real_archive_replay_aligns_and_recovers_orientation(session_id: i
     repository = Repository(make_session_factory(engine))
     bundle = await repository.get_session_analysis_data(session_id)
     assert bundle is not None
-    assert all(
-        not set(ORIENTATION_CHANNELS).intersection(lap["samples"])
+    persisted_orientation = {
+        lap["id"]: set(ORIENTATION_CHANNELS).issubset(lap["samples"])
         for lap in bundle["laps"]
-    )
+    }
 
     completed: list[CompletedLap] = []
     sessions: list[SessionInfo] = []
@@ -68,6 +68,9 @@ async def test_real_archive_replay_aligns_and_recovers_orientation(session_id: i
         assert reconstructed.samples["t"] == persisted["samples"]["t"]
         for channel in OVERLAP_CHANNELS:
             assert reconstructed.samples[channel] == persisted["samples"][channel]
+        if persisted_orientation[persisted["id"]]:
+            for channel in ORIENTATION_CHANNELS:
+                assert reconstructed.samples[channel] == persisted["samples"][channel]
 
     resolved = await resolve_session_telemetry(
         bundle, set(ORIENTATION_CHANNELS), DATABASE.parent
@@ -75,9 +78,9 @@ async def test_real_archive_replay_aligns_and_recovers_orientation(session_id: i
     for lap in resolved["laps"]:
         samples: dict[str, list[float]] = lap["samples"]
         assert all(channel in samples for channel in ORIENTATION_CHANNELS)
-        assert set(ORIENTATION_CHANNELS).issubset(
-            resolved["channel_provenance"][lap["id"]]["archive_replay"]
-        )
+        provenance = resolved["channel_provenance"][lap["id"]]
+        source = "persisted" if persisted_orientation[lap["id"]] else "archive_replay"
+        assert set(ORIENTATION_CHANNELS).issubset(provenance[source])
         norms = [
             math.sqrt(sum(samples[channel][i] ** 2 for channel in ORIENTATION_CHANNELS))
             for i in range(len(samples["t"]))

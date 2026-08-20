@@ -41,7 +41,7 @@ from statistics import median
 from typing import IO, Any
 
 from app.models import TelemetryPacket
-from app.processing import track_bundle
+from app.processing import car_width, track_bundle
 from app.processing.surface import CHAR_CODES
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,43 @@ FINISH_KEEP = 50
 MARK_KINDS = ("edge", "runoff", "wall")
 MARK_STEP_M = 2.0  # one manual edge point per this much travel
 
-# --- track-width auto-estimation ----------------------------------------------
+# --- axle track width from yaw rate (primary estimator) -----------------------
+# Every corner measures the axle track for free. The outer wheels travel a
+# larger radius than the inner ones, so their rolling speeds differ by exactly
+# the yaw rate times the track width:
+#
+#     |v_outer - v_inner| = |yaw rate| * track_width      (v = rps * radius)
+#
+# GT7 broadcasts wheel_rps, tire_radius and angular_velocity_y, so this needs
+# no special driving at all — unlike the edge-ride solver below, which asks
+# for a deliberate out-and-back over one boundary and, across a full real
+# session of heavy edge riding, accepted not one sample.
+#
+# BOTH axles are tried every tick and the plausibility range decides which
+# one spoke, because a locked or spool differential forces its axle's wheels
+# to identical speed no matter what the car is doing. Measured on real
+# hardware: this car's rear wheels report the SAME speed to the centimetre
+# even coasting (v -82.31 / -82.31 at zero throttle), so the rear axle
+# carries no width information at all, while the free front axle answers
+# 1.66-1.80 m consistently. A locked axle yields ~0 and falls outside the
+# range on its own, so nothing here needs to know the drivetrain layout.
+#
+# Sign conventions cancel by taking magnitudes, so GT7's yaw sign never has
+# to be pinned down. Steering barely matters: the lateral separation term
+# omega*t dominates the difference between the two wheels on an axle.
+YAW_MIN_RAD_S = 0.15  # below this the denominator is mostly noise
+YAW_MIN_SPEED_MPS = 8.0  # crawling: wheel speeds are unreliable
+# Braking is the one pedal that reliably corrupts this: ABS modulates wheels
+# individually, and the same real capture that gave a steady 1.7-1.8 m
+# produced 1.22, 2.03 and 4.87 m under brake pressure. Throttle needs no
+# gate — wheelspin lifts an axle's MEAN off the car's speed, which the slip
+# check below catches, and a torque-locked axle is already self-rejecting.
+YAW_MAX_BRAKE = 8  # 0..255
+YAW_SLIP_TOL = 0.05  # |axle mean wheel speed / car speed - 1| allowed
+YAW_MIN_SAMPLES = 60  # ~1 s of qualifying cornering before it is trusted
+YAW_KEEP_SAMPLES = 4000
+
+# --- track-width auto-estimation (fallback: deliberate edge ride) --------------
 # A measurement needs an out-and-back ride over ONE edge: the same wheel
 # crossing X→Y and later Y→X (edge direction), at least one opposite-side
 # crossing of the same line (the width equation), and a further same-side
@@ -173,11 +209,18 @@ class SurfaceSurvey:
         self._trail_step = TRAIL_MIN_STEP_M
         # Every border-edge point of the run — the track taking shape.
         # Append-only within a run; the epoch bumps when a new run starts.
-        # Deduped on the bundle grid at append time, so re-driving mapped
-        # ground refines nothing into duplicates (in memory or on the map).
+        # One record per metre per side on the bundle grid; re-driving mapped
+        # ground casts a vote on what that metre is rather than duplicating
+        # it, so the map can change its mind (see track_bundle).
         self.edges: list[dict[str, Any]] = []
         self.edges_epoch = 0
-        self._edge_keys: set[tuple[int, int, str, str]] = set()
+        self._edge_index: dict[tuple[int, int, str], dict[str, Any]] = {}
+        # Ordinal of this run in its circuit's bundle: votes are counted once
+        # per run, so every vote cast this run carries it — alongside this
+        # installation's source id, without which the ordinal means nothing
+        # once two people's bundles meet (#47).
+        self._run_no = 1
+        self._source = ""
         # Manual marking state (see MARK_KINDS above).
         self.mark_side: str | None = None  # "L" | "R" | None = off
         self.mark_kind: str = "edge"
@@ -191,6 +234,17 @@ class SurfaceSurvey:
         self.bundle_info: dict[str, Any] | None = None
         self._crossings: deque[_Crossing] = deque(maxlen=64)
         self._width_estimates: list[float] = []
+        # Per-tick yaw-rate width samples (see YAW_* above), and how many
+        # ticks were rejected and why — a width that never converges should
+        # say which gate is eating the data, not just sit at "assumed".
+        self._yaw_widths: list[float] = []
+        self._yaw_rejects: Counter[str] = Counter()
+        # Width already measured for the car being driven, from earlier runs
+        # (GT7 broadcasts the car id). Applied from the first tick, so a run
+        # no longer lays its opening points at the assumption.
+        self._car_id: int | None = None
+        self._car_widths: dict[int, dict[str, Any]] = {}
+        self._remembered_width_m: float | None = None
         # Undocumented packet-flag bits seen active: bit index -> tick count.
         self.unknown_flag_ticks: Counter[int] = Counter()
 
@@ -221,7 +275,9 @@ class SurfaceSurvey:
         self._trail_step = TRAIL_MIN_STEP_M
         self.edges = []
         self.edges_epoch += 1
-        self._edge_keys = set()
+        self._edge_index = {}
+        self._run_no = 1
+        self._source = track_bundle.source_id(data_dir)
         self.mark_side = None
         self.mark_kind = "edge"
         self._last_mark = None
@@ -233,6 +289,11 @@ class SurfaceSurvey:
         self.bundle_info = None
         self._crossings.clear()
         self._width_estimates = []  # widths are per-car; a new run may swap cars
+        self._yaw_widths = []
+        self._yaw_rejects = Counter()
+        self._car_id = None
+        self._car_widths = car_width.load(data_dir)
+        self._remembered_width_m = None
         self.unknown_flag_ticks = Counter()
         data_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -246,6 +307,13 @@ class SurfaceSurvey:
             "track_width_m": track_width_m,
             "track": track,
             "session_id": session_id,
+            # Whose driving this is. A log can be copied to another machine
+            # and replayed there (scripts/jsonl_to_bundle.py exists for
+            # exactly that), and without the id recorded here the replay
+            # would stamp the DESTINATION installation — so if the machine
+            # that actually drove it ever contributes too, one run counts
+            # twice across the merge as two people's evidence.
+            "source": self._source,
             "wheels": list(WHEELS),
         }}, separators=(",", ":")) + "\n")
         self._out.flush()
@@ -255,10 +323,18 @@ class SurfaceSurvey:
         if self.track:
             self._load_bundle()  # start from everything already mapped here
 
-    def set_track(self, name: str) -> None:
+    def set_track(self, name: str, lock: bool = False) -> None:
         """Update the circuit label mid-run — and put it in the JSONL, which
         must stay joinable to a circuit offline (a header written before
-        identification carries no label)."""
+        identification carries no label).
+
+        `lock` marks the label as the driver's own, so later
+        auto-identification leaves it alone. Assigning a label to a run that
+        had none keeps everything it has accumulated: the flush below only
+        fires when LEAVING an already-labeled circuit.
+        """
+        if lock:
+            self.track_locked = True
         if name == self.track:
             return
         if self.active and self.track:
@@ -270,7 +346,8 @@ class SurfaceSurvey:
             self._save_bundle(count_run=False)
             self.edges = []
             self.edges_epoch += 1
-            self._edge_keys = set()
+            self._edge_index = {}
+            self._run_no = 1
             self.finish_crossings = []
             self.bundle_info = None
         self.track = name
@@ -286,11 +363,31 @@ class SurfaceSurvey:
         doc = track_bundle.load(self._data_dir, self.track)
         if doc is None:
             return
+        # Now that the circuit is known, so is this run's ordinal in it. Any
+        # points laid before identification voted under a placeholder run
+        # number that the bundle's own history outranks — restamp them, or
+        # the pre-identification evidence merges in as no vote at all. The
+        # ordinal counts THIS installation's runs: a bundle pulled from
+        # someone who has driven here 30 times must not push our run 2 to 31.
+        # Against the votes as well as the counter: a run killed before it
+        # stopped left votes stamped at an ordinal the counter never caught up
+        # to, and reusing it would make everything this run re-observes on that
+        # ground merge in as already counted.
+        self._run_no = max(
+            doc["meta"]["source_runs"].get(self._source, 0),
+            track_bundle.watermarks(doc["edges"]).get(self._source, 0),
+        ) + 1
+        for e in self.edges:
+            e["run"] = self._run_no
+            for sources in e["votes"].values():
+                mine = sources.get(self._source)
+                if mine is not None:
+                    mine[1] = self._run_no
         # Bundle first, this run's (few, pre-identification) points merged in;
         # the list is replaced wholesale, so incremental readers must resync.
         self.edges = track_bundle.merge_edges(doc["edges"], self.edges)
         self.edges_epoch += 1
-        self._edge_keys = {track_bundle.edge_key(e) for e in self.edges}
+        self._edge_index = {track_bundle.edge_key(e): e for e in self.edges}
         self.finish_crossings = track_bundle.merge_finish(
             doc["finish_crossings"], self.finish_crossings
         )
@@ -311,6 +408,7 @@ class SurfaceSurvey:
     def stop(self) -> None:
         if self.active:
             self._save_bundle(count_run=True)
+            self._save_car_width()
         self.active = False
         if self._out is not None:
             self._out.close()
@@ -318,6 +416,78 @@ class SurfaceSurvey:
         if self.transitions or self.packets:
             log.info("surface survey stopped: %d packets, %d transitions",
                      self.packets, self.transitions)
+
+    def _follow_car(self, p: TelemetryPacket) -> None:
+        """Track which car is being driven; its width is a different number."""
+        if p.car_id == self._car_id:
+            return
+        self._car_id = p.car_id
+        self._yaw_widths = []  # samples belong to the car that produced them
+        self._yaw_rejects = Counter()
+        known = self._car_widths.get(p.car_id)
+        self._remembered_width_m = known["width_m"] if known else None
+        if self._remembered_width_m is not None:
+            log.info("car %s: applying remembered axle track %.3f m",
+                     p.car_id, self._remembered_width_m)
+
+    def _save_car_width(self) -> None:
+        """Persist this run's measurement, if it produced one."""
+        measured = self.yaw_width_m
+        if self._data_dir is None or self._car_id is None or measured is None:
+            return
+        self._car_widths = car_width.remember(
+            self._data_dir, self._car_id, measured, len(self._yaw_widths)
+        )
+
+    def _measure_width_from_yaw(self, p: TelemetryPacket) -> None:
+        """One axle-track sample from this tick's cornering, if it qualifies.
+
+        Both axles are offered; a differential-locked one answers ~0 and is
+        filtered out by the plausible range, so the free axle is the one that
+        gets heard without anyone naming the drivetrain.
+        """
+        if p.speed_mps < YAW_MIN_SPEED_MPS:
+            self._yaw_rejects["slow"] += 1
+            return
+        yaw = abs(p.angular_velocity_y)
+        if yaw < YAW_MIN_RAD_S:
+            self._yaw_rejects["straight"] += 1
+            return
+        if p.brake > YAW_MAX_BRAKE:
+            self._yaw_rejects["braking"] += 1
+            return
+        lo, hi = WIDTH_RANGE_M
+        axles = (
+            (p.wheel_rps_fl * p.tire_radius_fl, p.wheel_rps_fr * p.tire_radius_fr),
+            (p.wheel_rps_rl * p.tire_radius_rl, p.wheel_rps_rr * p.tire_radius_rr),
+        )
+        best: float | None = None
+        slipped = False
+        for left, right in axles:
+            mean = (abs(left) + abs(right)) / 2.0
+            if mean <= 0 or abs(mean / p.speed_mps - 1.0) > YAW_SLIP_TOL:
+                slipped = True
+                continue
+            width = abs(abs(right) - abs(left)) / yaw
+            if lo <= width <= hi and (best is None or width > best):
+                best = width
+        if best is None:
+            # Nothing plausible: either every axle slipped, or the ones that
+            # did not are locked (identical wheel speeds -> a width of ~0).
+            self._yaw_rejects["slip" if slipped else "locked_axle"] += 1
+            return
+        self._yaw_widths.append(best)
+        del self._yaw_widths[:-YAW_KEEP_SAMPLES]
+        if len(self._yaw_widths) == YAW_MIN_SAMPLES:
+            log.info("axle track measured from cornering: %.3f m (%d samples)",
+                     median(self._yaw_widths), len(self._yaw_widths))
+
+    @property
+    def yaw_width_m(self) -> float | None:
+        """Median axle track from cornering — the primary measurement."""
+        if len(self._yaw_widths) < YAW_MIN_SAMPLES:
+            return None
+        return round(median(self._yaw_widths), 3)
 
     @property
     def width_estimate_m(self) -> float | None:
@@ -327,8 +497,29 @@ class SurfaceSurvey:
         return round(median(self._width_estimates), 3)
 
     @property
+    def width_source(self) -> str:
+        """Which number width_in_use_m is currently serving."""
+        if self.yaw_width_m is not None:
+            return "cornering"
+        if self._remembered_width_m is not None:
+            return "car-memory"
+        if (self.width_estimate_m is not None
+                and len(self._width_estimates) >= WIDTH_MIN_SAMPLES):
+            return "edge-ride"
+        return "assumed"
+
+    @property
     def width_in_use_m(self) -> float:
-        """Width applied to contact derivation: measured once trusted."""
+        """Width applied to contact derivation: measured once trusted.
+
+        Cornering first — it converges within a corner or two and needs no
+        deliberate driving — then the edge-ride solver, then the assumption.
+        """
+        cornering = self.yaw_width_m
+        if cornering is not None:
+            return cornering
+        if self._remembered_width_m is not None:
+            return self._remembered_width_m
         estimate = self.width_estimate_m
         if estimate is not None and len(self._width_estimates) >= WIDTH_MIN_SAMPLES:
             return estimate
@@ -341,11 +532,14 @@ class SurfaceSurvey:
         if self._since_autosave >= AUTOSAVE_PACKETS:
             self._since_autosave = 0
             self._save_bundle(count_run=False)
+            self._save_car_width()
         if p.surface_types is None:
             self.no_surface_packets += 1
             return None
         if p.is_paused or not p.is_on_track:
             return None
+        self._follow_car(p)
+        self._measure_width_from_yaw(p)
         self._append_trail(p)
         self._watch_finish_line(p)
         if self.mark_side is not None:
@@ -462,6 +656,7 @@ class SurfaceSurvey:
         self._last_mark = (p.position_x, p.position_z)
         self._append_edge(
             x=p.position_x + lat * rx, z=p.position_z + lat * rz,
+            y=p.position_y,
             hx=fx, hz=fz, side=self.mark_side or "L", kind=self.mark_kind,
             pid=p.packet_id,
         )
@@ -507,32 +702,63 @@ class SurfaceSurvey:
         self._last_straddle = (p.position_x, p.position_z)
         self._append_edge(
             x=p.position_x + lat * rx, z=p.position_z + lat * rz,
+            y=p.position_y,
             hx=fx, hz=fz, side=side, kind="straddle", pid=p.packet_id,
         )
 
     def _append_edge(
-        self, x: float, z: float, hx: float, hz: float, side: str, kind: str, pid: int
+        self, x: float, z: float, hx: float, hz: float, side: str, kind: str,
+        pid: int, y: float | None = None,
     ) -> None:
-        edge = {
-            "x": round(x, 3), "z": round(z, 3),
-            "hx": round(hx, 5), "hz": round(hz, 5),
-            "side": side, "kind": kind,
-        }
-        key = track_bundle.edge_key(edge)
-        if key in self._edge_keys:
-            return  # this meter of boundary is already evidenced
-        self._edge_keys.add(key)
-        if self._out is not None and kind != "auto":
-            # "auto" edges are reconstructable from the transition records;
-            # manual and straddle-sampled ones exist nowhere else, so they
-            # go to the JSONL too (as "mark" lines) — BEFORE the memory cap,
-            # which must never cost log completeness.
-            self._out.write(
-                json.dumps({"mark": {**edge, "pid": pid}}, separators=(",", ":")) + "\n"
-            )
+        x, z = round(x, 3), round(z, 3)
+        key = track_bundle.edge_key({"x": x, "z": z, "side": side})
+        known = self._edge_index.get(key)
+        if known is not None:
+            prior = known["votes"].get(kind, {}).get(self._source)
+            if prior is not None and prior[1] >= self._run_no:
+                return  # this run already read this metre as this kind
+            # Same metre, something new to say about it: a hand-marked wall
+            # over ground the straddle tracer had called plain road, or a
+            # second run agreeing. Either way it is a vote, not a duplicate.
+            track_bundle.cast_vote(known, kind, self._run_no, self._source)
+            if known.get("y") is None and y is not None:
+                known["y"] = round(y, 3)  # metre mapped before v3: fill it in
+            self._log_mark(x, z, hx, hz, side, kind, pid, y)
+            return
+        # The log line goes out BEFORE the memory cap, which must never cost
+        # log completeness; the JSONL has everything.
+        self._log_mark(x, z, hx, hz, side, kind, pid, y)
         if len(self.edges) >= EDGES_MAX_POINTS:
-            return  # in-memory backstop only; the JSONL has everything
+            return
+        edge = track_bundle.new_edge(
+            x, z, hx, hz, side, kind, self._run_no, self._source,
+            self.width_in_use_m, y,
+        )
+        self._edge_index[key] = edge
         self.edges.append(edge)
+
+    def _log_mark(
+        self, x: float, z: float, hx: float, hz: float, side: str, kind: str,
+        pid: int, y: float | None = None,
+    ) -> None:
+        """"auto" edges are reconstructable from the transition records;
+        manual and straddle-sampled ones exist nowhere else, so they go to
+        the JSONL too — one line per vote actually cast, so a re-drive of
+        mapped ground does not spam the log.
+
+        The width logged is the one in use NOW, which is what placed this
+        sample; the bundle record keeps the width it was first laid with, and
+        after a re-vote on known ground the two legitimately differ.
+        """
+        if self._out is None or kind == "auto":
+            return
+        line = {
+            "x": x, "z": z, "y": round(y, 3) if y is not None else None,
+            "hx": round(hx, 5), "hz": round(hz, 5),
+            "side": side, "kind": kind, "run": self._run_no,
+            "tw": round(self.width_in_use_m, 3), "pid": pid,
+        }
+        self._out.write(json.dumps({"mark": line}, separators=(",", ":")) + "\n")
 
     def _append_trail(self, p: TelemetryPacket) -> None:
         x, z = p.position_x, p.position_z
@@ -593,7 +819,7 @@ class SurfaceSurvey:
                     continue
                 point = contacts[WHEELS[i]]  # norm > 0: contacts exist
                 self._append_edge(
-                    x=point[0], z=point[1],
+                    x=point[0], z=point[1], y=p.position_y,
                     hx=p.velocity_x / norm, hz=p.velocity_z / norm,
                     side=border, kind="auto", pid=p.packet_id,
                 )
@@ -775,6 +1001,15 @@ class SurfaceSurvey:
             "width_estimate_m": self.width_estimate_m,
             "width_samples": len(self._width_estimates),
             "width_in_use_m": round(self.width_in_use_m, 3),
+            "width_source": self.width_source,
+            "car_id": self._car_id,
+            "remembered_width_m": self._remembered_width_m,
+            "yaw_width_m": self.yaw_width_m,
+            "yaw_samples": len(self._yaw_widths),
+            "yaw_needed": YAW_MIN_SAMPLES,
+            # Why cornering ticks were skipped — so a width that refuses to
+            # converge names the gate eating it instead of staying silent.
+            "yaw_rejects": dict(self._yaw_rejects),
             "packets": self.packets,
             "no_surface_packets": self.no_surface_packets,
             "transitions": self.transitions,
@@ -784,6 +1019,9 @@ class SurfaceSurvey:
             "edges_epoch": self.edges_epoch,
             "finish": self._finish_summary(),
             "bundle": self.bundle_info,
+            # This installation's id, stamped on every vote this run casts.
+            "source": self._source,
+            "run_no": self._run_no,
             "mark_side": self.mark_side,
             "mark_kind": self.mark_kind,
             "histogram": {

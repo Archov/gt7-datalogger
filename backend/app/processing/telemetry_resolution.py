@@ -20,7 +20,11 @@ Samples = dict[str, list[float]]
 
 def _aligned_channels(samples: Samples) -> set[str]:
     size = len(samples.get("t") or [])
-    available = {name for name, values in samples.items() if len(values) == size}
+    available = {
+        name
+        for name, values in samples.items()
+        if name in lap_processing.SAMPLE_COLUMNS and len(values) == size
+    }
     surface = samples.get("surface") or []
     if "surface" in available and (not surface or all(int(value) == 0 for value in surface)):
         available.discard("surface")
