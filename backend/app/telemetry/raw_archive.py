@@ -1,8 +1,8 @@
-"""Lossless append-only archives of decrypted GT7 telemetry payloads.
+"""Lossless append-only archives of GT7 receive-boundary datagrams.
 
-The container deliberately knows nothing about packet fields.  It stores the
-complete plaintext supplied to :func:`parse_packet` so a newer parser can be
-run over an old capture without changing the archive.
+Version 2 stores original encrypted UDP bytes plus decode status. Version 1
+plaintext archives remain readable. The container deliberately knows nothing
+about packet fields so a newer decoder can replay old evidence unchanged.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ log = logging.getLogger(__name__)
 
 MAGIC = b"GT7RAW\x00\x00"
 RECORD_MAGIC = b"PKT1"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+SUPPORTED_FORMAT_VERSIONS = frozenset((1, 2))
 MAX_PAYLOAD_SIZE = 1024 * 1024
 FILE_HEADER = struct.Struct("<8sHHQ")
 RECORD_HEADER = struct.Struct("<4sHHQQIiiBBHI")
@@ -37,6 +38,8 @@ _SOURCE_CODES: dict[SourceName, int] = {"udp": 1, "sim": 2}
 _SOURCE_NAMES = {value: key for key, value in _SOURCE_CODES.items()}
 _FORMAT_CODES = {"A": 1, "B": 2, "~": 3, "C": 4}
 _FORMAT_NAMES = {value: key for key, value in _FORMAT_CODES.items()}
+RECORD_FLAG_ENCRYPTED = 1 << 0
+RECORD_FLAG_DECODE_FAILED = 1 << 1
 
 
 class ArchiveError(ValueError):
@@ -61,6 +64,8 @@ class CapturedPayload:
     receiver_order: int
     source: SourceName
     packet: TelemetryPacket | None = None
+    wire_payload: bytes | None = None
+    decode_status: str = "decoded"
 
 
 RawPacketCallback = Callable[[CapturedPayload], str | None]
@@ -76,10 +81,12 @@ class ArchiveRecord:
     source: str
     packet_format: str | None
     approximate_unix_ns: int
+    wire_payload: bytes | None = None
+    decode_status: str = "decoded"
 
     @property
     def payload_length(self) -> int:
-        return len(self.payload)
+        return len(self.wire_payload) if self.wire_payload is not None else len(self.payload)
 
 
 @dataclass(slots=True)
@@ -121,7 +128,10 @@ class _Writer:
         if self.failed is not None:
             return
         try:
-            payload_len = len(capture.payload)
+            stored_payload = (
+                capture.wire_payload if capture.wire_payload is not None else capture.payload
+            )
+            payload_len = len(stored_payload)
             if payload_len > MAX_PAYLOAD_SIZE:
                 raise OSError(f"payload is larger than {MAX_PAYLOAD_SIZE} bytes")
             offset = max(0, capture.received_monotonic_ns - self.base_monotonic_ns)
@@ -129,11 +139,16 @@ class _Writer:
             packet_id = packet.packet_id if packet is not None else -1
             lap = packet.current_lap if packet is not None else -1
             packet_format = packet.packet_format if packet is not None else None
+            flags = 0
+            if capture.wire_payload is not None:
+                flags |= RECORD_FLAG_ENCRYPTED
+            if capture.decode_status != "decoded":
+                flags |= RECORD_FLAG_DECODE_FAILED
             self.file.write(
                 RECORD_HEADER.pack(
                     RECORD_MAGIC,
                     RECORD_HEADER.size,
-                    0,
+                    flags,
                     offset,
                     capture.receiver_order,
                     payload_len,
@@ -142,10 +157,10 @@ class _Writer:
                     _SOURCE_CODES[capture.source],
                     _FORMAT_CODES.get(packet_format or "", 0),
                     0,
-                    zlib.crc32(capture.payload),
+                    zlib.crc32(stored_payload),
                 )
             )
-            self.file.write(capture.payload)
+            self.file.write(stored_payload)
             self.packet_count += 1
             self.payload_bytes += payload_len
             self.last_offset_ns = offset
@@ -404,7 +419,7 @@ class RawArchiveReader:
             magic, version, header_size, created_ns = FILE_HEADER.unpack(prefix)
             if magic != MAGIC:
                 raise ArchiveError("invalid archive magic")
-            if version != FORMAT_VERSION:
+            if version not in SUPPORTED_FORMAT_VERSIONS:
                 raise UnsupportedArchiveVersion(f"unsupported archive version {version}")
             if header_size < FILE_HEADER.size:
                 raise ArchiveError("archive header is smaller than the v1 minimum")
@@ -423,7 +438,7 @@ class RawArchiveReader:
                 (
                     record_magic,
                     record_header_size,
-                    _flags,
+                    flags,
                     offset_ns,
                     order,
                     payload_length,
@@ -446,12 +461,30 @@ class RawArchiveReader:
                 except TruncatedArchiveError:
                     self._truncated(f"record {order} header extension")
                     break
-                payload = stream.read(payload_length)
-                if len(payload) != payload_length:
+                stored_payload = stream.read(payload_length)
+                if len(stored_payload) != payload_length:
                     self._truncated(f"record {order} payload")
                     break
-                if zlib.crc32(payload) != checksum:
+                if zlib.crc32(stored_payload) != checksum:
                     raise ArchiveError(f"record {order} payload checksum mismatch")
+                encrypted = version >= 2 and bool(flags & RECORD_FLAG_ENCRYPTED)
+                wire_payload = stored_payload if encrypted else None
+                payload = stored_payload
+                decode_status = (
+                    "decode_failed"
+                    if version >= 2 and flags & RECORD_FLAG_DECODE_FAILED
+                    else "decoded"
+                )
+                if encrypted:
+                    from app.telemetry.crypto import decrypt_packet
+                    from app.telemetry.diagnostics import record_decode_error
+
+                    payload = decrypt_packet(stored_payload) or b""
+                    if not payload:
+                        decode_status = "decode_failed"
+                        record_decode_error(
+                            f"archive record {order}: encrypted datagram could not be decrypted"
+                        )
                 yield ArchiveRecord(
                     monotonic_offset_ns=offset_ns,
                     order=order,
@@ -461,6 +494,8 @@ class RawArchiveReader:
                     source=_SOURCE_NAMES.get(source_code, "unknown"),
                     packet_format=_FORMAT_NAMES.get(format_code),
                     approximate_unix_ns=created_ns + offset_ns,
+                    wire_payload=wire_payload,
+                    decode_status=decode_status,
                 )
 
     def _truncated(self, part: str) -> None:
@@ -515,7 +550,9 @@ async def replay_archive(
     from app.telemetry.packet import parse_packet
 
     previous_ns: int | None = None
-    for record in RawArchiveReader(path, strict_truncation=strict_truncation):
+    for index, record in enumerate(
+        RawArchiveReader(path, strict_truncation=strict_truncation), start=1
+    ):
         if preserve_timing and previous_ns is not None:
             delay = max(0, record.monotonic_offset_ns - previous_ns) / 1e9 / speed
             if delay:
@@ -524,8 +561,19 @@ async def replay_archive(
             packet = parse_packet(record.payload)
         except ValueError as exc:
             raise ArchiveError(f"record {record.order} cannot be parsed: {exc}") from exc
+        packet.received_unix_ns = record.approximate_unix_ns
+        packet.received_monotonic_ns = record.monotonic_offset_ns
+        packet.receiver_order = record.order
+        packet.source = "archive_replay"
+        if record.wire_payload is not None and len(record.wire_payload) >= 0x44:
+            packet.wire_nonce_iv1 = struct.unpack_from("<I", record.wire_payload, 0x40)[0]
+            packet.native_fields["nonce_iv1"] = packet.wire_nonce_iv1
         await callback(packet)
         previous_ns = record.monotonic_offset_ns
+        # Most LapProcessor feeds complete synchronously. Yield periodically so
+        # an untimed archival hydration cannot monopolize the API event loop.
+        if not preserve_timing and index % 256 == 0:
+            await asyncio.sleep(0)
 
 
 def scan_archive(path: Path) -> tuple[int, int, int, bool]:

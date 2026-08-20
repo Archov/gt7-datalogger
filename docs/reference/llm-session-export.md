@@ -22,7 +22,8 @@ rounded by meaning: milliseconds for time, 0.1 m for distances, 0.1 km/h for spe
 angles, angular velocity, and slip. Missing values are JSON `null`; a separate channel
 availability table distinguishes missing telemetry from a real zero.
 `channel_provenance` additionally groups each lap's channels by `persisted`,
-`archive_replay`, or `unavailable`; provenance is not repeated in sample rows.
+`archive_replay`, or `unavailable`; provenance is not repeated in sample rows. Successful
+on-demand recovery is committed before export and therefore appears as `persisted`.
 
 ## Detail levels
 
@@ -55,6 +56,30 @@ The document contains one units/schema section, session-wide and per-lap channel
 availability, a lap table, whole-lap chassis summaries, exact fixed-distance timing
 segments, reference-defined corner comparisons, enriched events, and recurring
 problems. Standard/deep documents add interesting ranges and trace tables.
+
+The lap table reports `fuel_consumed` and `fuel_refueled` in litres. Both are derived
+from successive per-tick tank levels: downward changes are gross fuel burned and upward
+changes are fuel added. Consequently, a pit stop cannot cancel the fuel burned earlier
+on that lap. Historical rows written with the former start-minus-end calculation are
+recovered directly from their stored tick series during export.
+
+Standard/deep also add deterministic wheelspin characterization. The
+`drivetrain_characterization` object preserves a per-car override alongside
+torque-derived inference and conflicts. The `wheelspin_characterization` table separates
+observations, comparator-relative derivations, onset sequence, comparator quality, and
+bounded candidate evidence. Scores are heuristic rankings, not probabilities or causal
+diagnoses. Torque remains in raw GT7 units; combined-load candidates use vehicle-motion
+proxies and do not measure tire force or friction-circle saturation. Bottoming alone does
+not invalidate a comparator or prove physical contact.
+
+The characterization payload is nested columnar: its `*_columns` registries decode the
+positional observation, derivation, sequence, comparator-quality, comparator, candidate,
+and evidence rows. `resolution` is `resolved` or `mixed_or_unresolved`; unresolved state
+is not a candidate and is accompanied by stable `unresolved_reasons`. Every stored
+wheelspin event gets a row, including comparison-excluded or unalignable events. Ideal
+controls stay at or below 1.10 peak slip; relative controls may cross that value when
+they meet the documented peak/integral/duration dominance gate. `reference_corner` is
+strict containment, while `context_corner` is descriptive nearest-corner context only.
 
 `corner_line_analysis` is present at every detail level. It reports entry/apex/exit
 lateral offset and heading error, line offset RMS/peak, projected path length and
@@ -134,9 +159,10 @@ When a requested normalized channel is absent from an historical lap, the export
 can recover it on demand from that session's complete raw `.gt7r` archive. Replay uses
 the current production packet parser and lap processor, matches a reconstructed lap by
 car ID, GT7 lap number, and completed lap time, then aligns recovered data onto the
-persisted lap-relative time grid. Existing persisted channels always win. Recovery is
-read-only: exports do not rewrite old sample blobs. Missing, interrupted, truncated, or
-corrupt archives simply leave the channel unavailable.
+persisted lap-relative time grid. Existing persisted channels always win. Missing
+recovered channels are added atomically to old sample blobs. Missing, interrupted,
+truncated, or corrupt archives simply leave the channel unavailable; outcomes are cached
+per archive fingerprint and hydration version to prevent repeated failed replay.
 
 For archival data or unrestricted source-rate analysis, the existing per-lap raw JSON
 and CSV exports remain available.

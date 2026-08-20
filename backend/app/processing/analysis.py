@@ -11,6 +11,8 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
 
+from app.processing.orientation import ORIENTATION_CHANNELS, normalize_quaternion, slerp
+
 Samples = dict[str, list[float]]
 
 DEFAULT_STEP_M = 5.0
@@ -50,7 +52,59 @@ def resample_by_distance(
     grid = [i * step for i in range(int(total / step) + 1)]
     out: Samples = {"dist": grid}
     cols = columns or tuple(k for k in samples if k != "dist")
+    orientation_columns = tuple(column for column in ORIENTATION_CHANNELS if column in cols)
+    if orientation_columns:
+        orientation_arrays = [samples.get(column) or [] for column in ORIENTATION_CHANNELS]
+        quaternions = (
+            [tuple(values[index] for values in orientation_arrays) for index in range(len(dist))]
+            if all(len(values) == len(dist) for values in orientation_arrays)
+            else []
+        )
+        if quaternions and all(normalize_quaternion(value) is not None for value in quaternions):
+            resampled_quaternions: list[tuple[float, float, float, float]] = []
+            for distance in grid:
+                right = bisect_left(dist, distance)
+                if right <= 0:
+                    quaternion = normalize_quaternion(quaternions[0])
+                elif right >= len(dist):
+                    quaternion = normalize_quaternion(quaternions[-1])
+                elif dist[right] == distance:
+                    quaternion = normalize_quaternion(quaternions[right])
+                else:
+                    left = right - 1
+                    span = dist[right] - dist[left]
+                    quaternion = (
+                        slerp(quaternions[left], quaternions[right], (distance - dist[left]) / span)
+                        if span > 0
+                        else normalize_quaternion(quaternions[left])
+                    )
+                if quaternion is None:
+                    resampled_quaternions = []
+                    break
+                if (
+                    resampled_quaternions
+                    and sum(
+                        left * right
+                        for left, right in zip(resampled_quaternions[-1], quaternion, strict=True)
+                    )
+                    < 0
+                ):
+                    quaternion = (
+                        -quaternion[0],
+                        -quaternion[1],
+                        -quaternion[2],
+                        -quaternion[3],
+                    )
+                resampled_quaternions.append(quaternion)
+            if resampled_quaternions:
+                for component, column in enumerate(ORIENTATION_CHANNELS):
+                    if column in orientation_columns:
+                        out[column] = [
+                            round(quaternion[component], 6) for quaternion in resampled_quaternions
+                        ]
     for col in cols:
+        if col in ORIENTATION_CHANNELS:
+            continue
         ys = samples[col]
         if col in NEAREST_COLUMNS:
             out[col] = [_nearest(dist, ys, d) for d in grid]
@@ -702,11 +756,7 @@ def _stitch_wraparound(arcs: list[_Arc], m: int) -> list[_Arc]:
     if len(arcs) < 2:
         return arcs
     first, last = arcs[0], arcs[-1]
-    if (
-        first.sign == last.sign
-        and first.start <= edge
-        and m - 1 - last.end <= edge
-    ):
+    if first.sign == last.sign and first.start <= edge and m - 1 - last.end <= edge:
         last.angle += first.angle
         last.wrap = (first.start, first.end)
         return arcs[1:]

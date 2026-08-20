@@ -76,3 +76,69 @@ body.overlay-green {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Analysis is ordinary document flow below xl. At desktop widths it becomes
+   a fixed workspace with two deliberately independent scroll regions. */
+.analysis-map-viewport {
+  height: min(58vh, 420px);
+  min-height: 280px;
+}
+
+@media (min-width: 80rem) {
+  .analysis-workspace {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(640px, 1fr) 10px var(--analysis-inspector-width);
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .analysis-center {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .analysis-map-viewport {
+    height: var(--analysis-map-height);
+    min-height: 0;
+    flex: 0 0 var(--analysis-map-height);
+  }
+
+  .analysis-timeline,
+  .analysis-inspector {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .analysis-timeline {
+    flex: 1 1 auto;
+  }
+
+  .analysis-horizontal-resizer {
+    height: 10px;
+    flex: 0 0 10px;
+  }
+
+  .analysis-vertical-resizer {
+    width: 10px;
+  }
+
+  .analysis-horizontal-resizer:hover,
+  .analysis-horizontal-resizer:focus-visible,
+  .analysis-vertical-resizer:hover,
+  .analysis-vertical-resizer:focus-visible {
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  }
+
+  .analysis-diagonal-resizer {
+    position: absolute;
+    top: calc(var(--analysis-map-height) - 4px);
+    right: calc(var(--analysis-inspector-width) + 14px);
+    z-index: 30;
+    width: 18px;
+    height: 18px;
+  }
+}

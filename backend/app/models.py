@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import IntFlag
 
 
@@ -140,6 +140,19 @@ class TelemetryPacket:
     wheelbase_m: float | None = None
     car_category: str | None = None  # e.g. "Gr3", "Gr4"
 
+    # Comprehensive protocol evidence. ``native_fields`` is populated from the
+    # declarative byte catalog before semantic normalization, so undocumented
+    # offsets and packed/raw values remain available without bloating the public
+    # dataclass with provisional names. Capture metadata is filled by the UDP or
+    # archive envelope and is not itself part of the GT7 payload.
+    packet_size: int = 0
+    native_fields: dict[str, float | int | str] = field(default_factory=dict)
+    received_unix_ns: int | None = None
+    received_monotonic_ns: int | None = None
+    receiver_order: int | None = None
+    source: str | None = None
+    wire_nonce_iv1: int | None = None
+
     @property
     def speed_kmh(self) -> float:
         return self.speed_mps * 3.6
@@ -199,6 +212,16 @@ class TelemetryPacket:
         if self.flags & SimulatorFlags.REV_LIMITER:
             bits |= AidsBits.REV_LIMITER
         return int(bits)
+
+    @property
+    def flag_bits(self) -> tuple[bool, ...]:
+        """All sixteen native simulator flag bits, including undocumented bits."""
+        return tuple(bool(self.flags & (1 << bit)) for bit in range(16))
+
+    @property
+    def flags_raw(self) -> int:
+        """Original packed 16-bit simulator flags, alongside decoded helpers."""
+        return self.flags
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

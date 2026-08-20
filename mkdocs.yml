@@ -85,6 +85,7 @@ nav:
       - REST & WebSocket API: reference/api.md
       - Lap file format: reference/lap-file-format.md
       - Raw telemetry archive: reference/raw-telemetry-archive.md
+      - Packet field catalog: reference/packet-field-catalog.md
       - LLM session export: reference/llm-session-export.md
       - Track bundle format: reference/track-bundle-format.md
       - Troubleshooting: reference/troubleshooting.md

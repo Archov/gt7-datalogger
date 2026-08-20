@@ -33,10 +33,7 @@ def test_encrypt_decrypt_roundtrip() -> None:
     assert wire != plain
     recovered = decrypt_packet(wire)
     assert recovered is not None
-    # The 4 IV bytes at 0x40 are consumed by the nonce derivation and decrypt
-    # to keystream garbage; every other byte must round-trip exactly.
-    assert recovered[:0x40] == plain[:0x40]
-    assert recovered[0x44:] == plain[0x44:]
+    assert recovered == plain
 
 
 def test_decrypt_rejects_garbage() -> None:
@@ -96,19 +93,11 @@ def test_parse_core_fields() -> None:
     ) == pytest.approx((0.1, -0.2, 0.3, 0.9))
 
 
-def test_orientation_uses_exact_base_offsets_and_future_lengths() -> None:
+def test_orientation_uses_exact_base_offsets_and_rejects_future_lengths() -> None:
     plain = make_plain(orientation=(0.11, 0.22, 0.33, 0.44))
-    assert struct.unpack_from("<4f", plain, 0x1C) == pytest.approx(
-        (0.11, 0.22, 0.33, 0.44)
-    )
-    packet = parse_packet(plain + b"future-extension")
-    assert packet.packet_format == "A"
-    assert (
-        packet.orientation_x,
-        packet.orientation_y,
-        packet.orientation_z,
-        packet.orientation_w,
-    ) == pytest.approx((0.11, 0.22, 0.33, 0.44))
+    assert struct.unpack_from("<4f", plain, 0x1C) == pytest.approx((0.11, 0.22, 0.33, 0.44))
+    with pytest.raises(ValueError, match="unsupported packet size"):
+        parse_packet(plain + b"future-extension")
 
 
 def test_tire_slip_ratio() -> None:
@@ -197,6 +186,5 @@ def test_encrypt_decrypt_roundtrip_all_formats(fmt: str) -> None:
     plain = make_plain(fmt=fmt, packet_id=99, speed_mps=33.3)
     recovered = decrypt_packet(encrypt_packet(plain))
     assert recovered is not None
-    assert recovered[:0x40] == plain[:0x40]
-    assert recovered[0x44:] == plain[0x44:]
+    assert recovered == plain
     assert parse_packet(recovered).packet_id == 99

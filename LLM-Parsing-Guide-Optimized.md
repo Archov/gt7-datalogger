@@ -87,9 +87,61 @@ interesting_ranges: bounded evidence windows
 detail_traces: reason-selected 5 m cumulative-distance traces
 spatial_reference: reference path; standard 10 m, deep 5 m
 line_traces: whole-lap projected spatial evidence
+drivetrain_characterization: override + torque-derived powered-wheel evidence
+wheelspin_characterization: heuristic wheelspin mechanism compatibility ranking
 ```
 
 `deep` only: `source_traces` = bounded persisted-grid-rate samples.
+
+### Wheelspin characterization (`standard`/`deep`)
+
+```text
+wheelspin_characterization columns:
+lap_id,event_index,reference_corner,context_corner,corner_relation,corner_distance_m,
+start_m,end_m,start_progress_m,end_progress_m,start_time_ms,end_time_ms,observed,derived,
+sequence,comparator_quality,comparators,resolution,unresolved_reasons,candidates
+all nested rows: positional; decode with observed_columns,derived_columns,sequence_columns,
+comparator_quality_columns,comparator_columns,candidate_columns,evidence_columns
+reference_corner: strict containment only
+context_corner/corner_relation/corner_distance_m: non-causal nearest location context <=250 m
+observed: direct stored/event/sample facts; signed motion preserved
+derived: deterministic peer differences/slip/asymmetry/powered-wheel/order evidence
+sequence: onset ms relative to stored wheelspin onset=0; unavailable=>null
+comparators: same-progress ideal/relative lower-slip controls; stored wheelspin -/-> exclusion
+ideal: peak_slip<=1.10
+relative: peak >=0.03 lower; integral OR duration >=20% lower; neither >10% worse
+confounded: comparable/worse slip OR independent local reverse/surface/vertical disturbance
+relative-only pool -/-> strong quality
+weak comparator quality => reduced discrimination; one control -/-> robust outlier
+bottoming alone -/-> comparator invalid; independent local vertical evidence required
+candidates: <=3; support <=4; counterevidence <=2
+weights: inspectable heuristic ranking parameters
+weights -/-> learned model; weights -/-> calibrated physical probabilities
+score -/-> probability; candidate mechanism -/-> proven cause
+signed motion scoring: abs(event) vs median(abs(peers))
+similar magnitude/opposite sign -/-> outlier
+temporal order matters; later shift/kerb/vertical event -/-> earlier cause
+steering magnitude alone -/-> combined-load support; motion evidence required
+combined_lateral_longitudinal_load_candidate: power during elevated motion proxies
+combined-load candidate -/-> measured tire force/load/friction-circle saturation
+single_wheel_differential_spin_candidate: persistent peer-relative asymmetry
+single-wheel candidate -/-> LSD diagnosis
+resolution: resolved|mixed_or_unresolved; unresolved_reasons: stable reason codes
+mixed_or_unresolved -/-> candidate; candidates contain real mechanisms only
+every stored wheelspin event => row; excluded/unalignable event => unresolved reason
+characterization: NO setup/driver recommendations
+```
+
+```text
+drivetrain_characterization:
+override,inferred,effective,source,effective_powered_wheels,
+front_positive_torque_share,rear_positive_torque_share,evidence_sample_count,
+evidence_lap_ids,conflict
+effective precedence: override > inferred > unknown
+override -/-> erased contrary inference
+torque: raw GT7 units; relative timing/distribution usable; Nm/tire force unverified
+event-local torque retained; disagreement => conservative power evidence
+```
 
 Reference geometry unavailable => omit `spatial_reference` and `line_traces`; retain
 empty `corner_line_analysis`.
@@ -226,22 +278,22 @@ between Turns N and N+1`.
 columns:[lap_id,channels]
 ```
 
-`channels`: resolved export-time usable normalized telemetry. May include
-`archive_replay`; NOT necessarily only persisted `samples_json`. Absent=>unavailable,
-NOT zero. Legacy all-zero `surface`=>unavailable.
+`channels`: resolved export-time usable normalized telemetry. Missing archive-recovered
+channels committed before export. Absent=>unavailable, NOT zero. Legacy all-zero
+`surface`=>unavailable.
 
 `channel_provenance`:
 
 ```text
 columns:[lap_id,persisted,archive_replay,unavailable]
 persisted: present in saved normalized lap
-archive_replay: on-demand raw-archive recovery
+archive_replay: transient raw-archive recovery
 unavailable: requested; neither persisted nor safely recoverable
 ```
 
-Rules: persisted wins; replay read-only; replay aligned to persisted lap identity/time
-grid; no historical sample rewrite; provenance = context/confidence, NOT quality rank.
-Current principal use: historical orientation recovery.
+Rules: persisted wins; replay aligned to persisted lap identity/time grid; recovered
+missing channels committed atomically; successful recovery=>persisted on export/later
+requests; provenance=context/confidence, NOT quality rank.
 
 Packet groups:
 
@@ -263,6 +315,7 @@ Canonical normalized sample registry:
 t, dist, speed, throttle, brake, coast, gear, rpm, boost, tire_slip,
 yaw_rate, yaw_rate_signed,
 pos_x, pos_y, pos_z,
+velocity_x, velocity_y, velocity_z,
 body_height, fuel,
 road_plane_x, road_plane_y, road_plane_z, road_plane_distance,
 slip_fl, slip_fr, slip_rl, slip_rr,
@@ -282,6 +335,7 @@ Normalized sample units:
 t: elapsed s                      dist: cumulative m
 speed: km/h                       throttle,brake,filtered inputs: percent
 coast: flag                       pos_x,pos_y,pos_z: m
+velocity_x,velocity_y,velocity_z: m/s
 orientation_x/y/z/w: unitless     body_height,sus_fl/fr/rl/rr: mm
 fuel: L                           tt_fl/fr/rl/rr: degrees Celsius
 boost: bar                        steering: rad

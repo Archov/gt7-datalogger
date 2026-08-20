@@ -6,9 +6,11 @@ time, and must arrive at the same schema as a fresh install without losing a
 single recorded lap.
 """
 
+import json
 import sqlite3
 
 import pytest
+from alembic import command
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 
@@ -78,6 +80,12 @@ def _revision(path) -> str | None:
         con.close()
 
 
+def _upgrade_to(connection, revision: str) -> None:
+    config = alembic_config()
+    config.attributes["connection"] = connection
+    command.upgrade(config, revision)
+
+
 def test_migration_history_has_one_head() -> None:
     """Two heads means `upgrade head` is ambiguous and startup would fail on
     somebody else's machine, not on the one that added the second branch."""
@@ -106,6 +114,51 @@ async def test_init_db_is_idempotent(tmp_path) -> None:
     await init_db(engine)
     await engine.dispose()
     assert _revision(path) is not None
+
+
+async def test_refuel_migration_repairs_net_gain_pit_lap_once(tmp_path) -> None:
+    path = tmp_path / "pit-fuel.db"
+    engine = make_engine(path)
+    async with engine.begin() as connection:
+        await connection.run_sync(lambda sync: _upgrade_to(sync, "0003_fork_telemetry_metrics"))
+    await engine.dispose()
+
+    samples = json.dumps({"fuel": [20.0, 19.0, 18.0, 28.0, 27.0, 26.0]})
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO sessions "
+        "(id,started_at,car_id,car_name,car_category,note,track_name) "
+        "VALUES (1,'now',7,'Car','','','Track')"
+    )
+    con.execute(
+        """
+        INSERT INTO laps (
+          id,session_id,number,time_ms,finished_at,car_id,car_category,
+          fuel_start,fuel_end,fuel_consumed,full_throttle_pct,full_brake_pct,
+          coasting_pct,tire_spin_pct,max_speed,min_body_height,total_ticks,tod_ms,
+          tcs_active_pct,asm_active_pct,max_water_temp,max_oil_temp,min_oil_pressure,
+          counts_for_best,off_track_count,clean_lap,events_json,gearing_json,samples_json
+        ) VALUES (
+          1,1,4,90000,'later',7,'',20,25,0,0,0,0,0,200,80,6,-1,
+          0,0,0,0,-1,1,-1,NULL,'[]','',?
+        )
+        """,
+        (samples,),
+    )
+    con.commit()
+    con.close()
+
+    engine = make_engine(path)
+    await init_db(engine)
+    await init_db(engine)
+    await engine.dispose()
+
+    con = sqlite3.connect(path)
+    fuel_consumed = con.execute(
+        "SELECT fuel_consumed FROM laps WHERE id=1"
+    ).fetchone()[0]
+    con.close()
+    assert fuel_consumed == pytest.approx(5.0)
 
 
 async def test_pre_alembic_database_is_caught_up_and_stamped(tmp_path) -> None:

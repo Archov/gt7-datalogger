@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from bisect import bisect_left
 from pathlib import Path
 from typing import Any, cast
@@ -56,6 +57,12 @@ def _interpolate(
 ) -> list[float] | None:
     if not source_t or len(source_values) != len(source_t):
         return None
+    if any(
+        not math.isfinite(value)
+        for values in (source_t, source_values, target_t)
+        for value in values
+    ):
+        return None
     if source_t == target_t:
         return list(source_values)
     if not target_t or target_t[0] < source_t[0] or target_t[-1] > source_t[-1]:
@@ -81,10 +88,7 @@ def _interpolate(
         if span <= 0:
             return None
         fraction = (value - source_t[left]) / span
-        result.append(
-            source_values[left]
-            + (source_values[right] - source_values[left]) * fraction
-        )
+        result.append(source_values[left] + (source_values[right] - source_values[left]) * fraction)
     return result
 
 
@@ -130,10 +134,8 @@ def _interpolate_quaternions(
     }
 
 
-async def resolve_session_telemetry(
-    bundle: dict[str, Any], requested_channels: set[str], data_root: Path
-) -> dict[str, Any]:
-    """Return an in-memory resolved bundle without changing persisted sample blobs."""
+def persisted_session_view(bundle: dict[str, Any], requested_channels: set[str]) -> dict[str, Any]:
+    """Clone a bundle and describe only its currently persisted availability."""
     resolved = dict(bundle)
     resolved["session"] = dict(bundle.get("session") or {})
     laps: list[dict[str, Any]] = []
@@ -144,25 +146,50 @@ async def resolve_session_telemetry(
         laps.append(lap)
     resolved["laps"] = laps
     requested = {
-        channel for channel in requested_channels if channel in lap_processing.SAMPLE_COLUMNS
+        channel
+        for channel in requested_channels
+        if channel in lap_processing.STORED_SAMPLE_COLUMNS
     }
     provenance: dict[int, dict[str, list[str]]] = {}
-    missing = False
     for lap in laps:
         samples_value = lap.get("samples")
         samples = cast(Samples, samples_value) if isinstance(samples_value, dict) else {}
         available = _aligned_channels(samples)
         unavailable = requested - available
-        missing = missing or bool(unavailable)
         provenance[int(lap["id"])] = {
             "persisted": sorted(available),
             "archive_replay": [],
             "unavailable": sorted(unavailable),
         }
+    resolved["channel_provenance"] = provenance
+    return resolved
+
+
+async def resolve_session_telemetry(
+    bundle: dict[str, Any],
+    requested_channels: set[str],
+    data_root: Path,
+    *,
+    force_replay: bool = False,
+) -> dict[str, Any]:
+    """Resolve missing channels in memory and attach an explicit replay report."""
+    resolved = persisted_session_view(bundle, requested_channels)
+    laps = cast(list[dict[str, Any]], resolved["laps"])
+    provenance = cast(dict[int, dict[str, list[str]]], resolved["channel_provenance"])
+    missing = force_replay or any(state["unavailable"] for state in provenance.values())
+    report: dict[str, Any] = {
+        "status": "not_needed",
+        "error": None,
+        "matched_lap_ids": [],
+        "skipped_lap_ids": [],
+        "recovered_channel_count": 0,
+    }
 
     if missing:
         path = _archive_path(data_root, resolved.get("raw_archive_meta"))
-        if path is not None:
+        if path is None:
+            report.update(status="failed", error="archive_unavailable")
+        else:
             reconstructed_laps: list[lap_processing.CompletedLap] = []
             reconstructed_sessions: list[lap_processing.SessionInfo] = []
 
@@ -174,9 +201,7 @@ async def resolve_session_telemetry(
 
             processor = lap_processing.LapProcessor(on_lap=on_lap, on_session=on_session)
             try:
-                await raw_archive.replay_archive(
-                    path, processor.feed, strict_truncation=True
-                )
+                await raw_archive.replay_archive(path, processor.feed, strict_truncation=True)
                 session = resolved.get("session") or {}
                 expected_car = int(session.get("car_id", -1))
                 if (
@@ -194,11 +219,16 @@ async def resolve_session_telemetry(
                     lap_id = int(lap["id"])
                     state = provenance[lap_id]
                     missing_for_lap = set(state["unavailable"])
-                    if not missing_for_lap or not bool(lap.get("counts_for_best", True)):
+                    telemetry_meta = lap.get("telemetry_meta")
+                    if isinstance(telemetry_meta, dict) and telemetry_meta.get("partial") is True:
+                        report["skipped_lap_ids"].append(lap_id)
+                        continue
+                    if not missing_for_lap:
                         continue
                     key = (int(lap["car_id"]), int(lap["number"]), int(lap["time_ms"]))
                     matched_lap = by_key.get(key)
                     if matched_lap is None:
+                        report["skipped_lap_ids"].append(lap_id)
                         continue
                     target = lap["samples"]
                     source = matched_lap.samples
@@ -226,12 +256,19 @@ async def resolve_session_telemetry(
                         target[channel] = values
                     state["archive_replay"] = sorted(recovered)
                     state["unavailable"] = sorted(missing_for_lap - recovered.keys())
+                    if recovered:
+                        report["matched_lap_ids"].append(lap_id)
+                        report["recovered_channel_count"] += len(recovered)
+                report["status"] = "partial" if report["skipped_lap_ids"] else "complete"
             except Exception as exc:  # noqa: BLE001 - archive recovery must never break export
+                report.update(status="failed", error=type(exc).__name__)
                 log.warning(
                     "raw telemetry recovery failed for session %s: %s",
                     (resolved.get("session") or {}).get("id"),
                     exc,
                 )
 
-    resolved["channel_provenance"] = provenance
+    report["matched_lap_ids"] = sorted(set(report["matched_lap_ids"]))
+    report["skipped_lap_ids"] = sorted(set(report["skipped_lap_ids"]))
+    resolved["_telemetry_resolution"] = report
     return resolved

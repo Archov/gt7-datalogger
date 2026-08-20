@@ -1,0 +1,959 @@
+{
+  "schema_version": 1,
+  "formats": {
+    "A": 296,
+    "B": 316,
+    "~": 344,
+    "C": 368
+  },
+  "fields": [
+    {
+      "names": [
+        "magic"
+      ],
+      "offset": 0,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "header",
+      "unit": "hex",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "position_x",
+        "position_y",
+        "position_z"
+      ],
+      "offset": 4,
+      "scalar_type": "f32",
+      "count": 3,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "m",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "velocity_x",
+        "velocity_y",
+        "velocity_z"
+      ],
+      "offset": 16,
+      "scalar_type": "f32",
+      "count": 3,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "m/s",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "orientation_x",
+        "orientation_y",
+        "orientation_z",
+        "orientation_w"
+      ],
+      "offset": 28,
+      "scalar_type": "f32",
+      "count": 4,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "quaternion",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "angular_velocity_x",
+        "angular_velocity_y",
+        "angular_velocity_z"
+      ],
+      "offset": 44,
+      "scalar_type": "f32",
+      "count": 3,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "rad/s",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "body_height_m"
+      ],
+      "offset": 56,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "m",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "engine_rpm"
+      ],
+      "offset": 60,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "rpm",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "nonce_iv1"
+      ],
+      "offset": 64,
+      "scalar_type": "u32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "nonce",
+      "unit": "hex",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "fuel_level"
+      ],
+      "offset": 68,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "L",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "fuel_capacity"
+      ],
+      "offset": 72,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "L",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "speed_mps"
+      ],
+      "offset": 76,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "m/s",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "boost_raw"
+      ],
+      "offset": 80,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "bar+1",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "oil_pressure"
+      ],
+      "offset": 84,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "bar",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "water_temp"
+      ],
+      "offset": 88,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "degC",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "oil_temp"
+      ],
+      "offset": 92,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "degC",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "tire_temp_fl",
+        "tire_temp_fr",
+        "tire_temp_rl",
+        "tire_temp_rr"
+      ],
+      "offset": 96,
+      "scalar_type": "f32",
+      "count": 4,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "degC",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "packet_id"
+      ],
+      "offset": 112,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "sequence",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "current_lap"
+      ],
+      "offset": 116,
+      "scalar_type": "i16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "lap",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "total_laps"
+      ],
+      "offset": 118,
+      "scalar_type": "i16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "laps",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "best_lap_time_ms"
+      ],
+      "offset": 120,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "ms",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "last_lap_time_ms"
+      ],
+      "offset": 124,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "ms",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "day_progression_ms"
+      ],
+      "offset": 128,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "ms",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "race_position"
+      ],
+      "offset": 132,
+      "scalar_type": "i16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "position",
+      "confidence": "community",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "total_positions"
+      ],
+      "offset": 134,
+      "scalar_type": "i16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "cars",
+      "confidence": "community",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "rpm_alert_min"
+      ],
+      "offset": 136,
+      "scalar_type": "u16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "rpm",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "rpm_alert_max"
+      ],
+      "offset": 138,
+      "scalar_type": "u16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "rpm",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "calculated_max_speed"
+      ],
+      "offset": 140,
+      "scalar_type": "i16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "km/h",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "flags_raw"
+      ],
+      "offset": 142,
+      "scalar_type": "u16",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "bitmask",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "gear_bits_raw"
+      ],
+      "offset": 144,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "packed nibbles",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "throttle_raw"
+      ],
+      "offset": 145,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "0..255",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "brake_raw"
+      ],
+      "offset": 146,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "0..255",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "padding_0x093_u8"
+      ],
+      "offset": 147,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "A",
+      "classification": "padding",
+      "unit": "raw",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "road_plane_x",
+        "road_plane_y",
+        "road_plane_z",
+        "road_plane_distance"
+      ],
+      "offset": 148,
+      "scalar_type": "f32",
+      "count": 4,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "raw",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "wheel_rps_fl",
+        "wheel_rps_fr",
+        "wheel_rps_rl",
+        "wheel_rps_rr"
+      ],
+      "offset": 164,
+      "scalar_type": "f32",
+      "count": 4,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "rad/s",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "tire_radius_fl",
+        "tire_radius_fr",
+        "tire_radius_rl",
+        "tire_radius_rr"
+      ],
+      "offset": 180,
+      "scalar_type": "f32",
+      "count": 4,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "m",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "suspension_fl_m",
+        "suspension_fr_m",
+        "suspension_rl_m",
+        "suspension_rr_m"
+      ],
+      "offset": 196,
+      "scalar_type": "f32",
+      "count": 4,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "m",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0d4_f32"
+      ],
+      "offset": 212,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0d8_f32"
+      ],
+      "offset": 216,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0dc_f32"
+      ],
+      "offset": 220,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0e0_f32"
+      ],
+      "offset": 224,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0e4_f32"
+      ],
+      "offset": 228,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0e8_f32"
+      ],
+      "offset": 232,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0ec_f32"
+      ],
+      "offset": 236,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x0f0_f32"
+      ],
+      "offset": 240,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "clutch"
+      ],
+      "offset": 244,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "ratio",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "clutch_engagement"
+      ],
+      "offset": 248,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "ratio",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "rpm_after_clutch"
+      ],
+      "offset": 252,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "rpm",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "transmission_top_speed"
+      ],
+      "offset": 256,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "km/h reference",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "gear_ratio_1",
+        "gear_ratio_2",
+        "gear_ratio_3",
+        "gear_ratio_4",
+        "gear_ratio_5",
+        "gear_ratio_6",
+        "gear_ratio_7",
+        "gear_ratio_8"
+      ],
+      "offset": 260,
+      "scalar_type": "f32",
+      "count": 8,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "ratio",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "car_id"
+      ],
+      "offset": 292,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "A",
+      "classification": "known",
+      "unit": "id",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "steering_wheel_rad"
+      ],
+      "offset": 296,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "B",
+      "classification": "extension",
+      "unit": "rad",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "steering_angular_velocity"
+      ],
+      "offset": 300,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "B",
+      "classification": "extension",
+      "unit": "rad/s",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "sway"
+      ],
+      "offset": 304,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "B",
+      "classification": "extension",
+      "unit": "raw",
+      "confidence": "community",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "heave"
+      ],
+      "offset": 308,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "B",
+      "classification": "extension",
+      "unit": "raw",
+      "confidence": "community",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "surge"
+      ],
+      "offset": 312,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "B",
+      "classification": "extension",
+      "unit": "raw",
+      "confidence": "community",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "throttle_filtered_raw"
+      ],
+      "offset": 316,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "~",
+      "classification": "extension",
+      "unit": "0..255",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "brake_filtered_raw"
+      ],
+      "offset": 317,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "~",
+      "classification": "extension",
+      "unit": "0..255",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x13e_u8"
+      ],
+      "offset": 318,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x13f_u8"
+      ],
+      "offset": 319,
+      "scalar_type": "u8",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x140_f32"
+      ],
+      "offset": 320,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "provisional",
+      "interpretation": "candidate torque vector FL"
+    },
+    {
+      "names": [
+        "unknown_0x144_f32"
+      ],
+      "offset": 324,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "provisional",
+      "interpretation": "candidate torque vector FR"
+    },
+    {
+      "names": [
+        "unknown_0x148_f32"
+      ],
+      "offset": 328,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "provisional",
+      "interpretation": "candidate torque vector RL"
+    },
+    {
+      "names": [
+        "unknown_0x14c_f32"
+      ],
+      "offset": 332,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "provisional",
+      "interpretation": "candidate torque vector RR"
+    },
+    {
+      "names": [
+        "energy_recovery"
+      ],
+      "offset": 336,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "~",
+      "classification": "extension",
+      "unit": "raw",
+      "confidence": "community",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "unknown_0x154_f32"
+      ],
+      "offset": 340,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "~",
+      "classification": "unknown",
+      "unit": "raw",
+      "confidence": "unknown",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "surface_fl_char",
+        "surface_fr_char",
+        "surface_rl_char",
+        "surface_rr_char"
+      ],
+      "offset": 344,
+      "scalar_type": "char",
+      "count": 4,
+      "introduced": "C",
+      "classification": "extension",
+      "unit": "ASCII",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "live_lap_time_ms"
+      ],
+      "offset": 348,
+      "scalar_type": "i32",
+      "count": 1,
+      "introduced": "C",
+      "classification": "extension",
+      "unit": "ms",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "steer_fl_rad",
+        "steer_fr_rad"
+      ],
+      "offset": 352,
+      "scalar_type": "f32",
+      "count": 2,
+      "introduced": "C",
+      "classification": "extension",
+      "unit": "rad",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "wheelbase_m"
+      ],
+      "offset": 360,
+      "scalar_type": "f32",
+      "count": 1,
+      "introduced": "C",
+      "classification": "extension",
+      "unit": "m",
+      "confidence": "documented",
+      "interpretation": ""
+    },
+    {
+      "names": [
+        "car_category_char_0",
+        "car_category_char_1",
+        "car_category_char_2",
+        "car_category_char_3"
+      ],
+      "offset": 364,
+      "scalar_type": "char",
+      "count": 4,
+      "introduced": "C",
+      "classification": "extension",
+      "unit": "ASCII",
+      "confidence": "documented",
+      "interpretation": ""
+    }
+  ]
+}

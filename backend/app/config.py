@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Telemetry format requested from the console: "A", "B", "~", or "C".
     # "C" (game v1.68+) is the richest; older game versions only answer "A".
     packet_format: str = "C"
-    # Lossless decrypted packet archive, stored beside the SQLite database.
+    # Lossless encrypted receive-boundary archive, stored beside the primary database.
     raw_archive: bool = True
 
     # Simulated-source scenario: "practice" (default), "race", "fuel_shortage",

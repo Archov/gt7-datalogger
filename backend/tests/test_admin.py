@@ -1,5 +1,6 @@
 """Admin API: runtime settings, logs, stats, data management."""
 
+import asyncio
 import logging
 
 import pytest
@@ -109,6 +110,43 @@ async def test_clear_data(client) -> None:
     data = (await c.get("/api/admin/stats")).json()
     assert data["db"]["laps"] == 0
     assert service.session_id is None
+
+
+async def test_archive_hydration_job_reports_progress_and_rejects_duplicate(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c, service = client
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_archives() -> list[tuple[int, dict[str, object]]]:
+        entered.set()
+        await release.wait()
+        return []
+
+    monkeypatch.setattr(service.repo, "list_session_archive_metadata", delayed_archives)
+    started = await c.post("/api/admin/archive-hydration", json={"mode": "retry_incomplete"})
+    assert started.status_code == 202
+    assert started.json()["state"] == "running"
+    await entered.wait()
+    duplicate = await c.post("/api/admin/archive-hydration", json={"mode": "force_all"})
+    assert duplicate.status_code == 409
+    assert (await c.get("/api/admin/archive-hydration")).json()["state"] == "running"
+    assert (await c.post("/api/admin/vacuum")).status_code == 409
+    release.set()
+    for _ in range(20):
+        status = (await c.get("/api/admin/archive-hydration")).json()
+        if status["state"] == "completed":
+            break
+        await asyncio.sleep(0)
+    assert status["state"] == "completed"
+    assert status["mode"] == "retry_incomplete"
+
+
+async def test_archive_hydration_rejects_unknown_mode(client) -> None:
+    c, _ = client
+    response = await c.post("/api/admin/archive-hydration", json={"mode": "unexpected"})
+    assert response.status_code == 422
 
 
 async def test_log_level_change(client) -> None:

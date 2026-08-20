@@ -12,6 +12,8 @@ from __future__ import annotations
 import struct
 
 from app.models import TelemetryPacket
+from app.telemetry.diagnostics import record_decode_error, record_unsupported_length
+from app.telemetry.packet_catalog import FORMAT_SIZES, PacketFormat, fields_for
 
 PACKET_SIZE_A = 296
 PACKET_SIZE_B = 316
@@ -20,6 +22,9 @@ PACKET_SIZE_C = 368
 PACKET_SIZE = PACKET_SIZE_A  # base layout, kept for existing callers
 HEARTBEAT_FORMATS = ("A", "B", "~", "C")
 MAGIC = 0x47375330
+_FORMAT_BY_SIZE: dict[int, PacketFormat] = {
+    size: packet_format for packet_format, size in FORMAT_SIZES.items()
+}
 
 # struct format for the full packet, little-endian.
 # Offsets follow the community-documented Simulator Interface layout.
@@ -85,13 +90,44 @@ assert PACKET_SIZE_B + _EXT_TILDE.size == PACKET_SIZE_TILDE
 assert PACKET_SIZE_TILDE + _EXT_C.size == PACKET_SIZE_C
 
 
+_SCALAR_FORMATS = {
+    "u8": "B",
+    "i16": "h",
+    "u16": "H",
+    "i32": "i",
+    "u32": "I",
+    "f32": "f",
+    "char": "B",
+}
+
+
+def decode_native_fields(plain: bytes, packet_format: PacketFormat) -> dict[str, float | int | str]:
+    """Decode every catalogued scalar, including padding and unknown offsets."""
+    result: dict[str, float | int | str] = {}
+    for field in fields_for(packet_format):
+        values = struct.unpack_from(
+            "<" + _SCALAR_FORMATS[field.scalar_type] * field.count,
+            plain,
+            field.offset,
+        )
+        for name, value in zip(field.names, values, strict=True):
+            result[name] = chr(value) if field.scalar_type == "char" else value
+    return result
+
+
 def parse_packet(plain: bytes) -> TelemetryPacket:
     """Parse a decrypted packet (any of the A/B/~/C sizes) into the model."""
-    if len(plain) < PACKET_SIZE_A:
-        raise ValueError(f"packet too short: {len(plain)} bytes")
+    packet_format = _FORMAT_BY_SIZE.get(len(plain))
+    if packet_format is None:
+        record_unsupported_length(len(plain))
+        expected = ", ".join(str(size) for size in sorted(_FORMAT_BY_SIZE))
+        raise ValueError(
+            f"unsupported packet size: {len(plain)} bytes (expected one of {expected})"
+        )
+    native_fields = decode_native_fields(plain, packet_format)
     v = _HEAD.unpack_from(plain)
     (
-        _magic,
+        magic,
         pos_x,
         pos_y,
         pos_z,
@@ -153,6 +189,9 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
         sus_rr,
         *rest,
     ) = v
+    if magic != MAGIC:
+        record_decode_error(f"parser: failed magic validation ({magic:#x})")
+        raise ValueError(f"invalid packet magic: {magic:#x}")
     # rest = 8 reserved floats, clutch, clutch engagement, rpm after clutch,
     #        top speed, 8 gear ratios, car id
     clutch = rest[8]
@@ -200,15 +239,7 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
 
     return TelemetryPacket(
         packet_id=packet_id,
-        packet_format=(
-            "C"
-            if len(plain) >= PACKET_SIZE_C
-            else "~"
-            if len(plain) >= PACKET_SIZE_TILDE
-            else "B"
-            if len(plain) >= PACKET_SIZE_B
-            else "A"
-        ),
+        packet_format=packet_format,
         position_x=pos_x,
         position_y=pos_y,
         position_z=pos_z,
@@ -286,6 +317,8 @@ def parse_packet(plain: bytes) -> TelemetryPacket:
         wheel_steering_rad=wheel_steering,
         wheelbase_m=wheelbase,
         car_category=car_category,
+        packet_size=len(plain),
+        native_fields=native_fields,
     )
 
 

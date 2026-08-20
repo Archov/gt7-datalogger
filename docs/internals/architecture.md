@@ -16,8 +16,9 @@ PlayStation (GT7) ──UDP 33740──▶ Telemetry service (FastAPI, Python 3.
 
 ## One process, one event loop
 
-The whole backend is a **single-process, single-threaded asyncio** application
-(FastAPI + uvicorn). There are no worker threads or subprocesses. The data flow is:
+The backend is a **single-process asyncio** application (FastAPI + uvicorn). Live packet
+ordering remains single-threaded; expensive historical archive replay may use an asyncio
+worker thread so Admin and live telemetry stay responsive. There are no subprocesses.
 
 ```
 UdpTelemetrySource (or SimTelemetrySource)
@@ -97,6 +98,11 @@ on, which rewrites the table instead) and commit it. Keep one head: two make
 The sessions table also holds compact raw-archive metadata and a relative path. Packet
 bodies stay in append-only `.gt7r` files under the data directory rather than creating a
 SQLite row per 60 Hz packet. See the [raw archive reference](../reference/raw-telemetry-archive.md).
+
+It also stores a compact hydration fingerprint/outcome. When a historical channel is
+missing, replay reconstructs the whole session in a worker, then the repository validates
+lap identities/time grids and atomically fills only missing normalized arrays. Admin can
+pre-run this process for every complete archive; later comparisons read SQLite directly.
 
 **No downsampling on write**: every 60 Hz tick of a lap is stored. Downsampling happens
 at *read* time — the analysis endpoints resample onto a uniform distance grid (default

@@ -24,7 +24,12 @@ from app.export_filenames import (
     session_export_filename,
 )
 from app.processing import analysis
-from app.processing.laps import LEGACY_SAMPLE_ALIASES, SAMPLE_COLUMNS, normalize_sample_columns
+from app.processing.laps import (
+    LEGACY_SAMPLE_ALIASES,
+    SAMPLE_COLUMNS,
+    VELOCITY_CHANNELS,
+    normalize_sample_columns,
+)
 from app.processing.llm_export import (
     Detail,
     ExportInputError,
@@ -32,7 +37,6 @@ from app.processing.llm_export import (
     build_export,
 )
 from app.processing.orientation import ORIENTATION_CHANNELS
-from app.processing.telemetry_resolution import resolve_session_telemetry
 from app.processing.tracks import signature_from_samples
 from app.race_engineer import replay
 
@@ -70,6 +74,25 @@ async def sessions(
     return await svc(request).repo.list_sessions(category.strip() or None)
 
 
+class DrivetrainOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    drivetrain: Literal["auto", "fwd", "rwd", "awd"]
+
+
+@router.put("/cars/{car_id}/drivetrain", dependencies=[Depends(require_admin)])
+async def set_car_drivetrain(
+    request: Request,
+    car_id: int,
+    payload: DrivetrainOverrideRequest,
+) -> dict[str, Any]:
+    if car_id < 0:
+        raise HTTPException(422, "car_id must be non-negative")
+    value = None if payload.drivetrain == "auto" else payload.drivetrain
+    await svc(request).repo.set_car_drivetrain(car_id, value)
+    return {"car_id": car_id, "drivetrain_override": value}
+
+
 @router.get("/sessions/{session_id}/export.llm.json")
 async def export_session_for_llm(
     request: Request,
@@ -89,11 +112,7 @@ async def export_session_for_llm(
     bundle = await svc(request).repo.get_session_analysis_data(session_id)
     if bundle is None:
         raise HTTPException(404, "session not found")
-    bundle = await resolve_session_telemetry(
-        bundle,
-        set(ORIENTATION_CHANNELS),
-        svc(request).settings.db_path.parent,
-    )
+    bundle = await svc(request).hydration.resolve(bundle, set(ORIENTATION_CHANNELS))
     try:
         data = build_export(
             bundle,
@@ -200,6 +219,9 @@ CSV_CHANNELS = (
     ("pos_x", "Pos X", "m"),
     ("pos_y", "Pos Y", "m"),
     ("pos_z", "Pos Z", "m"),
+    ("velocity_x", "Velocity X", "m/s"),
+    ("velocity_y", "Velocity Y", "m/s"),
+    ("velocity_z", "Velocity Z", "m/s"),
     ("orientation_x", "Orientation X", "quaternion"),
     ("orientation_y", "Orientation Y", "quaternion"),
     ("orientation_z", "Orientation Z", "quaternion"),
@@ -488,10 +510,18 @@ async def compare(
         # Delta and the race-line map always need these three.
         columns = tuple(dict.fromkeys(["t", "pos_x", "pos_z", *requested]))
 
-    samples_by_id = await svc(request).repo.get_laps_samples(lap_ids)
+    bundles = await svc(request).repo.get_lap_analysis_bundles(lap_ids)
+    hydrate_channels = (set(ORIENTATION_CHANNELS) | set(VELOCITY_CHANNELS)).intersection(columns)
+    samples_by_id: dict[int, dict[str, list[float]]] = {}
+    events_by_id: dict[int, list[dict[str, Any]]] = {}
+    for session_id in sorted(bundles):
+        resolved = await svc(request).hydration.resolve(bundles[session_id], hydrate_channels)
+        for lap in resolved.get("laps") or []:
+            lap_id = int(lap["id"])
+            samples_by_id[lap_id] = cast(dict[str, list[float]], lap.get("samples") or {})
+            events_by_id[lap_id] = cast(list[dict[str, Any]], lap.get("events") or [])
     if ref not in samples_by_id:
         raise HTTPException(404, f"reference lap {ref} not found")
-    events_by_id = await svc(request).repo.get_laps_events(lap_ids)
 
     # The circuit's authored corners, if it has been labelled (#48). Reading
     # them parses the track bundle the first time, which is a multi-megabyte

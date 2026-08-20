@@ -23,6 +23,7 @@ from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
 from app.processing.live_events import LiveEvent, LiveEventWatcher
 from app.processing.surface import encode_surface
 from app.processing.survey import SurfaceSurvey
+from app.processing.telemetry_hydration import TelemetryHydrationManager
 from app.processing.tracks import signature_from_samples
 from app.race_engineer import CATEGORIES, VoiceCallout
 from app.race_engineer.manager import RaceEngineerManager
@@ -91,6 +92,7 @@ class TelemetryService:
         self.processor = LapProcessor(on_lap=self._on_lap, on_session=self._on_session)
         self.recording = True
         self.archive = RawArchiveManager(settings.db_path.parent, enabled=settings.raw_archive)
+        self.hydration = TelemetryHydrationManager(repo, settings.db_path.parent)
         self._processing_archive_token: str | None = None
         self._session_archive_token: str | None = None
         self.source: UdpTelemetrySource | SimTelemetrySource
@@ -164,6 +166,7 @@ class TelemetryService:
         await self.source.start()
 
     async def stop(self) -> None:
+        await self.hydration.stop()
         await self.source.stop()
         await self._finalize_current_archive()
         self.survey.stop()
@@ -184,9 +187,7 @@ class TelemetryService:
                 on_raw_packet=self._on_raw_packet,
             )
         else:
-            self.source = UdpTelemetrySource(
-                self.settings, self._on_packet, self._on_raw_packet
-            )
+            self.source = UdpTelemetrySource(self.settings, self._on_packet, self._on_raw_packet)
         await self.source.start()
         log.info("telemetry source switched to %s", kind)
         self._publish({"type": "status", "data": await self.status()})
@@ -211,16 +212,12 @@ class TelemetryService:
         never touches the feature pays nothing for it, and detectors start
         from a clean baseline when someone does enable it mid-session.
         """
-        return self.engineer.enabled and any(
-            c.voice_enabled for c in self._clients.values()
-        )
+        return self.engineer.enabled and any(c.voice_enabled for c in self._clients.values())
 
     def _on_raw_packet(self, capture: CapturedPayload) -> str | None:
         return self.archive.capture(capture, recording=self.recording)
 
-    async def _on_packet(
-        self, p: TelemetryPacket, archive_token: str | None = None
-    ) -> None:
+    async def _on_packet(self, p: TelemetryPacket, archive_token: str | None = None) -> None:
         self.latest_packet = p
         self._processing_archive_token = archive_token
         try:
@@ -253,13 +250,19 @@ class TelemetryService:
         car = self.cars.name(p.car_id)
         if event.kind == "overtake":
             self.notifier.overtake(
-                event.position, event.previous_position, event.total_positions,
-                car, self.track_name,
+                event.position,
+                event.previous_position,
+                event.total_positions,
+                car,
+                self.track_name,
             )
         elif event.kind == "position_lost":
             self.notifier.position_lost(
-                event.position, event.previous_position, event.total_positions,
-                car, self.track_name,
+                event.position,
+                event.previous_position,
+                event.total_positions,
+                car,
+                self.track_name,
             )
         elif event.kind == "off_road":
             self.notifier.off_road(p.current_lap, car, self.track_name)
@@ -368,6 +371,7 @@ class TelemetryService:
         self._remove_archive_paths(paths)
 
     async def clear_recorded_data(self) -> None:
+        await self.hydration.stop()
         metadata = await self.repo.list_session_archive_metadata()
         paths = self.archive.detach(self._session_archive_token)
         self._session_archive_token = None
@@ -407,9 +411,7 @@ class TelemetryService:
         # already saved. Bring the rows back in line, or the DB aggregates
         # (Sessions view, session-summary webhook) keep the old answer.
         if lap.invalidated_best:
-            await self.repo.mark_session_laps_partial(
-                self.session_id, lap.partial_lap_numbers
-            )
+            await self.repo.mark_session_laps_partial(self.session_id, lap.partial_lap_numbers)
             # Only drop the delta reference when the lap that PROVIDED it
             # turned out partial. A pit out-lap later in the stint says
             # nothing about the good lap the reference came from.
@@ -426,7 +428,10 @@ class TelemetryService:
         if lap.counts_for_best:
             if before > 0 and lap.time_ms < before:
                 self.notifier.personal_best(
-                    lap.time_ms, before, lap.number, self.cars.name(lap.car_id),
+                    lap.time_ms,
+                    before,
+                    lap.number,
+                    self.cars.name(lap.car_id),
                     self.track_name,
                 )
             if before <= 0 or lap.time_ms < before:
@@ -588,8 +593,10 @@ class TelemetryService:
             "position": p.race_position,
             "total_positions": p.total_positions,
             "tire_temps": [
-                round(p.tire_temp_fl, 1), round(p.tire_temp_fr, 1),
-                round(p.tire_temp_rl, 1), round(p.tire_temp_rr, 1),
+                round(p.tire_temp_fl, 1),
+                round(p.tire_temp_fr, 1),
+                round(p.tire_temp_rl, 1),
+                round(p.tire_temp_rr, 1),
             ],
             "tire_slip": round(p.tire_slip_ratio, 3),
             "water_temp": round(p.water_temp, 1),
@@ -733,8 +740,7 @@ class TelemetryService:
                 "page": c.page,
                 "voice_supported": c.voice_supported,
                 "voice_enabled": c.voice_enabled,
-                "is_active_speaker": bool(c.client_id)
-                and c.client_id == self._active_voice_client,
+                "is_active_speaker": bool(c.client_id) and c.client_id == self._active_voice_client,
             }
             for c in self._clients.values()
             if c.client_id
@@ -747,9 +753,7 @@ class TelemetryService:
             "verbosity": self.engineer.verbosity,
             # What the server will actually send. Clients use this to grey out
             # categories they could never receive.
-            "categories": [
-                c for c in CATEGORIES if c in self.engineer.effective_categories
-            ],
+            "categories": [c for c in CATEGORIES if c in self.engineer.effective_categories],
             # Why coaching is quiet: it waits for enough laps to agree on the
             # track's distance before comparing one lap against another.
             "coaching_ready": (
@@ -760,9 +764,14 @@ class TelemetryService:
         }
 
     def _publish_voice_status(self) -> None:
-        self._publish({"type": "voice_output_status", "data": {
-            "active_client_id": self._active_voice_client,
-        }})
+        self._publish(
+            {
+                "type": "voice_output_status",
+                "data": {
+                    "active_client_id": self._active_voice_client,
+                },
+            }
+        )
         self.publish_engineer_status()
 
     def publish_engineer_status(self) -> None:

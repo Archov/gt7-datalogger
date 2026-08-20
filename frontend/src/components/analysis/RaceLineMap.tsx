@@ -27,12 +27,20 @@ import { CHART_COLORS, EChart } from "@/components/EChart";
 import { LargeDialog } from "@/components/ui/Dialog";
 import { Tip } from "@/components/ui/Tooltip";
 import {
+  distanceAtReferenceTime,
+  fixedScaleBounds,
+  MAP_GRID_PADDING_PX,
+  markerInclusiveFixedScaleBounds,
+  positionAtDistance,
+} from "@/lib/raceLineCamera";
+import {
   type CompareLapEntry,
   type Corner,
   kerbWheelCount,
   looseWheelCount,
   type TrackOutline,
 } from "@/lib/types";
+import { vehicleMarkerHeadings } from "@/lib/vehicleOrientation";
 
 const ZONE_COLORS = [CHART_COLORS.brake, CHART_COLORS.coast, CHART_COLORS.throttle];
 
@@ -40,6 +48,7 @@ const ZONE_COLORS = [CHART_COLORS.brake, CHART_COLORS.coast, CHART_COLORS.thrott
 // kerb strikes in yellow, wheels on grass/gravel/dirt in orange.
 const KERB_COLOR = "#eab308";
 const LOOSE_COLOR = "#f97316";
+const CHEVRON_SYMBOL = "path://M-8,6 L0,-8 L8,6 L4,8 L0,1 L-4,8 Z";
 
 // The surveyed road beneath everything (#51). Deliberately quiet: it is the
 // backdrop the lap is read against, not a thing to read on its own — a fill
@@ -69,6 +78,12 @@ function zoneOf(throttle: number, brake: number): number {
   if (brake >= 1) return 0;
   if (throttle >= 1) return 2;
   return 1;
+}
+
+function positionAt(series: MapLap["entry"]["series"], index: number): [number, number] | null {
+  const x = series.pos_x?.[index];
+  const z = series.pos_z?.[index];
+  return Number.isFinite(x) && Number.isFinite(z) ? [x, z] : null;
 }
 
 /** The distance window a corner is shown in. Also the identity used to tell
@@ -104,8 +119,12 @@ export interface MapLap {
 interface MapProps {
   laps: MapLap[];
   cursorDist: number | null;
-  step: number;
+  step?: number;
   zoomRange?: [number, number] | null;
+  followCursor?: boolean;
+  mapMetersPerPixel?: number;
+  showTravelDirection?: boolean;
+  keepLapMarkersVisible?: boolean;
   // The circuit's surveyed road, when it has been surveyed. Null/empty draws
   // exactly what this map drew before it existed.
   outline?: TrackOutline | null;
@@ -141,8 +160,11 @@ export function RaceLineMap(props: MapProps) {
 function MapBody({
   laps,
   cursorDist,
-  step,
   zoomRange,
+  followCursor = true,
+  mapMetersPerPixel = 0.5,
+  showTravelDirection = true,
+  keepLapMarkersVisible = true,
   outline,
   onZoomChange,
   onMaximize,
@@ -157,11 +179,15 @@ function MapBody({
   // component renders in both.
   const boxRef = useRef<HTMLDivElement>(null);
   const [aspect, setAspect] = useState(1);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
       const { width, height } = el.getBoundingClientRect();
+      setViewport((was) =>
+        was.width === width && was.height === height ? was : { width, height },
+      );
       const plotW = width - 2 * GRID_PAD;
       const plotH = height - 2 * GRID_PAD;
       if (plotW <= 0 || plotH <= 0) return;
@@ -188,6 +214,74 @@ function MapBody({
   cornersRef.current = corners;
   const zoomRef = useRef(zoomToCorner);
   zoomRef.current = zoomToCorner;
+
+  const [heldCursorDist, setHeldCursorDist] = useState<number | null>(null);
+  const lapSetKey = laps.map((lap) => lap.id).join("|");
+  const zoomKey = zoomRange ? `${zoomRange[0]}:${zoomRange[1]}` : "full";
+  useEffect(() => setHeldCursorDist(null), [ref?.id, lapSetKey, zoomKey]);
+  useEffect(() => {
+    if (!followCursor) setHeldCursorDist(null);
+    else if (cursorDist != null) setHeldCursorDist(cursorDist);
+  }, [followCursor, cursorDist]);
+
+  const markerDistance = cursorDist ?? (followCursor ? heldCursorDist : null);
+  const markerStates = useMemo(
+    () =>
+      laps.map((lap) => {
+        const series = lap.entry.series;
+        const synchronizedDistance =
+          markerDistance != null && ref
+            ? distanceAtReferenceTime(ref.entry.series, series, markerDistance)
+            : null;
+        const distance = synchronizedDistance ?? markerDistance;
+        const position =
+          distance != null && series.dist.length > 0
+            ? positionAtDistance(series, distance)
+            : null;
+        const headings =
+          distance != null && series.dist.length > 0
+            ? vehicleMarkerHeadings(series, distance)
+            : { chassisRotationDeg: null, travelRotationDeg: null };
+        return { lap, position, ...headings };
+      }),
+    [laps, markerDistance, ref],
+  );
+
+  // Cursor-follow is an explicit fixed-scale camera. When it is off, leave
+  // upstream's aspect-correct full-lap/corner bounds (including the surveyed
+  // road) in control.
+  const bounds = useMemo(() => {
+    if (!followCursor || !ref || markerDistance == null) return null;
+    const center = positionAtDistance(ref.entry.series, markerDistance);
+    if (!center) return null;
+    return (
+      (keepLapMarkersVisible
+        ? markerInclusiveFixedScaleBounds(
+            center,
+            markerStates.flatMap((state) => (state.position ? [state.position] : [])),
+            viewport.width,
+            viewport.height,
+            mapMetersPerPixel,
+            MAP_GRID_PADDING_PX,
+          )
+        : null) ??
+      fixedScaleBounds(
+        center,
+        viewport.width,
+        viewport.height,
+        mapMetersPerPixel,
+        MAP_GRID_PADDING_PX,
+      )
+    );
+  }, [
+    followCursor,
+    keepLapMarkersVisible,
+    mapMetersPerPixel,
+    markerDistance,
+    markerStates,
+    ref,
+    viewport,
+  ]);
 
   const option = useMemo<EChartsOption>(() => {
     const series: SeriesOption[] = [];
@@ -345,7 +439,7 @@ function MapBody({
       series.push({
         id: `line-${lap.id}`,
         type: "line",
-        data: s.dist.map((_, i) => [s.pos_x[i], s.pos_z[i]]),
+        data: s.dist.map((_, i) => positionAt(s, i) ?? [null, null]),
         showSymbol: false,
         lineStyle: { color: lap.color, width: 1.6, opacity: zoomRange ? 0.15 : 0.9 },
         silent: true,
@@ -355,7 +449,8 @@ function MapBody({
         const inZoom: [number, number][] = [];
         for (let i = 0; i < s.dist.length; i++) {
           if (s.dist[i] >= zoomRange[0] && s.dist[i] <= zoomRange[1]) {
-            inZoom.push([s.pos_x[i], s.pos_z[i]]);
+            const position = positionAt(s, i);
+            if (position) inZoom.push(position);
           }
         }
         series.push({
@@ -436,11 +531,13 @@ function MapBody({
           const bucket =
             looseWheelCount(v) > 0 ? loosePts : kerbWheelCount(v) > 0 ? kerbPts : null;
           if (!bucket) continue;
+          const position = positionAt(s, i);
+          if (!position) continue;
           const inZoom = zoomRange
             ? s.dist[i] >= zoomRange[0] && s.dist[i] <= zoomRange[1]
             : true;
           bucket.push({
-            value: [s.pos_x[i], s.pos_z[i]],
+            value: position,
             itemStyle: { opacity: inZoom ? 0.55 : 0.1 },
           });
         }
@@ -532,24 +629,52 @@ function MapBody({
       }
     }
 
-    // One synced cursor dot per lap, in the lap's color (reference white).
+    // Fixed-size orientation markers. Dynamic updates below independently
+    // choose chassis chevron, fallback dot, and travel chevron per lap.
     for (const lap of laps) {
-      series.push({
-        id: `cursor-${lap.id}`,
-        type: "scatter",
-        data: [] as number[][],
-        symbolSize: (lap.isRef ? 12 : 9) * (maximized ? 1.3 : 1),
-        itemStyle: lap.isRef
-          ? { color: "#fff", borderColor: CHART_COLORS.series[0], borderWidth: 3 }
-          : { color: lap.color, borderColor: "#fff", borderWidth: 1.5 },
-        z: 10,
-        silent: true,
-      });
+      series.push(
+        {
+          id: `cursor-dot-${lap.id}`,
+          type: "scatter",
+          data: [] as number[][],
+          symbolSize: lap.isRef ? 12 : 9,
+          itemStyle: lap.isRef
+            ? { color: "#fff", borderColor: CHART_COLORS.series[0], borderWidth: 3 }
+            : { color: lap.color, borderColor: "#fff", borderWidth: 1.5 },
+          z: 10,
+          silent: true,
+        },
+        {
+          id: `cursor-chassis-${lap.id}`,
+          type: "scatter",
+          data: [] as number[][],
+          symbol: CHEVRON_SYMBOL,
+          symbolSize: 18,
+          itemStyle: { color: "#fff", borderColor: lap.color, borderWidth: 2 },
+          z: 11,
+          silent: true,
+        },
+        {
+          id: `cursor-travel-${lap.id}`,
+          type: "scatter",
+          data: [] as number[][],
+          symbol: CHEVRON_SYMBOL,
+          symbolSize: 12,
+          itemStyle: { color: lap.color, borderColor: "#fff", borderWidth: 1 },
+          z: 12,
+          silent: true,
+        },
+      );
     }
 
     return {
       animation: false,
-      grid: { left: 8, right: 8, top: 8, bottom: 8 },
+      grid: {
+        left: MAP_GRID_PADDING_PX,
+        right: MAP_GRID_PADDING_PX,
+        top: MAP_GRID_PADDING_PX,
+        bottom: MAP_GRID_PADDING_PX,
+      },
       xAxis: {
         type: "value",
         show: false,
@@ -579,33 +704,55 @@ function MapBody({
     };
   }, [laps, zoomRange, outline, corners, current, maximized, ref, aspect]);
 
-  // Cursor updates merge into the existing chart by series id — no rebuild.
-  useEffect(() => {
-    const updates: SeriesOption[] = laps.map((lap) => {
-      const s = lap.entry.series;
-      let data: number[][] = [];
-      if (cursorDist != null && s.dist.length > 0 && step > 0) {
-        const i = Math.min(s.dist.length - 1, Math.max(0, Math.round(cursorDist / step)));
-        if (Number.isFinite(i) && s.pos_x[i] != null && s.pos_z[i] != null) {
-          data = [[s.pos_x[i], s.pos_z[i]]];
-        }
-      }
-      return { id: `cursor-${lap.id}`, data } as SeriesOption;
+  // Cursor and camera updates merge by id/component only. Scrubbing never
+  // reconstructs the full race-line, surface, corner, or marker series.
+  const dynamicOption = useMemo<EChartsOption>(() => {
+    const updates: SeriesOption[] = markerStates.flatMap((state) => {
+      const { lap, position, chassisRotationDeg, travelRotationDeg } = state;
+      return [
+        {
+          id: `cursor-dot-${lap.id}`,
+          data: position && chassisRotationDeg == null ? [position] : [],
+        } as SeriesOption,
+        {
+          id: `cursor-chassis-${lap.id}`,
+          data: position && chassisRotationDeg != null ? [position] : [],
+          symbolRotate: chassisRotationDeg ?? 0,
+        } as SeriesOption,
+        {
+          id: `cursor-travel-${lap.id}`,
+          data: position && showTravelDirection && travelRotationDeg != null ? [position] : [],
+          symbolRotate: travelRotationDeg ?? 0,
+        } as SeriesOption,
+      ];
     });
-    chartRef.current?.setOption({ series: updates }, { notMerge: false, lazyUpdate: true });
-  }, [laps, cursorDist, step]);
+    return {
+      ...(bounds
+        ? {
+            xAxis: { min: bounds.xMin, max: bounds.xMax },
+            yAxis: { min: bounds.zMin, max: bounds.zMax },
+          }
+        : {}),
+      series: updates,
+    };
+  }, [markerStates, showTravelDirection, bounds]);
+
+  useEffect(() => {
+    chartRef.current?.setOption(dynamicOption, { notMerge: false, lazyUpdate: true });
+  }, [dynamicOption]);
 
   const others = laps.filter((lap) => !lap.isRef);
   const hasSurface = !!ref?.entry.series.surface?.some((v) => v > 0);
 
   return (
-    <div className={maximized ? "flex h-full flex-col" : undefined}>
-      <div ref={boxRef} className={maximized ? "relative min-h-0 flex-1" : "relative"}>
+    <div className="flex h-full min-h-0 flex-col">
+      <div ref={boxRef} className="relative min-h-0 flex-1">
         <EChart
           option={option}
-          className={maximized ? "h-full w-full" : "aspect-square w-full"}
+          className="h-full min-h-72 w-full"
           onInit={(chart) => {
             chartRef.current = chart;
+            chart.setOption(dynamicOption, { notMerge: false, lazyUpdate: true });
             chart.on("click", (e) => {
               if (e.seriesId !== "corners") return;
               const corner = cornersRef.current.find((c) => String(c.n) === e.name);

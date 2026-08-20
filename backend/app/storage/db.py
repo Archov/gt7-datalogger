@@ -45,6 +45,9 @@ class SessionRow(Base):
     note: Mapped[str] = mapped_column(default="")
     track_name: Mapped[str] = mapped_column(default="")
     raw_archive_meta_json: Mapped[str] = mapped_column(Text, default="")
+    # Deferred so read-only tooling can still inspect a legacy database without
+    # first mutating it through init_db(). Normal application startup migrates it.
+    telemetry_hydration_meta_json: Mapped[str] = mapped_column(Text, default="", deferred=True)
 
     laps: Mapped[list[LapRow]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
@@ -73,6 +76,15 @@ class SettingRow(Base):
 
     key: Mapped[str] = mapped_column(primary_key=True)
     value: Mapped[str]
+
+
+class CarDrivetrainRow(Base):
+    """Optional player override shared by every session for a GT7 car ID."""
+
+    __tablename__ = "car_drivetrains"
+
+    car_id: Mapped[int] = mapped_column(primary_key=True)
+    drivetrain: Mapped[str]
 
 
 class LayoutRow(Base):

@@ -52,9 +52,7 @@ async def get_settings(request: Request) -> dict[str, Any]:
         "raw_archive": s.raw_archive,
         "race_engineer": s.race_engineer,
         "race_engineer_verbosity": s.race_engineer_verbosity,
-        "race_engineer_categories": [
-            c for c in CATEGORIES if c in s.enabled_callout_categories()
-        ],
+        "race_engineer_categories": [c for c in CATEGORIES if c in s.enabled_callout_categories()],
         "race_engineer_units": s.race_engineer_units,
     }
 
@@ -136,9 +134,7 @@ async def _apply_race_engineer(service: TelemetryService, payload: SettingsPaylo
         changed = True
     if payload.race_engineer_verbosity is not None:
         service.settings.race_engineer_verbosity = payload.race_engineer_verbosity
-        await service.repo.set_setting(
-            "race_engineer_verbosity", payload.race_engineer_verbosity
-        )
+        await service.repo.set_setting("race_engineer_verbosity", payload.race_engineer_verbosity)
         changed = True
     if payload.race_engineer_categories is not None:
         unknown = [c for c in payload.race_engineer_categories if c not in CATEGORIES]
@@ -268,6 +264,25 @@ async def stats(request: Request) -> dict[str, Any]:
 # --- actions ----------------------------------------------------------------
 
 
+class ArchiveHydrationRequest(BaseModel):
+    mode: Literal["stale_only", "retry_incomplete", "force_all"] = "retry_incomplete"
+
+
+@router.get("/archive-hydration")
+async def archive_hydration_status(request: Request) -> dict[str, Any]:
+    return svc(request).hydration.status()
+
+
+@router.post("/archive-hydration", status_code=202)
+async def start_archive_hydration(
+    request: Request, payload: ArchiveHydrationRequest
+) -> dict[str, Any]:
+    try:
+        return await svc(request).hydration.start_job(payload.mode)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/restart-source")
 async def restart_source(request: Request) -> dict[str, Any]:
     await svc(request).restart_source()
@@ -284,7 +299,10 @@ async def clear_data(request: Request) -> dict[str, str]:
 
 @router.post("/vacuum")
 async def vacuum(request: Request) -> dict[str, str]:
-    await svc(request).repo.vacuum()
+    service = svc(request)
+    if service.hydration.running:
+        raise HTTPException(409, "archive hydration is running")
+    await service.repo.vacuum()
     return {"status": "ok"}
 
 

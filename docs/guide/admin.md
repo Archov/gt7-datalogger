@@ -4,6 +4,19 @@
 management. Settings changed here apply **immediately, no restart**, persist in the
 database, and override environment variables on the next start.
 
+## Reprocess archived laps
+
+**Data management → Reprocess archived laps** precomputes normalized telemetry from raw
+session archives so historical lap comparisons do not wait for archive replay. The job
+continues on the server when the browser leaves Admin and reports progress when reopened.
+
+- **Retry incomplete** processes new/changed archives and retries partial or failed work.
+- **Stale only** processes archives not current for this resolver version.
+- **Force all** replays every complete archive while retaining valid stored channels.
+
+Each session commits atomically and an interrupted run is safe to start again. Raw
+archives are never modified.
+
 ## Connection
 
 - **PlayStation IP address** — set or change the console IP at runtime; leave empty for

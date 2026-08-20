@@ -77,6 +77,8 @@ two laps or ranges have identical nested columns.
 | `detail_traces` | no | yes | yes | Reason-selected 5 m distance traces |
 | `spatial_reference` | no | yes | yes | Reference path geometry; 10 m or 5 m |
 | `line_traces` | no | yes | yes | Whole-lap projected line evidence |
+| `drivetrain_characterization` | no | yes | yes | Override plus torque-derived powered-wheel evidence |
+| `wheelspin_characterization` | no | yes | yes | Heuristic event mechanism compatibility ranking |
 | `source_traces` | no | no | yes | Bounded stored-rate samples |
 
 `spatial_reference` and `line_traces` are omitted if usable reference geometry is
@@ -210,9 +212,8 @@ lap_id, channels
 ```
 
 The channel array is the usable normalized telemetry for that lap in this export's
-resolved, in-memory view. It can include channels supplied on demand by
-`archive_replay`; it does not necessarily describe only fields physically stored in a
-historical lap's `samples_json`. An absent channel means unavailable, not zero. Legacy
+resolved view. Missing channels may be supplied from the raw archive and atomically
+stored before export. An absent channel means unavailable, not zero. Legacy
 all-zero `surface` arrays are treated as unavailable.
 
 `channel_provenance` columns:
@@ -222,13 +223,13 @@ lap_id, persisted, archive_replay, unavailable
 ```
 
 - `persisted`: already present in the saved normalized lap;
-- `archive_replay`: recovered on demand from the session's raw packet archive;
+- `archive_replay`: transient recovery from the session's raw packet archive;
 - `unavailable`: requested but neither persisted nor safely recoverable.
 
-Persisted data always takes precedence. Archive replay is read-only and aligned to the
-persisted lap identity/time grid; it does not rewrite historical samples. Provenance is
-confidence/context metadata, not a quality ranking. Currently it is especially relevant
-to historical orientation recovery.
+Persisted data always takes precedence. Archive replay is aligned to the persisted lap
+identity/time grid and missing channels are committed atomically. Successful recovery is
+reported as `persisted`; subsequent requests do not replay it. Provenance is
+confidence/context metadata, not a quality ranking.
 
 Packet-format channel groups:
 
@@ -249,6 +250,7 @@ appear in availability lists; the trace registries select subsets of them.
 t, dist, speed, throttle, brake, coast, gear, rpm, boost, tire_slip,
 yaw_rate, yaw_rate_signed,
 pos_x, pos_y, pos_z,
+velocity_x, velocity_y, velocity_z,
 body_height, fuel,
 road_plane_x, road_plane_y, road_plane_z, road_plane_distance,
 slip_fl, slip_fr, slip_rl, slip_rr,
@@ -267,7 +269,8 @@ field names:
 
 - `t` is elapsed seconds and `dist` is cumulative metres;
 - `speed` is km/h; throttle, brake, and filtered inputs are percent; `coast` is a flag;
-- positions are metres; quaternion components are unitless;
+- positions are metres; native world-velocity components are metres/second;
+  quaternion components are unitless;
 - `body_height` and `sus_fl/fr/rl/rr` are converted from metres to millimetres;
 - fuel is litres, tire temperatures are degrees Celsius, and boost is bar;
 - steering is radians; yaw and steering angular velocity are radians/second;
@@ -465,6 +468,57 @@ Reverse detection enters below -2.0 km/h, exits at -0.5 km/h, requires at least 
 below the enter threshold, and bridges interruptions up to 200 ms if speed never exceeds
 +0.5 km/h. Negative along-track speed means physical motion opposite the selected
 reference direction, not reverse gear.
+
+### Wheelspin characterization
+
+Standard/deep add the same bounded `wheelspin_characterization`; Compact is unchanged.
+It is a nested columnar table. Decode each positional sub-row with its matching registry:
+`observed_columns`, `derived_columns`, `sequence_columns`,
+`comparator_quality_columns`, `comparator_columns`, `candidate_columns`, or
+`evidence_columns`. Rows identify every stored wheelspin event, direct `observed` facts,
+deterministic `derived` comparisons, onset `sequence`, comparator quality, explicit
+`resolution`/`unresolved_reasons`, and up to three ranked real `candidates`.
+Sequence values are integer milliseconds relative to stored wheelspin onset (`0`);
+unavailable evidence is `null`.
+
+`reference_corner` remains strict containment. `context_corner`, `corner_relation`, and
+`corner_distance_m` provide non-causal location context for an event inside a corner or
+within 250 m of its entry/exit. Comparison-excluded or spatially unalignable events still
+receive rows with nullable derived fields and explicit unresolved reason codes.
+
+`drivetrain_characterization` retains `override`, torque-derived `inferred`, effective
+precedence (`override` before `inferred` before `unknown`), powered wheels, positive
+front/rear torque shares, evidence counts/laps, and `conflict`. An override never erases
+contrary inference. Event-local torque allocation is retained; conflict reduces
+power-mechanism discrimination. Torque uses raw GT7 units: relative timing/distribution
+is usable, but Nm, tire force, and physical torque are unverified.
+
+Comparators are same-spatial-progress controls, not ideal laps. `ideal` means peak slip
+at or below 1.10. A `relative` control may itself cross 1.10 when peak slip is at least
+0.03 lower, integral or duration is at least 20% lower, and neither available integral
+nor duration is more than 10% worse. A stored overlapping wheelspin event alone does not
+exclude that control. Ranking
+balances slip separation, speed, gear, projection fit, and local cleanliness/disturbance
+evidence. `weak` quality reduces discrimination; one comparator cannot establish a
+robust outlier, and relative controls alone cannot make quality `strong`. Stored
+bottoming alone does not invalidate a comparator: independent, correctly timed local
+vertical-motion evidence is required.
+
+Weights are inspectable heuristic ranking parameters, not a learned model or calibrated
+physical probabilities. A score is not a probability; a candidate is not a proven
+cause. Signed motion remains in `observed`; v1 scoring normally compares absolute
+peer-relative magnitudes, so opposite yaw/body-slip signs of similar magnitude are not
+an outlier. Temporal order matters: a later correlated shift, kerb, or vertical event
+does not explain earlier slip.
+
+`combined_lateral_longitudinal_load_candidate` means power application during elevated
+lateral/rotational proxy state relative to controls. It does not mean measured tire
+force/load or friction-circle saturation. Steering alone supplies no support;
+vehicle-motion evidence must also be active. Persistent peer-relative one-wheel
+asymmetry can support `single_wheel_differential_spin_candidate`, but does not diagnose
+an LSD. `mixed_or_unresolved` is a `resolution`, never a duplicated pseudo-candidate;
+real alternatives remain in `candidates` and reason codes explain unresolved state.
+Characterization contains no setup or driver recommendation.
 
 `recurring_events` columns:
 

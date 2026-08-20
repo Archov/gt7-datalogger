@@ -76,4 +76,5 @@ async def test_old_lap_row_without_telemetry_metadata_is_readable(tmp_path) -> N
     assert lap["samples"]["sway"] == [1.5, 1.6]
     assert "steer" not in lap["samples"] and "acc_lat" not in lap["samples"]
     assert await repo.get_session_archive_metadata(1) is None
+    assert await repo.get_session_hydration_metadata(1) is None
     await engine.dispose()

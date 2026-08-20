@@ -2,6 +2,8 @@ import type { LayoutConfig, LayoutSummary } from "./layout";
 import type {
   AdminSettings,
   AdminStats,
+  ArchiveHydrationMode,
+  ArchiveHydrationStatus,
   AuthoredCorner,
   AuthoredSection,
   CategoryBest,
@@ -145,11 +147,16 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
 
 export const api = {
   status: () => get<ConnectionStatus>("/api/status"),
-  // `category` is the packet-C car class ("Gr.3", "N300"…); blank = every
-  // session, which is also the only way to reach pre-packet-C recordings.
+  // `category` is the packet-C car class; blank includes older recordings.
   sessions: (category = "") =>
     get<SessionSummary[]>(
       `/api/sessions${category ? `?category=${encodeURIComponent(category)}` : ""}`,
+    ),
+  setCarDrivetrain: (carId: number, drivetrain: "auto" | "fwd" | "rwd" | "awd") =>
+    send<{ car_id: number; drivetrain_override: "fwd" | "rwd" | "awd" | null }>(
+      `/api/cars/${carId}/drivetrain`,
+      "PUT",
+      { drivetrain },
     ),
   // Fastest full lap at a circuit in a car category (#19); null when nothing
   // has been recorded there in that class yet.
@@ -336,6 +343,9 @@ export const api = {
       get<LogRecord[]>(`/api/admin/logs?limit=${limit}${level ? `&level=${level}` : ""}`),
     clearLogs: () => send<{ status: string }>("/api/admin/logs", "DELETE"),
     stats: () => get<AdminStats>("/api/admin/stats"),
+    archiveHydration: () => get<ArchiveHydrationStatus>("/api/admin/archive-hydration"),
+    startArchiveHydration: (mode: ArchiveHydrationMode) =>
+      send<ArchiveHydrationStatus>("/api/admin/archive-hydration", "POST", { mode }),
     restartSource: () => send<ConnectionStatus>("/api/admin/restart-source", "POST"),
     clearData: () => send<{ status: string }>("/api/admin/clear-data", "POST"),
     vacuum: () => send<{ status: string }>("/api/admin/vacuum", "POST"),

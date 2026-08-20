@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "tsc -b --noEmit && eslint src",
+    "test:analysis": "node --experimental-strip-types --test tests/vehicleOrientation.test.ts tests/raceLineCamera.test.ts tests/analysisWorkspace.test.ts",
+    "test:markers": "node --experimental-strip-types --test tests/vehicleOrientation.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

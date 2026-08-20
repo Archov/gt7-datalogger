@@ -14,7 +14,7 @@ working directory.
 | `GT7_SOURCE` | `udp` | `udp` (PlayStation) or `sim` (simulated laps) |
 | `GT7_PS_IP` | *(empty)* | Console IP; empty = broadcast auto-discovery |
 | `GT7_PACKET_FORMAT` | `C` | Telemetry format requested from the console: `A`, `B`, `~`, or `C` (richest, needs GT7 v1.68+; also settable in Admin) |
-| `GT7_RAW_ARCHIVE` | `true` | Preserve complete decrypted packet payloads for future replay/reprocessing (also settable in Admin; changes apply to the next session) |
+| `GT7_RAW_ARCHIVE` | `true` | Preserve encrypted receive-boundary datagrams for future replay/reprocessing (also settable in Admin; changes apply to the next session) |
 | `GT7_DB_PATH` | `data/gt7.db` | SQLite database path — also accepts a full SQLAlchemy async URL (e.g. Postgres) |
 | `GT7_CARS_CSV` | `data/cars.csv` | Car ID → name lookup table |
 | `GT7_WS_RATE` | `30` | Live stream rate to the browser (Hz); capture stays at ~60 Hz |

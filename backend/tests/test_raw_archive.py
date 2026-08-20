@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import struct
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -82,12 +83,45 @@ async def test_exact_round_trip_known_unknown_and_mixed_lengths(tmp_path: Path) 
     packet_a = packet_payload("A", 10)
     packet_c = packet_payload("C", 11)
     unknown = packet_c + os.urandom(517)
-    path = await completed_archive(tmp_path, [packet_a, packet_c, unknown])
+    manager = RawArchiveManager(tmp_path)
+    token = manager.capture(capture(packet_a, 0), recording=True)
+    assert token is not None
+    manager.capture(capture(packet_c, 1, offset_ns=17_000_000), recording=True)
+    manager.capture(capture(unknown, 2, offset_ns=34_000_000, parsed=False), recording=True)
+    manager.bind(token, 7)
+    metadata = await manager.finalize(token)
+    assert metadata is not None
+    path = tmp_path / str(metadata["path"])
 
     records = list(RawArchiveReader(path))
     assert [record.payload for record in records] == [packet_a, packet_c, unknown]
     assert [record.payload_length for record in records] == [296, 368, 885]
     assert [record.order for record in records] == [0, 1, 2]
+
+
+async def test_v2_retains_encrypted_wire_datagram_and_replays_plaintext(tmp_path: Path) -> None:
+    plain = packet_payload("C", 77)
+    wire = encrypt_packet(plain)
+    item = replace(capture(plain, 0), wire_payload=wire, decode_status="decoded")
+    manager = RawArchiveManager(tmp_path)
+    token = manager.capture(item, recording=True)
+    assert token is not None
+    manager.bind(token, 70)
+    path = manager.detach(token)[0]
+
+    record = list(RawArchiveReader(path))[0]
+    assert record.wire_payload == wire
+    assert record.payload == plain
+    assert record.decode_status == "decoded"
+
+    seen: list[TelemetryPacket] = []
+
+    async def accept(packet: TelemetryPacket) -> None:
+        seen.append(packet)
+
+    await replay_archive(path, accept)
+    assert seen[0].packet_id == 77
+    assert seen[0].source == "archive_replay"
 
 
 async def test_timing_and_approximate_absolute_time_round_trip(tmp_path: Path) -> None:
@@ -127,12 +161,22 @@ def test_reader_skips_forward_header_extensions(tmp_path: Path) -> None:
     record_header = RECORD_HEADER.pack(*values)
     payload_at = record_at + RECORD_HEADER.size
     path.write_bytes(
-        extended[:record_at]
-        + record_header
-        + record_extension
-        + extended[payload_at:]
+        extended[:record_at] + record_header + record_extension + extended[payload_at:]
     )
     assert list(RawArchiveReader(path))[0].payload == packet_payload()
+
+
+def test_reader_replays_v1_plaintext_archives(tmp_path: Path) -> None:
+    path = _uncompressed_archive(tmp_path)
+    original = bytearray(path.read_bytes())
+    struct.pack_into("<H", original, 8, 1)
+    path.write_bytes(original)
+
+    reader = RawArchiveReader(path)
+    record = list(reader)[0]
+    assert reader.version == 1
+    assert record.wire_payload is None
+    assert record.payload == packet_payload()
 
 
 def test_reader_rejects_version_crc_and_unreasonable_length(tmp_path: Path) -> None:
@@ -155,9 +199,7 @@ def test_reader_rejects_version_crc_and_unreasonable_length(tmp_path: Path) -> N
     original = bytearray(path.read_bytes())
     values = list(RECORD_HEADER.unpack_from(original, FILE_HEADER.size))
     values[5] = MAX_PAYLOAD_SIZE + 1
-    original[FILE_HEADER.size : FILE_HEADER.size + RECORD_HEADER.size] = RECORD_HEADER.pack(
-        *values
-    )
+    original[FILE_HEADER.size : FILE_HEADER.size + RECORD_HEADER.size] = RECORD_HEADER.pack(*values)
     path.write_bytes(original)
     with pytest.raises(ArchiveError, match="unreasonable"):
         list(RawArchiveReader(path))
@@ -257,9 +299,7 @@ def test_archive_open_failure_does_not_break_udp_parsing(tmp_path: Path) -> None
         consume,
         lambda captured: manager.capture(captured, recording=True),
     )
-    source._handle_datagram(
-        encrypt_packet(packet_payload(packet_id=99)), ("192.0.2.10", 33740)
-    )
+    source._handle_datagram(encrypt_packet(packet_payload(packet_id=99)), ("192.0.2.10", 33740))
     assert source._queue.qsize() == 1
     assert source.stats["packets_received"] == 1
 

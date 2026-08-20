@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.exc import OperationalError
 
 from app.processing.laps import CompletedLap, SessionInfo, normalize_sample_columns
 from app.processing.tracks import IDENTIFY_MIN_TICKS, TrackSignature, matches
-from app.storage.db import LapRow, LayoutRow, SessionRow, SettingRow, TrackRow
+from app.storage.db import (
+    CarDrivetrainRow,
+    LapRow,
+    LayoutRow,
+    SessionRow,
+    SettingRow,
+    TrackRow,
+)
 
 # v3: extended packet channels plus per-lap static telemetry metadata.
 # v1/v2 files import fine — missing fields stay absent and consumers skip them.
@@ -77,6 +86,25 @@ def _decode_samples(raw: str) -> dict[str, list[float]]:
     return normalize_sample_columns(value)
 
 
+async def _hydration_metadata(
+    db: AsyncSession, session_ids: list[int]
+) -> dict[int, dict[str, Any] | None]:
+    """Read additive hydration metadata, tolerating an unmigrated read-only DB."""
+    if not session_ids:
+        return {}
+    try:
+        rows = (
+            await db.execute(
+                select(SessionRow.id, SessionRow.telemetry_hydration_meta_json).where(
+                    SessionRow.id.in_(session_ids)
+                )
+            )
+        ).all()
+    except OperationalError:
+        return {session_id: None for session_id in session_ids}
+    return {session_id: _json_object(raw) for session_id, raw in rows}
+
+
 class Repository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -109,6 +137,86 @@ class Repository:
                 return None
             value = json.loads(row.raw_archive_meta_json)
             return value if isinstance(value, dict) else None
+
+    async def get_session_hydration_metadata(
+        self, session_id: int
+    ) -> dict[str, object] | None:
+        async with self._sf() as db:
+            return (await _hydration_metadata(db, [session_id])).get(session_id)
+
+    async def persist_session_hydration(
+        self,
+        session_id: int,
+        updates: dict[int, dict[str, list[float]]],
+        expected: dict[int, tuple[int, int, int, list[float]]],
+        metadata: dict[str, object],
+        *,
+        replace_channels: set[str] | None = None,
+    ) -> tuple[bool, int]:
+        """Atomically merge validated archive-recovered channels into stored laps."""
+        replace = replace_channels or set()
+        async with self._sf() as db:
+            session = await db.get(SessionRow, session_id)
+            if session is None:
+                return False, 0
+            rows = (
+                (
+                    await db.execute(
+                        select(LapRow)
+                        .where(LapRow.session_id == session_id)
+                        .order_by(LapRow.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_id = {row.id: row for row in rows}
+            changed = 0
+            for lap_id, channels in updates.items():
+                row = by_id.get(lap_id)
+                identity = expected.get(lap_id)
+                if row is None or identity is None:
+                    await db.rollback()
+                    return False, 0
+                car_id, number, time_ms, target_t = identity
+                if (row.car_id, row.number, row.time_ms) != (car_id, number, time_ms):
+                    await db.rollback()
+                    return False, 0
+                samples = json.loads(row.samples_json)
+                current_t = samples.get("t") if isinstance(samples, dict) else None
+                if current_t != target_t:
+                    await db.rollback()
+                    return False, 0
+                size = len(target_t)
+                for channel, values in sorted(channels.items()):
+                    if len(values) != size or any(
+                        not isinstance(value, (int, float)) or not math.isfinite(float(value))
+                        for value in values
+                    ):
+                        continue
+                    current = samples.get(channel)
+                    if (
+                        channel not in replace
+                        and isinstance(current, list)
+                        and len(current) == size
+                    ):
+                        continue
+                    samples[channel] = values
+                    changed += 1
+                row.samples_json = json.dumps(
+                    samples,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                    ensure_ascii=False,
+                )
+            session.telemetry_hydration_meta_json = json.dumps(
+                metadata,
+                separators=(",", ":"),
+                allow_nan=False,
+                ensure_ascii=False,
+            )
+            await db.commit()
+            return True, changed
 
     async def list_recording_archive_metadata(self) -> list[tuple[int, dict[str, object]]]:
         async with self._sf() as db:
@@ -216,6 +324,18 @@ class Repository:
                     .order_by(SessionRow.id.desc())
                 )
             ).all()
+            try:
+                overrides = dict(
+                    (
+                        await db.execute(
+                            select(CarDrivetrainRow.car_id, CarDrivetrainRow.drivetrain)
+                        )
+                    )
+                    .tuples()
+                    .all()
+                )
+            except OperationalError:
+                overrides = {}
             sessions = [
                 {
                     "id": s.id,
@@ -227,6 +347,7 @@ class Repository:
                     "track_name": s.track_name,
                     "lap_count": count,
                     "best_lap_time_ms": best,
+                    "drivetrain_override": overrides.get(s.car_id),
                 }
                 for s, count, best, lap_category in rows
             ]
@@ -380,6 +501,62 @@ class Repository:
             ).all()
             return {lap_id: json.loads(ev or "[]") for lap_id, ev in rows}
 
+    async def get_lap_analysis_bundles(
+        self, lap_ids: list[int]
+    ) -> dict[int, dict[str, Any]]:
+        """Load selected laps grouped with their session archive metadata."""
+        async with self._sf() as db:
+            lap_rows = (
+                (
+                    await db.execute(
+                        select(LapRow).where(LapRow.id.in_(lap_ids)).order_by(LapRow.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            session_ids = sorted({row.session_id for row in lap_rows})
+            session_rows = (
+                (
+                    await db.execute(
+                        select(SessionRow)
+                        .where(SessionRow.id.in_(session_ids))
+                        .order_by(SessionRow.id)
+                    )
+                )
+                .scalars()
+                .all()
+                if session_ids
+                else []
+            )
+            hydration_by_id = await _hydration_metadata(db, session_ids)
+            bundles: dict[int, dict[str, Any]] = {
+                session.id: {
+                    "session": {
+                        "id": session.id,
+                        "started_at": session.started_at,
+                        "car_id": session.car_id,
+                        "car_name": session.car_name,
+                        "note": session.note,
+                        "track_name": session.track_name,
+                    },
+                    "laps": [],
+                    "raw_archive_meta": _json_object(session.raw_archive_meta_json),
+                    "telemetry_hydration_meta": hydration_by_id.get(session.id),
+                }
+                for session in session_rows
+            }
+            for row in lap_rows:
+                bundle = bundles.get(row.session_id)
+                if bundle is None:
+                    continue
+                lap = lap_summary(row)
+                lap["events"] = json.loads(row.events_json or "[]")
+                lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
+                lap["samples"] = _decode_samples(row.samples_json)
+                bundle["laps"].append(lap)
+            return bundles
+
     async def get_session_analysis_data(self, session_id: int) -> dict[str, Any] | None:
         """Load one session and all persisted lap analysis inputs.
 
@@ -395,6 +572,7 @@ class Repository:
                     select(LapRow).where(LapRow.session_id == session_id).order_by(LapRow.id)
                 )
             ).scalars()
+            hydration_meta = (await _hydration_metadata(db, [session_id])).get(session_id)
             laps: list[dict[str, Any]] = []
             for row in rows:
                 lap = lap_summary(row)
@@ -402,6 +580,10 @@ class Repository:
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
                 lap["samples"] = _decode_samples(row.samples_json)
                 laps.append(lap)
+            try:
+                drivetrain_override = await db.get(CarDrivetrainRow, session.car_id)
+            except OperationalError:
+                drivetrain_override = None
             return {
                 "session": {
                     "id": session.id,
@@ -413,7 +595,32 @@ class Repository:
                 },
                 "laps": laps,
                 "raw_archive_meta": _json_object(session.raw_archive_meta_json),
+                "telemetry_hydration_meta": hydration_meta,
+                "drivetrain_override": (
+                    drivetrain_override.drivetrain if drivetrain_override is not None else None
+                ),
             }
+
+    async def set_car_drivetrain(self, car_id: int, drivetrain: str | None) -> None:
+        """Set a per-car override, or delete it to restore automatic inference."""
+        async with self._sf() as db:
+            row = await db.get(CarDrivetrainRow, car_id)
+            if drivetrain is None:
+                if row is not None:
+                    await db.delete(row)
+            elif row is None:
+                db.add(CarDrivetrainRow(car_id=car_id, drivetrain=drivetrain))
+            else:
+                row.drivetrain = drivetrain
+            await db.commit()
+
+    async def get_car_drivetrain(self, car_id: int) -> str | None:
+        async with self._sf() as db:
+            try:
+                row = await db.get(CarDrivetrainRow, car_id)
+            except OperationalError:
+                return None
+            return row.drivetrain if row is not None else None
 
     async def delete_session(self, session_id: int) -> None:
         async with self._sf() as db:

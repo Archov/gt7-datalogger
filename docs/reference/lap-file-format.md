@@ -37,6 +37,8 @@ Older v1/v2/v3 files without `pos_y` remain valid and use X/Z for spatial analys
 They also retain native vehicle orientation as `orientation_x`, `orientation_y`,
 `orientation_z`, and `orientation_w`. These are quaternion components rather than
 Euler angles; older files without them remain valid.
+New captures additionally retain native world velocity as `velocity_x`, `velocity_y`,
+and `velocity_z` in m/s. Older files without these channels remain valid.
 
 ### Importing
 

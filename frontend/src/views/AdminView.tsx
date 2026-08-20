@@ -12,6 +12,8 @@ import {
   CALLOUT_CATEGORIES,
   type AdminSettings,
   type AdminStats,
+  type ArchiveHydrationMode,
+  type ArchiveHydrationStatus,
   type CalloutCategory,
   type LogRecord,
   type RaceEngineerDiagnostics,
@@ -48,6 +50,10 @@ export function AdminView() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [choosingHydration, setChoosingHydration] = useState(false);
+  const [hydrationMode, setHydrationMode] = useState<ArchiveHydrationMode>("retry_incomplete");
+  const [hydration, setHydration] = useState<ArchiveHydrationStatus | null>(null);
+  const previousHydrationState = useRef<string | null>(null);
 
   const flash = useCallback((text: string, error = false) => {
     toast(text, error ? "error" : "success");
@@ -75,6 +81,43 @@ export function AdminView() {
     const t = window.setInterval(refreshStats, 5000);
     return () => window.clearInterval(t);
   }, [refreshStats, flash]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => api.admin.archiveHydration().then((value) => {
+      if (cancelled) return;
+      const previous = previousHydrationState.current;
+      setHydration(value);
+      previousHydrationState.current = value.state;
+      if (previous === "running" && value.state === "completed") {
+        flash(
+          `Archive reprocessing complete: ${value.hydrated_sessions} hydrated, ${value.failed_sessions} failed`,
+          value.failed_sessions > 0,
+        );
+        refreshStats();
+      } else if (previous === "running" && value.state === "failed") {
+        flash("Archive reprocessing failed", true);
+      }
+    }).catch(() => {});
+    load();
+    const timer = window.setInterval(load, hydration?.state === "running" ? 1000 : 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [hydration?.state, flash, refreshStats]);
+
+  async function startHydration() {
+    try {
+      const status = await api.admin.startArchiveHydration(hydrationMode);
+      setHydration(status);
+      previousHydrationState.current = status.state;
+      setChoosingHydration(false);
+      flash("Archive reprocessing started");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Could not start archive reprocessing", true);
+    }
+  }
 
   async function apply(patch: Parameters<typeof api.admin.updateSettings>[0], label: string) {
     setBusy(label);
@@ -207,14 +250,21 @@ export function AdminView() {
         <div className="flex flex-wrap items-center gap-2 p-3">
           <button
             className="btn"
-            disabled={busy !== null}
+            disabled={busy !== null || hydration?.state === "running"}
+            onClick={() => setChoosingHydration((value) => !value)}
+          >
+            Reprocess archived laps
+          </button>
+          <button
+            className="btn"
+            disabled={busy !== null || hydration?.state === "running"}
             onClick={() => run("Vacuum", api.admin.vacuum, () => "Database compacted")}
           >
             Compact database
           </button>
           <button
             className="btn-danger"
-            disabled={busy !== null}
+            disabled={busy !== null || hydration?.state === "running"}
             onClick={() => setConfirmingClear(true)}
           >
             Delete all recorded data
@@ -223,6 +273,65 @@ export function AdminView() {
             Settings are kept. Export laps you want to keep first (Sessions view).
           </span>
         </div>
+        {choosingHydration && hydration?.state !== "running" && (
+          <div className="space-y-3 border-t border-edge p-3">
+            <p className="text-sm text-ink-dim">
+              Replay complete raw archives now so later lap comparisons use stored telemetry.
+            </p>
+            <div className="grid gap-2 md:grid-cols-3">
+              {([
+                ["retry_incomplete", "Retry incomplete", "Process new or changed archives and retry partial or failed sessions."],
+                ["stale_only", "Stale only", "Process only archives not current for this hydration version."],
+                ["force_all", "Force all", "Replay every complete archive, including current sessions."],
+              ] as const).map(([value, label, description]) => (
+                <label key={value} className="flex cursor-pointer gap-2 rounded-md border border-edge bg-panel-2 p-2 text-xs">
+                  <input
+                    type="radio"
+                    name="archive-hydration-mode"
+                    value={value}
+                    checked={hydrationMode === value}
+                    onChange={() => setHydrationMode(value)}
+                    className="mt-0.5 accent-sky-400"
+                  />
+                  <span><strong className="block text-ink">{label}</strong><span className="text-ink-dim">{description}</span></span>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn" onClick={() => setChoosingHydration(false)}>Cancel</button>
+              <button className="btn" onClick={startHydration}>Start reprocessing</button>
+            </div>
+          </div>
+        )}
+        {hydration && hydration.state !== "idle" && (
+          <div className="space-y-2 border-t border-edge p-3 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-medium capitalize">{hydration.state.replace("_", " ")}</span>
+              <span className="font-tabular text-ink-dim">
+                {hydration.processed_sessions} / {hydration.total_sessions} sessions
+              </span>
+            </div>
+            <progress
+              className="h-2 w-full accent-sky-400"
+              max={Math.max(1, hydration.total_sessions)}
+              value={hydration.processed_sessions}
+              aria-label="Archive reprocessing progress"
+            />
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-ink-dim">
+              {hydration.current_session_id !== null && <span>Session {hydration.current_session_id}</span>}
+              <span>Hydrated {hydration.hydrated_sessions}</span>
+              <span>Partial {hydration.partial_sessions}</span>
+              <span>Failed {hydration.failed_sessions}</span>
+              <span>Skipped {hydration.skipped_sessions}</span>
+              {hydration.started_at && hydration.state === "running" && (
+                <span>Elapsed {formatDuration(Date.now() - Date.parse(hydration.started_at))}</span>
+              )}
+            </div>
+            {hydration.latest_diagnostic && (
+              <p className="text-ink-dim">Latest: {hydration.latest_diagnostic}</p>
+            )}
+          </div>
+        )}
       </Panel>
 
       <ConfirmDialog
