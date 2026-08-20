@@ -78,13 +78,44 @@ class SettingRow(Base):
     value: Mapped[str]
 
 
-class CarDrivetrainRow(Base):
-    """Optional player override shared by every session for a GT7 car ID."""
+class CarRow(Base):
+    """Authoritative gt-telemetry vehicle definition."""
 
-    __tablename__ = "car_drivetrains"
+    __tablename__ = "cars"
 
     car_id: Mapped[int] = mapped_column(primary_key=True)
+    manufacturer: Mapped[str]
+    model: Mapped[str]
+    year: Mapped[int]
+    open_cockpit: Mapped[bool]
+    car_type: Mapped[str]
+    category: Mapped[str]
     drivetrain: Mapped[str]
+    aspiration: Mapped[str]
+    length: Mapped[int]
+    width: Mapped[int]
+    height: Mapped[int]
+    wheelbase: Mapped[int]
+    track_front: Mapped[int]
+    track_rear: Mapped[int]
+    engine_layout: Mapped[str]
+    engine_bank_angle: Mapped[int]
+    engine_crank_plane_angle: Mapped[int]
+    last_modified: Mapped[str]
+    raw_json: Mapped[str] = mapped_column(Text)
+
+
+class CarCatalogStateRow(Base):
+    """Singleton synchronization state for the remote vehicle catalog."""
+
+    __tablename__ = "car_catalog_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    upstream_version: Mapped[str] = mapped_column(default="")
+    expected_count: Mapped[int] = mapped_column(default=0)
+    last_checked_at: Mapped[str] = mapped_column(default="")
+    last_success_at: Mapped[str] = mapped_column(default="")
+    last_error: Mapped[str] = mapped_column(Text, default="")
 
 
 class LayoutRow(Base):

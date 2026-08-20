@@ -262,7 +262,6 @@ the directory you launch from, or as environment variables:
 GT7_SOURCE=udp
 GT7_PS_IP=192.168.1.50        # your PlayStation's IP
 GT7_DB_PATH=/home/pi/gt7-data/gt7.db
-GT7_CARS_CSV=data/cars.csv
 ```
 
 ### 5. Run it
@@ -273,8 +272,8 @@ source .venv/bin/activate
 python -m app.main            # listens on 0.0.0.0:8000
 ```
 
-Open `http://<pi-ip>:8000` from any device on the LAN. Fetch the full car list once with
-`python scripts/update_cars.py` (or from **Admin → Update car database**).
+Open `http://<pi-ip>:8000` from any device on the LAN. The bundled car catalog is loaded
+into SQLite on first boot and checked for authoritative gt-telemetry updates at startup.
 
 ### 6. Start automatically with systemd
 
@@ -367,13 +366,15 @@ working directory):
 | `GT7_SOURCE` | `udp` | `udp` (PlayStation) or `sim` (simulated laps) |
 | `GT7_PS_IP` | *(empty)* | Console IP; empty = broadcast auto-discovery |
 | `GT7_DB_PATH` | `data/gt7.db` | SQLite database path |
-| `GT7_CARS_CSV` | `data/cars.csv` | Car ID → name lookup table |
+| `GT7_CAR_CATALOG_URL` | `https://static.zetetos.com/gt7/data` | Authoritative gt-telemetry vehicle catalog base URL |
+| `GT7_CAR_SEED_JSON` | bundled package data | Bundled offline vehicle catalog snapshot |
 | `GT7_WS_RATE` | `30` | Live stream rate to the browser (Hz) |
 | `GT7_WEBHOOK_URL` | *(empty)* | Webhook for PB / session notifications (also settable in Admin) |
 | `GT7_HTTP_PORT` | `8000` | HTTP port |
 
-The bundled `cars.csv` only contains a sample entry. Fetch the full community-maintained
-list with **Admin → Update car database**, or from the command line:
+Vehicle definitions are stored in the application database and refreshed automatically.
+**Admin → Update car database** forces an immediate manifest check. Maintainers can
+regenerate the bundled offline snapshot with:
 
 ```bash
 python backend/scripts/update_cars.py

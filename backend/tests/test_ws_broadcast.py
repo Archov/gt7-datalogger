@@ -7,7 +7,7 @@ import pytest
 
 from app.config import Settings
 from app.models import SimulatorFlags
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
 from app.storage.repository import Repository
@@ -44,7 +44,7 @@ async def service(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    svc = TelemetryService(settings, repo, CarDatabase())
+    svc = TelemetryService(settings, repo, CarCatalog(repo))
     svc.processor.min_lap_ticks = 1
     yield svc
     await svc.stop()

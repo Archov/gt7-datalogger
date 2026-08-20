@@ -44,3 +44,4 @@ CLAUDE.md
 
 *.db
 /backend/data
+/backend/pytest-catalog-run

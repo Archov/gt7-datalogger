@@ -48,6 +48,13 @@ script can too. All REST routes live under `/api`; responses are JSON.
 Configs are v2 grid layouts (`{version: 2, grid, cells, …}`) as produced by the Admin
 builder; the server only checks the version and a 64 KB size cap.
 
+## Cars
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/cars` | all authoritative gt-telemetry vehicle definitions |
+| GET | `/api/cars/{car_id}` | one vehicle definition, including layout and powered axle |
+
 ## Analysis
 
 | Method | Path | Purpose |
@@ -126,7 +133,7 @@ import path for [track bundles](track-bundle-format.md). See the
 | POST | `/api/admin/restart-source` | stop/start the telemetry source |
 | POST | `/api/admin/clear-data` | delete **all** sessions and laps (settings/tracks kept) |
 | POST | `/api/admin/vacuum` | SQLite `VACUUM` |
-| POST | `/api/admin/update-cars` | download the community car list and reload the lookup |
+| POST | `/api/admin/update-cars` | force an atomic gt-telemetry vehicle manifest refresh |
 
 ## WebSocket — `/ws/live`
 

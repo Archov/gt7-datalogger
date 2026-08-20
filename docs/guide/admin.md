@@ -42,14 +42,13 @@ archives are never modified.
 
 Auto-refreshing stats: telemetry connection state, console IP, packets received,
 decode errors (amber when non-zero), server uptime, connected live clients,
-session/lap counts, database size, and loaded car names. Two actions:
+session/lap counts, database size, and authoritative car-catalog status. Two actions:
 
 - **Restart telemetry source** — stop/start the current source (rebinds the UDP socket,
   restarts discovery).
-- **Update car database** — downloads the community-maintained car list (from the
-  [ddm999/gt7info](https://github.com/ddm999/gt7info) project) so car IDs resolve to
-  real names. Run this once after install — the bundled `cars.csv` only has a sample
-  entry.
+- **Update car database** — forces a gt-telemetry manifest comparison and atomically
+  downloads new or changed vehicle JSON definitions. A failed refresh leaves the
+  previous SQLite catalog untouched.
 
 ## Notifications
 

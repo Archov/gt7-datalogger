@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     sim_scenario: str = "practice"
 
     db_path: Path = Path("data/gt7.db")
-    cars_csv: Path = Path("data/cars.csv")
+    car_catalog_url: str = "https://static.zetetos.com/gt7/data"
+    car_seed_json: Path = Path(__file__).resolve().parent / "data" / "cars.seed.json"
     # Official GT7 track/layout metadata (see scripts/build_track_metadata.py)
     tracks_json: Path = Path("data/tracks.json")
     sample_lap: Path = Path("data/sample_lap.json")

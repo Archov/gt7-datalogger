@@ -1859,11 +1859,7 @@ def _wheelspin_characterization_table(
     derived_columns = (
         "eligibility",
         "analyzed_powered_wheels",
-        "event_local_powered_wheels",
         "effective_powered_wheels",
-        "event_local_torque_shares",
-        "event_power_conflict",
-        "trustworthy_powered_wheel_intersection",
         "mean_powered_slip_at_onset",
         "slip_excess_integral_ratio_s",
         "duration_above_threshold_ms",
@@ -2107,13 +2103,14 @@ def build_export(
         event_laps.append({**lap, "events": [*(lap.get("events") or []), *reverse_events]})
     wheelspin_result: wheelspin_characterization.CharacterizationResult | None = None
     if detail != "compact":
+        car_metadata = cast(dict[str, Any], bundle.get("car") or {})
         wheelspin_result = wheelspin_characterization.characterize_wheelspin_events(
             event_laps,
             spatial_reference=spatial_path,
             trajectories=characterization_trajectories,
             corners=corners,
             comparison_lap_ids=set(spatial_trajectories),
-            drivetrain_override=cast(str | None, bundle.get("drivetrain_override")),
+            drivetrain_layout=cast(str | None, car_metadata.get("drivetrain")),
         )
     all_channels = sorted(
         {channel for lap in laps for channel in _available_channels(_samples(lap))}
@@ -2123,6 +2120,8 @@ def build_export(
         key=lambda value: ({"A": 0, "B": 1, "~": 2, "C": 3}.get(value, 4), value),
     )
     session = dict(bundle.get("session") or {})
+    if bundle.get("car") is not None:
+        session["car"] = bundle["car"]
     session.update(
         {
             "lap_count": len(laps),

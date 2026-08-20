@@ -7,10 +7,7 @@ import csv
 import io
 import json
 import math
-import re
 from dataclasses import asdict
-from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -71,26 +68,33 @@ async def sessions(
         "", max_length=16, description="car category (packet C), e.g. Gr.3 — all when blank"
     ),
 ) -> list[dict[str, Any]]:
-    return await svc(request).repo.list_sessions(category.strip() or None)
+    service = svc(request)
+    rows = await service.repo.list_sessions(category.strip() or None)
+    for row in rows:
+        _attach_car(service, row, str(row.get("car_name") or ""))
+    return rows
 
 
-class DrivetrainOverrideRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    drivetrain: Literal["auto", "fwd", "rwd", "awd"]
-
-
-@router.put("/cars/{car_id}/drivetrain", dependencies=[Depends(require_admin)])
-async def set_car_drivetrain(
-    request: Request,
-    car_id: int,
-    payload: DrivetrainOverrideRequest,
+def _attach_car(
+    service: TelemetryService, row: dict[str, Any], fallback: str = ""
 ) -> dict[str, Any]:
-    if car_id < 0:
-        raise HTTPException(422, "car_id must be non-negative")
-    value = None if payload.drivetrain == "auto" else payload.drivetrain
-    await svc(request).repo.set_car_drivetrain(car_id, value)
-    return {"car_id": car_id, "drivetrain_override": value}
+    car_id = int(row.get("car_id") or 0)
+    row["car_name"] = service.cars.name(car_id, fallback)
+    row["car"] = service.cars.metadata(car_id)
+    return row
+
+
+@router.get("/cars")
+async def cars(request: Request) -> list[dict[str, Any]]:
+    return [car.public_dict() for car in svc(request).cars.all()]
+
+
+@router.get("/cars/{car_id}")
+async def car(request: Request, car_id: int) -> dict[str, Any]:
+    definition = svc(request).cars.get(car_id)
+    if definition is None:
+        raise HTTPException(404, "car not found")
+    return definition.public_dict()
 
 
 @router.get("/sessions/{session_id}/export.llm.json")
@@ -113,6 +117,9 @@ async def export_session_for_llm(
     if bundle is None:
         raise HTTPException(404, "session not found")
     bundle = await svc(request).hydration.resolve(bundle, set(ORIENTATION_CHANNELS))
+    session = cast(dict[str, Any], bundle["session"])
+    _attach_car(svc(request), session, str(session.get("car_name") or ""))
+    bundle["car"] = session["car"]
     try:
         data = build_export(
             bundle,
@@ -143,18 +150,16 @@ async def delete_session(request: Request, session_id: int) -> dict[str, str]:
 @router.get("/sessions/{session_id}/laps")
 async def session_laps(request: Request, session_id: int) -> list[dict[str, Any]]:
     laps = await svc(request).repo.list_laps(session_id)
-    cars = svc(request).cars
     for lap in laps:
-        lap["car_name"] = cars.name(lap["car_id"])
+        _attach_car(svc(request), lap)
     return laps
 
 
 @router.get("/laps")
 async def laps(request: Request) -> list[dict[str, Any]]:
     laps = await svc(request).repo.list_laps()
-    cars = svc(request).cars
     for lap in laps:
-        lap["car_name"] = cars.name(lap["car_id"])
+        _attach_car(svc(request), lap)
     return laps
 
 
@@ -169,7 +174,9 @@ async def best_lap(
     Declared BEFORE /laps/{lap_id}: FastAPI matches in declaration order, and
     "best" would otherwise be handed to the lap-id route as a path parameter.
     """
-    return await svc(request).repo.best_lap_in(track.strip(), category.strip())
+    service = svc(request)
+    result = await service.repo.best_lap_in(track.strip(), category.strip())
+    return _attach_car(service, result, str(result.get("car_name") or "")) if result else None
 
 
 @router.get("/laps/{lap_id}")
@@ -181,8 +188,7 @@ async def lap_detail(
     lap = await svc(request).repo.get_lap(lap_id, with_samples=samples)
     if lap is None:
         raise HTTPException(404, "lap not found")
-    lap["car_name"] = svc(request).cars.name(lap["car_id"])
-    return lap
+    return _attach_car(svc(request), lap)
 
 
 @router.delete("/laps/{lap_id}", dependencies=[Depends(require_admin)])
@@ -197,6 +203,7 @@ async def export_lap(request: Request, response: Response, lap_id: int) -> dict[
     if data is None:
         raise HTTPException(404, "lap not found")
     lap = cast(dict[str, Any], data["lap"])
+    _attach_car(svc(request), lap)
     session = await svc(request).repo.get_session_metadata(int(lap["session_id"]))
     filename = lap_export_filename(lap, session, "json")
     response.headers["Content-Disposition"] = attachment_header(filename)

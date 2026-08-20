@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app import logbuffer
 from app.api import admin, layouts, routes, tracks, ws
 from app.config import get_settings
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.race_engineer import VERBOSITY_MODES
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
@@ -67,12 +67,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if stored.get("race_engineer_units") in ("metric", "imperial"):
         settings.race_engineer_units = stored["race_engineer_units"]
 
-    cars = CarDatabase()
-    cars.load(settings.cars_csv)
+    cars = CarCatalog(repo, base_url=settings.car_catalog_url, seed_path=settings.car_seed_json)
+    await cars.initialize()
 
     service = TelemetryService(settings, repo, cars)
     app.state.service = service
     await service.start()
+    cars.start_background_refresh()
 
     if settings.source == "udp" and not settings.ps_ip:
         log.info(
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.telemetry_port,
         )
     yield
+    await cars.stop()
     await service.stop()
     await engine.dispose()
 

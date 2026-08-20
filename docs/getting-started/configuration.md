@@ -16,7 +16,8 @@ working directory.
 | `GT7_PACKET_FORMAT` | `C` | Telemetry format requested from the console: `A`, `B`, `~`, or `C` (richest, needs GT7 v1.68+; also settable in Admin) |
 | `GT7_RAW_ARCHIVE` | `true` | Preserve encrypted receive-boundary datagrams for future replay/reprocessing (also settable in Admin; changes apply to the next session) |
 | `GT7_DB_PATH` | `data/gt7.db` | SQLite database path — also accepts a full SQLAlchemy async URL (e.g. Postgres) |
-| `GT7_CARS_CSV` | `data/cars.csv` | Car ID → name lookup table |
+| `GT7_CAR_CATALOG_URL` | `https://static.zetetos.com/gt7/data` | Authoritative gt-telemetry vehicle catalog base URL |
+| `GT7_CAR_SEED_JSON` | bundled package data | Bundled offline vehicle catalog snapshot |
 | `GT7_WS_RATE` | `30` | Live stream rate to the browser (Hz); capture stays at ~60 Hz |
 | `GT7_WEBHOOK_URL` | *(empty)* | Webhook for race notifications (also settable in Admin) |
 | `GT7_WEBHOOK_EVENTS` | *(all)* | Comma-separated events to send: `personal_best`, `session_summary`, `overtake`, `position_lost`, `off_road` (toggles in Admin) |
@@ -44,12 +45,10 @@ binary layout, interruption handling, and replay examples.
 
 ## The car database
 
-Telemetry identifies the car by a numeric ID; a CSV lookup table maps IDs to names. The
-bundled `cars.csv` only contains a sample entry. Fetch the full community-maintained
-list either:
-
-- from the UI: **Admin → Update car database**, or
-- from the command line:
+Telemetry identifies the car by a numeric ID. On first boot the complete bundled
+gt-telemetry JSON snapshot is imported into SQLite; later startups compare the remote
+version and manifest in the background. **Admin → Update car database** forces an
+immediate check. Maintainers can regenerate the bundled snapshot with:
 
 ```bash
 python backend/scripts/update_cars.py

@@ -13,7 +13,7 @@ import pytest
 
 from app.config import Settings
 from app.models import SimulatorFlags, TelemetryPacket
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.laps import SessionInfo
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
@@ -309,7 +309,7 @@ async def test_service_finalizes_and_deletes_session_archive(tmp_path: Path) -> 
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
 
     payload = packet_payload(packet_id=1)
     captured = capture(payload, 0)
@@ -360,7 +360,7 @@ async def test_startup_marks_unfinished_archive_interrupted(tmp_path: Path) -> N
     path = manager.detach(token)[0]
     await repo.set_session_archive_metadata(session_id, metadata)
 
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     await service._recover_interrupted_archives()
     recovered = await repo.get_session_archive_metadata(session_id)
     assert recovered is not None

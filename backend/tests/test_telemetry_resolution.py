@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.main import create_app
 from app.models import SimulatorFlags
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.laps import VELOCITY_CHANNELS, CompletedLap, LapProcessor, SessionInfo
 from app.processing.orientation import ORIENTATION_CHANNELS
 from app.processing.telemetry_resolution import resolve_session_telemetry
@@ -231,7 +231,7 @@ async def test_compare_request_persists_map_channels_and_replays_only_once(
         await replay(*args, **kwargs)
 
     monkeypatch.setattr(raw_archive, "replay_archive", counted_replay)
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]
     app.state.service = service

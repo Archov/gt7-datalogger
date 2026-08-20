@@ -184,7 +184,11 @@ export function AdminView() {
               <Stat k="Live clients" v={String(stats.clients)} />
               <Stat k="Sessions / laps" v={`${stats.db.sessions} / ${stats.db.laps}`} />
               <Stat k="Database size" v={`${(stats.db.size_bytes / 1048576).toFixed(1)} MB`} />
-              <Stat k="Car names loaded" v={String(stats.cars_loaded)} />
+              <Stat k="Car definitions" v={String(stats.cars_loaded)} />
+              <Stat
+                k="Car catalog updated"
+                v={stats.car_catalog.last_success_at || "Never"}
+              />
               <Stat k="Recording" v={stats.source.recording ? "on" : "off"} />
             </div>
           ) : (
@@ -203,7 +207,7 @@ export function AdminView() {
               disabled={busy !== null}
               onClick={() =>
                 run("Car DB update", api.admin.updateCars, (r) =>
-                  `Car database updated: ${(r as { cars: number }).cars} cars`)
+                  `Car catalog ${(r as { status: string }).status}: ${(r as { total: number }).total} cars`)
               }
             >
               Update car database

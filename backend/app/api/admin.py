@@ -6,13 +6,13 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Literal
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app import logbuffer
 from app.api.auth import require_admin
 from app.notify import ALL_EVENTS
+from app.processing.cars import CarCatalogError
 from app.race_engineer import CATEGORIES
 
 if TYPE_CHECKING:
@@ -24,9 +24,6 @@ log = logging.getLogger(__name__)
 # GETs leak secrets — /settings returns the webhook URL, which for Discord
 # is itself a write credential; /stats and /logs expose LAN details.
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
-
-CARS_URL = "https://raw.githubusercontent.com/ddm999/gt7info/web-new/_data/db/cars.csv"
-
 
 def svc(request: Request) -> TelemetryService:
     service: TelemetryService = request.app.state.service
@@ -254,6 +251,7 @@ async def stats(request: Request) -> dict[str, Any]:
         "uptime_s": int(time.time() - service.started_at),
         "db": {**db_stats, "size_bytes": db_size, "path": str(db_path)},
         "cars_loaded": service.cars.count,
+        "car_catalog": await service.cars.status(),
         "source": await service.status(),
         "clients": service.client_count,
         "lan_ip": _lan_ip(),
@@ -308,34 +306,8 @@ async def vacuum(request: Request) -> dict[str, str]:
 
 @router.post("/update-cars")
 async def update_cars(request: Request) -> dict[str, Any]:
-    """Download the community car list and reload the lookup table."""
-    service = svc(request)
-    path = service.settings.cars_csv
-
+    """Force a manifest comparison and atomically refresh car definitions."""
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(CARS_URL)
-            resp.raise_for_status()
-            raw = resp.text
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"download failed: {exc}") from exc
-
-    import csv
-    import io
-
-    reader = csv.DictReader(io.StringIO(raw))
-    fields = {f.lower(): f for f in reader.fieldnames or []}
-    id_col = fields.get("id")
-    name_col = fields.get("shortname") or fields.get("name")
-    if not id_col or not name_col:
-        raise HTTPException(502, f"unexpected columns from upstream: {reader.fieldnames}")
-    rows = [(row[id_col], row[name_col]) for row in reader if row.get(id_col)]
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["id", "name"])
-        writer.writerows(rows)
-    service.cars.load(path)
-    log.info("car database updated: %d cars", len(rows))
-    return {"cars": len(rows)}
+        return await svc(request).cars.refresh(force=True)
+    except CarCatalogError as exc:
+        raise HTTPException(502, f"car catalog refresh failed: {exc}") from exc

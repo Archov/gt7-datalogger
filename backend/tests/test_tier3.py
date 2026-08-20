@@ -7,7 +7,7 @@ from app.config import Settings
 from app.main import create_app
 from app.models import SimulatorFlags
 from app.notify import Notifier, format_lap_time
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.laps import new_sample_store
 from app.processing.tracks import TrackSignature, matches, signature_from_samples
 from app.service import TelemetryService
@@ -58,7 +58,7 @@ async def test_track_auto_identification(tmp_path) -> None:
     repo = Repository(make_session_factory(engine))
 
     # Store a track whose signature matches the laps drive_laps produces
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     service.processor.min_lap_ticks = 1
     await drive_laps(service, laps=1)
     laps = await repo.list_laps()
@@ -68,7 +68,7 @@ async def test_track_auto_identification(tmp_path) -> None:
     await repo.create_track("Test Ring", real_sig)
 
     # A fresh service on the same "track" should auto-identify it
-    service2 = TelemetryService(settings, repo, CarDatabase())
+    service2 = TelemetryService(settings, repo, CarCatalog(repo))
     service2.processor.min_lap_ticks = 1
     await drive_laps(service2, laps=1)
     assert service2.track_name == "Test Ring"
@@ -86,7 +86,7 @@ async def client(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     service.processor.min_lap_ticks = 1
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]

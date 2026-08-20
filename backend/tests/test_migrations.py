@@ -103,6 +103,9 @@ async def test_fresh_database_is_created_and_stamped(tmp_path) -> None:
 
     assert {t.name for t in Base.metadata.sorted_tables} <= tables
     assert "alembic_version" in tables
+    assert "cars" in tables
+    assert "car_catalog_state" in tables
+    assert "car_drivetrains" not in tables
     assert _revision(path) is not None
 
 
@@ -159,6 +162,54 @@ async def test_refuel_migration_repairs_net_gain_pit_lap_once(tmp_path) -> None:
     ).fetchone()[0]
     con.close()
     assert fuel_consumed == pytest.approx(5.0)
+
+
+async def test_catalog_migration_preserves_recordings_and_drops_overrides(tmp_path) -> None:
+    path = tmp_path / "catalog-upgrade.db"
+    engine = make_engine(path)
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            lambda sync: _upgrade_to(sync, "0005_hydration_drivetrain")
+        )
+    await engine.dispose()
+
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO sessions "
+        "(id,started_at,car_id,car_name,car_category,note,track_name) "
+        "VALUES (1,'now',7,'Historical name','Gr.3','','Track')"
+    )
+    con.execute(
+        """
+        INSERT INTO laps (
+          id,session_id,number,time_ms,finished_at,car_id,car_category,
+          fuel_start,fuel_end,fuel_consumed,full_throttle_pct,full_brake_pct,
+          coasting_pct,tire_spin_pct,max_speed,min_body_height,total_ticks,tod_ms,
+          tcs_active_pct,asm_active_pct,max_water_temp,max_oil_temp,min_oil_pressure,
+          counts_for_best,off_track_count,clean_lap,events_json,gearing_json,samples_json
+        ) VALUES (
+          1,1,1,91234,'later',7,'Gr.3',20,19,1,0,0,0,0,200,80,6,-1,
+          0,0,0,0,-1,1,-1,NULL,'[]','','{}'
+        )
+        """
+    )
+    con.execute(
+        "INSERT INTO car_drivetrains (car_id, drivetrain) VALUES (7, 'awd')"
+    )
+    con.commit()
+    con.close()
+
+    engine = make_engine(path)
+    await init_db(engine)
+    repo = Repository(make_session_factory(engine))
+    sessions = await repo.list_sessions()
+    laps = await repo.list_laps()
+    await engine.dispose()
+
+    assert "car_drivetrains" not in _tables(path)
+    assert {"cars", "car_catalog_state"} <= _tables(path)
+    assert [row["car_name"] for row in sessions] == ["Historical name"]
+    assert [row["time_ms"] for row in laps] == [91234]
 
 
 async def test_pre_alembic_database_is_caught_up_and_stamped(tmp_path) -> None:

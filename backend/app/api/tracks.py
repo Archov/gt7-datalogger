@@ -74,7 +74,7 @@ def _catalog_path(request: Request) -> Path | None:
     path = svc(request).settings.tracks_json
     if not path.exists():
         # The default is relative to backend/; dev servers often run from the
-        # repo root (cars.csv papers over this with GT7_CARS_CSV in .env).
+        # repo root rather than backend/.
         path = Path(__file__).resolve().parents[2] / "data" / "tracks.json"
     return path if path.exists() else None
 

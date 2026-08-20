@@ -11,7 +11,7 @@ from app.config import Settings
 from app.main import create_app
 from app.models import SimulatorFlags
 from app.processing import analysis
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.laps import (
     OPTIONAL_COLUMNS,
     OPTIONAL_SAMPLE_GROUPS,
@@ -78,7 +78,7 @@ async def client(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     service.processor.min_lap_ticks = 1
 
     app = create_app()

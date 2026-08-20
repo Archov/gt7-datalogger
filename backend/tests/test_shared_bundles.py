@@ -9,7 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.main import create_app
 from app.processing import shared_repo, track_bundle
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
 from app.storage.repository import Repository
@@ -122,7 +122,7 @@ async def client(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
 
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]

@@ -202,9 +202,13 @@ def test_wheelspin_characterization_is_additive_for_standard_and_deep_only() -> 
     assert "drivetrain_characterization" not in compact
     assert "wheelspin_characterization" not in compact
 
-    standard = llm_export.build_export(bundle(laps), detail="standard")
-    deep = llm_export.build_export(bundle(laps), detail="deep")
+    payload = bundle(laps)
+    payload["car"] = {"drivetrain": "FR"}
+    standard = llm_export.build_export(payload, detail="standard")
+    deep = llm_export.build_export(payload, detail="deep")
     assert standard["drivetrain_characterization"]["effective"] == "rwd"
+    assert standard["drivetrain_characterization"]["layout"] == "FR"
+    assert standard["drivetrain_characterization"]["source"] == "catalog"
     assert standard["wheelspin_characterization"] == deep["wheelspin_characterization"]
     characterization_table = standard["wheelspin_characterization"]
     assert characterization_table["columns"] == [

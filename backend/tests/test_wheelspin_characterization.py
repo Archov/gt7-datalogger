@@ -71,7 +71,7 @@ def _lap(
 
 
 def _characterize(
-    laps: list[dict[str, Any]], override: str | None = None
+    laps: list[dict[str, Any]], layout: str | None = "FR"
 ) -> characterization.CharacterizationResult:
     path = spatial.build_reference_path(laps[0]["samples"])
     assert path is not None
@@ -90,7 +90,7 @@ def _characterize(
         spatial_reference=path,
         trajectories=trajectories,
         corners=[],
-        drivetrain_override=override,
+        drivetrain_layout=layout,
     )
 
 
@@ -100,20 +100,21 @@ def _candidate(
     return next(item for item in event.candidates if item.mechanism == mechanism)
 
 
-def test_drivetrain_inference_override_and_conflict_preserve_evidence() -> None:
-    laps = [_lap(1, event=True), _lap(2), _lap(3)]
-    inferred = characterization.infer_drivetrain(laps)
-    assert inferred.inferred == inferred.effective == "rwd"
-    assert inferred.effective_powered_wheels == ("rl", "rr")
-    assert inferred.front_positive_torque_share == 0.0
-    assert inferred.rear_positive_torque_share == 1.0
-
-    overridden = characterization.infer_drivetrain(laps, "fwd")
-    assert overridden.override == "fwd"
-    assert overridden.inferred == "rwd"
-    assert overridden.effective == "fwd"
-    assert overridden.source == "override"
-    assert overridden.conflict is True
+def test_authoritative_catalog_drivetrain_mapping_never_uses_telemetry() -> None:
+    expected = {
+        "FF": ("fwd", ("fl", "fr")),
+        "FR": ("rwd", ("rl", "rr")),
+        "MR": ("rwd", ("rl", "rr")),
+        "RR": ("rwd", ("rl", "rr")),
+        "4WD": ("awd", ("fl", "fr", "rl", "rr")),
+        None: ("unknown", ()),
+        "unsupported": ("unknown", ()),
+    }
+    for layout, (effective, wheels) in expected.items():
+        result = characterization.catalog_drivetrain(layout)
+        assert result.effective == effective
+        assert result.effective_powered_wheels == wheels
+        assert result.source == ("catalog" if wheels else "catalog_missing")
 
 
 def test_bottoming_alone_does_not_remove_a_useful_comparator() -> None:
@@ -295,25 +296,20 @@ def test_surface_and_shift_evidence_respect_event_order() -> None:
     )
 
 
-def test_untrusted_powered_wheels_and_override_conflict_force_unresolved() -> None:
+def test_missing_or_nonmatching_catalog_drivetrain_forces_unresolved() -> None:
     no_torque = [_lap(1, event=True), _lap(2), _lap(3)]
     for lap in no_torque:
         for wheel in ("fl", "fr", "rl", "rr"):
             del lap["samples"][f"torque_{wheel}"]
-    unknown_event = _characterize(no_torque).events[0]
+    unknown_event = _characterize(no_torque, None).events[0]
     assert unknown_event.derived["trustworthy_powered_wheel_intersection"] is False
     assert unknown_event.resolution == "mixed_or_unresolved"
     assert "powered_wheels_untrusted" in unknown_event.unresolved_reasons
 
-    conflicted = _characterize([_lap(1, event=True), _lap(2), _lap(3)], "fwd").events[0]
-    assert conflicted.derived["event_power_conflict"] is True
-    assert conflicted.resolution == "mixed_or_unresolved"
-    assert "powered_wheel_conflict" in conflicted.unresolved_reasons
-    power = _candidate(conflicted, "power_step_candidate")
-    assert any(
-        item.feature == "powered_wheel_conflict" and item.signed_contribution < 0
-        for item in power.contributions
-    )
+    nonmatching = _characterize([_lap(1, event=True), _lap(2), _lap(3)], "FF").events[0]
+    assert nonmatching.derived["trustworthy_powered_wheel_intersection"] is False
+    assert nonmatching.resolution == "mixed_or_unresolved"
+    assert "powered_wheels_untrusted" in nonmatching.unresolved_reasons
 
 
 def test_lower_slip_wheelspin_events_are_relative_controls() -> None:

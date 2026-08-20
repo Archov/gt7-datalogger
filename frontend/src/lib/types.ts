@@ -61,6 +61,7 @@ export interface LapSummary {
   finished_at?: string;
   car_id?: number;
   car_name?: string;
+  car?: CarDefinition | null;
   car_category?: string; // packet C: "Gr.3", "Gr.4", "N300"…; "" when unknown
   fuel_consumed: number;
   full_throttle_pct: number;
@@ -81,6 +82,30 @@ export interface LapSummary {
   off_survey_count?: number; // excursions beyond the SURVEYED road edge; -1 = unknown
   clean_lap?: boolean | null; // null = unknown (no surface data recorded)
   event_counts?: Record<string, number>;
+}
+
+export interface CarDefinition {
+  car_id: number;
+  manufacturer: string;
+  model: string;
+  display_name: string;
+  year: number;
+  open_cockpit: boolean;
+  car_type: string;
+  category: string;
+  drivetrain: string;
+  powered_axle: "fwd" | "rwd" | "awd" | "unknown";
+  aspiration: string;
+  length: number;
+  width: number;
+  height: number;
+  wheelbase: number;
+  track_front: number;
+  track_rear: number;
+  engine_layout: string;
+  engine_bank_angle: number;
+  engine_crank_plane_angle: number;
+  last_modified: string;
 }
 
 // Driver-aids bitmask stored per tick in the "aids" sample column and sent in
@@ -348,12 +373,12 @@ export interface SessionSummary {
   started_at: string;
   car_id: number;
   car_name: string;
+  car: CarDefinition | null;
   car_category: string; // packet C: "Gr.3", "Gr.4", "N300"...; "" when unknown
   note: string;
   track_name: string;
   lap_count: number;
   best_lap_time_ms: number | null;
-  drivetrain_override: "fwd" | "rwd" | "awd" | null;
 }
 
 export interface Track {
@@ -716,6 +741,14 @@ export interface AdminStats {
   uptime_s: number;
   db: { sessions: number; laps: number; size_bytes: number; path: string };
   cars_loaded: number;
+  car_catalog: {
+    count: number;
+    upstream_version: string;
+    expected_count: number;
+    last_checked_at: string;
+    last_success_at: string;
+    last_error: string;
+  };
   source: ConnectionStatus;
   clients: number;
   lan_ip: string;

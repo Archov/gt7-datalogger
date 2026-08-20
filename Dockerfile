@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir ./backend
 COPY --from=frontend /build/dist frontend/dist
 
 ENV GT7_DB_PATH=/data/gt7.db \
-    GT7_CARS_CSV=/app/backend/data/cars.csv \
+    GT7_CAR_SEED_JSON=/app/backend/app/data/cars.seed.json \
     PYTHONUNBUFFERED=1
 
 VOLUME /data

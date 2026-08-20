@@ -64,8 +64,9 @@ on that lap. Historical rows written with the former start-minus-end calculation
 recovered directly from their stored tick series during export.
 
 Standard/deep also add deterministic wheelspin characterization. The
-`drivetrain_characterization` object preserves a per-car override alongside
-torque-derived inference and conflicts. The `wheelspin_characterization` table separates
+`drivetrain_characterization` object reports the authoritative catalog layout, normalized
+powered axle, and powered wheels. Missing catalog data remains unknown rather than being
+inferred. The `wheelspin_characterization` table separates
 observations, comparator-relative derivations, onset sequence, comparator quality, and
 bounded candidate evidence. Scores are heuristic rankings, not probabilities or causal
 diagnoses. Torque remains in raw GT7 units; combined-load candidates use vehicle-motion

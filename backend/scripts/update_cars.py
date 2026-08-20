@@ -1,40 +1,63 @@
-"""Fetch the complete GT7 car ID -> name list from ddm999/gt7info.
+"""Generate the bundled authoritative car snapshot from gt-telemetry JSON.
 
 Usage: python scripts/update_cars.py [output_path]
 """
 
 from __future__ import annotations
 
-import csv
-import io
+import json
 import sys
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
-SOURCE_URL = "https://raw.githubusercontent.com/ddm999/gt7info/web-new/_data/db/cars.csv"
+from app.processing.cars import DEFAULT_CATALOG_URL, CarDefinition, same_timestamp
+
+
+def _get_json(url: str) -> Any:
+    request = urllib.request.Request(url, headers={"User-Agent": "gt7-datalogger/0.5"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def main() -> None:
-    default = Path(__file__).parent.parent / "data" / "cars.csv"
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else default
-    print(f"downloading {SOURCE_URL}")
-    with urllib.request.urlopen(SOURCE_URL, timeout=30) as resp:
-        raw = resp.read().decode("utf-8")
+    output = (
+        Path(sys.argv[1])
+        if len(sys.argv) > 1
+        else Path(__file__).parent.parent / "app" / "data" / "cars.seed.json"
+    )
+    version_doc = _get_json(f"{DEFAULT_CATALOG_URL}/version.json")
+    upstream_version = version_doc["vehicles"]["lastModified"]
+    manifest_doc = _get_json(f"{DEFAULT_CATALOG_URL}/vehicles/manifest.json")
+    manifest = manifest_doc["vehicles"]
+    ids = sorted(int(raw_id) for raw_id in manifest)
 
-    # Upstream columns: ID, ShortName, Maker (header names may vary in case).
-    reader = csv.DictReader(io.StringIO(raw))
-    fields = {f.lower(): f for f in reader.fieldnames or []}
-    id_col = fields.get("id")
-    name_col = fields.get("shortname") or fields.get("name")
-    if not id_col or not name_col:
-        sys.exit(f"unexpected columns in upstream csv: {reader.fieldnames}")
+    def fetch(car_id: int) -> dict[str, Any]:
+        raw = _get_json(f"{DEFAULT_CATALOG_URL}/vehicles/{car_id}.json")
+        definition = CarDefinition.from_source(raw)
+        if definition.car_id != car_id:
+            raise ValueError(f"vehicle {car_id} payload identifies as {definition.car_id}")
+        manifest_modified = manifest[str(car_id)]["lastModified"]
+        if not same_timestamp(definition.last_modified, manifest_modified):
+            raise ValueError(f"vehicle {car_id} timestamp does not match manifest")
+        definition = replace(definition, last_modified=manifest_modified)
+        return json.loads(definition.raw_json)
 
-    rows = [(row[id_col], row[name_col]) for row in reader if row.get(id_col)]
-    with out.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["id", "name"])
-        writer.writerows(rows)
-    print(f"wrote {len(rows)} cars to {out}")
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        vehicles = list(pool.map(fetch, ids))
+    document = {
+        "source": DEFAULT_CATALOG_URL,
+        "upstreamVersion": upstream_version,
+        "vehicles": vehicles,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(document, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    print(f"wrote {len(vehicles)} authoritative car definitions to {output}")
 
 
 if __name__ == "__main__":

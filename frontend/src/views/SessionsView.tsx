@@ -25,7 +25,6 @@ export function SessionsView() {
   const [deletingSession, setDeletingSession] = useState<number | null>(null);
   const [deletingLap, setDeletingLap] = useState<{ sessionId: number; lapId: number } | null>(null);
   const [exportingSessions, setExportingSessions] = useState<Set<number>>(() => new Set());
-  const [changingDrivetrains, setChangingDrivetrains] = useState<Set<number>>(() => new Set());
   const exportingSessionsRef = useRef(new Set<number>());
   // Car category (packet C) as a grouping key: "show me only the Gr.3 runs".
   // Empty string = no filter; sessions recorded without packet C have no
@@ -112,32 +111,6 @@ export function SessionsView() {
       refresh();
     } catch {
       toast("Could not save track", "error");
-    }
-  }
-
-  async function setCarDrivetrain(
-    carId: number,
-    drivetrain: "auto" | "fwd" | "rwd" | "awd",
-  ) {
-    setChangingDrivetrains((current) => new Set(current).add(carId));
-    try {
-      const result = await api.setCarDrivetrain(carId, drivetrain);
-      setSessions((current) =>
-        current?.map((session) =>
-          session.car_id === carId
-            ? { ...session, drivetrain_override: result.drivetrain_override }
-            : session,
-        ) ?? null,
-      );
-      toast(`Drivetrain set to ${drivetrain === "auto" ? "Auto" : drivetrain.toUpperCase()}`, "success");
-    } catch {
-      toast("Could not update drivetrain", "error");
-    } finally {
-      setChangingDrivetrains((current) => {
-        const next = new Set(current);
-        next.delete(carId);
-        return next;
-      });
     }
   }
 
@@ -259,27 +232,15 @@ export function SessionsView() {
                   </span>
                 </span>
               </div>
-              <Tip content="Powered-wheel model used by wheelspin characterization">
-                <select
-                  className="rounded-md border border-edge bg-panel px-2 py-1 text-xs text-ink"
-                  value={s.drivetrain_override ?? "auto"}
-                  disabled={changingDrivetrains.has(s.car_id)}
-                  aria-label={`Drivetrain for ${s.car_name}`}
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={(event) => {
-                    event.stopPropagation();
-                    void setCarDrivetrain(
-                      s.car_id,
-                      event.target.value as "auto" | "fwd" | "rwd" | "awd",
-                    );
-                  }}
+              {s.car && (
+                <Tip
+                  content={`${s.car.manufacturer} ${s.car.model} · ${s.car.category || "uncategorized"} · authoritative gt-telemetry definition`}
                 >
-                  <option value="auto">Auto</option>
-                  <option value="fwd">FWD</option>
-                  <option value="rwd">RWD</option>
-                  <option value="awd">AWD</option>
-                </select>
-              </Tip>
+                  <span className="rounded-full bg-panel-2 px-2 py-1 text-xs text-ink-dim">
+                    {s.car.drivetrain || "Unknown"}
+                  </span>
+                </Tip>
+              )}
               {s.lap_count > 0 && (
                 <Tip
                   content={

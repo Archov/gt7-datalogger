@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings
 from app.main import create_app
 from app.models import AidsBits, SimulatorFlags
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.events import detect_events
 from app.processing.laps import CORE_SAMPLE_COLUMNS, CompletedLap, new_sample_store
 from app.service import TelemetryService
@@ -128,7 +128,7 @@ async def client(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     service.processor.min_lap_ticks = 1
 
     app = create_app()

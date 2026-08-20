@@ -113,19 +113,6 @@ class ComparatorConfig:
 
 
 @dataclass(frozen=True)
-class DrivetrainConfig:
-    throttle_min_pct: float = 20.0
-    brake_max_pct: float = 5.0
-    speed_min_kmh: float = 10.0
-    minimum_samples: int = 30
-    axle_dominance: float = 0.90
-    axle_minimum: float = 0.10
-    local_wheel_share: float = 0.10
-    minimum_gear: int = 1
-    maximum_gear: int = 14
-
-
-@dataclass(frozen=True)
 class ThresholdConfig:
     slip: float = 1.10
     peer_slip_floor: float = 0.05
@@ -164,7 +151,6 @@ class ResolutionConfig:
 class CharacterizationConfig:
     temporal: TemporalConfig = TemporalConfig()
     comparators: ComparatorConfig = ComparatorConfig()
-    drivetrain: DrivetrainConfig = DrivetrainConfig()
     thresholds: ThresholdConfig = ThresholdConfig()
     resolution: ResolutionConfig = ResolutionConfig()
     support_weights: tuple[tuple[str, tuple[tuple[str, float], ...]], ...] = (
@@ -227,19 +213,18 @@ class CharacterizationConfig:
     counter_weights: tuple[tuple[str, tuple[tuple[str, float], ...]], ...] = (
         (
             "power_step_candidate",
-            (("rotation_before_power", 0.25), ("powered_wheel_conflict", 0.15)),
+            (("rotation_before_power", 0.25),),
         ),
         (
             "combined_lateral_longitudinal_load_candidate",
             (
                 ("normal_motion_state", 0.30),
                 ("power_before_motion", 0.20),
-                ("powered_wheel_conflict", 0.15),
             ),
         ),
         (
             "single_wheel_differential_spin_candidate",
-            (("symmetric_bilateral_spin", 0.35), ("powered_wheel_conflict", 0.15)),
+            (("symmetric_bilateral_spin", 0.35),),
         ),
         ("rotation_instability_candidate", (("power_before_rotation", 0.25),)),
         ("surface_or_vertical_disturbance_candidate", (("disturbance_after_slip", 0.35),)),
@@ -279,17 +264,11 @@ class Candidate:
 
 
 @dataclass(frozen=True)
-class DrivetrainEvidence:
-    override: str | None
-    inferred: Drivetrain
+class CatalogDrivetrain:
+    layout: str | None
     effective: Drivetrain
     source: str
     effective_powered_wheels: tuple[str, ...]
-    front_positive_torque_share: float | None
-    rear_positive_torque_share: float | None
-    evidence_sample_count: int
-    evidence_lap_ids: tuple[int, ...]
-    conflict: bool
 
 
 @dataclass(frozen=True)
@@ -346,7 +325,7 @@ class LapContext:
 
 @dataclass(frozen=True)
 class CharacterizationResult:
-    drivetrain: DrivetrainEvidence
+    drivetrain: CatalogDrivetrain
     events: tuple[WheelspinCharacterization, ...]
 
 
@@ -420,79 +399,21 @@ def _driven_wheels(drivetrain: Drivetrain) -> tuple[str, ...]:
     )
 
 
-def infer_drivetrain(
-    laps: list[dict[str, Any]],
-    override: str | None = None,
-    config: CharacterizationConfig = DEFAULT_CONFIG,
-) -> DrivetrainEvidence:
-    totals = {wheel: 0.0 for wheel in WHEELS}
-    count = 0
-    lap_ids: set[int] = set()
-    for lap in laps:
-        samples: Samples = lap.get("samples") or {}
-        if len(samples.get("t") or []) < 2:
-            continue
-        torque = [_aligned(samples, f"torque_{wheel}") for wheel in WHEELS]
-        throttle, brake = _aligned(samples, "throttle"), _aligned(samples, "brake")
-        speed, gear = _aligned(samples, "speed"), _aligned(samples, "gear")
-        if any(values is None for values in torque) or None in (throttle, brake, speed, gear):
-            continue
-        weights = analysis.time_weights(samples["t"])
-        for i in range(len(samples["t"])):
-            assert (
-                throttle is not None
-                and brake is not None
-                and speed is not None
-                and gear is not None
-            )
-            if (
-                throttle[i] < config.drivetrain.throttle_min_pct
-                or brake[i] > config.drivetrain.brake_max_pct
-                or speed[i] < config.drivetrain.speed_min_kmh
-                or not config.drivetrain.minimum_gear
-                <= int(gear[i])
-                <= config.drivetrain.maximum_gear
-            ):
-                continue
-            positives = [max(0.0, values[i]) for values in torque if values is not None]
-            if sum(positives) <= 0:
-                continue
-            for wheel, value in zip(WHEELS, positives, strict=True):
-                totals[wheel] += value * weights[i]
-            count += 1
-            lap_ids.add(int(lap["id"]))
-    total = sum(totals.values())
-    front_share = (totals["fl"] + totals["fr"]) / total if total > 0 else None
-    rear_share = 1 - front_share if front_share is not None else None
-    inferred: Drivetrain = "unknown"
-    if (
-        count >= config.drivetrain.minimum_samples
-        and front_share is not None
-        and rear_share is not None
-    ):
-        if front_share >= config.drivetrain.axle_dominance:
-            inferred = "fwd"
-        elif rear_share >= config.drivetrain.axle_dominance:
-            inferred = "rwd"
-        elif (
-            front_share >= config.drivetrain.axle_minimum
-            and rear_share >= config.drivetrain.axle_minimum
-        ):
-            inferred = "awd"
-    chosen = override if override in {"fwd", "rwd", "awd"} else None
-    effective = chosen or inferred
-    conflict = bool(chosen and inferred != "unknown" and chosen != inferred)
-    return DrivetrainEvidence(
-        override=chosen,
-        inferred=inferred,
-        effective=effective,  # type: ignore[arg-type]
-        source="override" if chosen else "inferred" if inferred != "unknown" else "unknown",
-        effective_powered_wheels=_driven_wheels(effective),  # type: ignore[arg-type]
-        front_positive_torque_share=front_share,
-        rear_positive_torque_share=rear_share,
-        evidence_sample_count=count,
-        evidence_lap_ids=tuple(sorted(lap_ids)),
-        conflict=conflict,
+def catalog_drivetrain(layout: str | None) -> CatalogDrivetrain:
+    effective: Drivetrain = (
+        "fwd"
+        if layout == "FF"
+        else "rwd"
+        if layout in {"FR", "MR", "RR"}
+        else "awd"
+        if layout == "4WD"
+        else "unknown"
+    )
+    return CatalogDrivetrain(
+        layout=layout,
+        effective=effective,
+        source="catalog" if effective != "unknown" else "catalog_missing",
+        effective_powered_wheels=_driven_wheels(effective),
     )
 
 
@@ -585,28 +506,6 @@ def _motion_at(motion: dict[str, list[float]], channel: str, time_ms: float) -> 
 def _window_values(samples: Samples, channel: str, start_ms: float, end_ms: float) -> list[float]:
     values = _aligned(samples, channel)
     return [values[i] for i in _indices(samples, start_ms, end_ms)] if values is not None else []
-
-
-def _local_powered_wheels(
-    samples: Samples, onset_ms: float, config: CharacterizationConfig
-) -> tuple[tuple[str, ...], dict[str, float]]:
-    indices = _indices(
-        samples,
-        onset_ms + config.temporal.local_torque_start_ms,
-        onset_ms + config.temporal.local_torque_end_ms,
-    )
-    totals: dict[str, float] = {}
-    for wheel in WHEELS:
-        values = _aligned(samples, f"torque_{wheel}")
-        if values is not None:
-            totals[wheel] = sum(max(0.0, values[i]) for i in indices)
-    total = sum(totals.values())
-    powered = tuple(
-        wheel
-        for wheel in WHEELS
-        if total > 0 and totals.get(wheel, 0.0) / total >= config.drivetrain.local_wheel_share
-    )
-    return powered, {wheel: value / total for wheel, value in totals.items()} if total > 0 else {}
 
 
 def _slip_metrics(
@@ -1392,7 +1291,6 @@ def _criterion(feature: str, config: CharacterizationConfig) -> str:
         "aligned_power_transient": "power and shift onsets within configured shift window",
         "slip_rising_before_shift": "persistent slip crossing precedes shift",
         "shift_after_slip": "shift onset follows persistent slip crossing",
-        "powered_wheel_conflict": "event-local/effective/override powered-wheel evidence conflicts",
     }
     return criteria.get(feature, feature)
 
@@ -1400,7 +1298,6 @@ def _criterion(feature: str, config: CharacterizationConfig) -> str:
 def _score_candidates(
     signals: dict[str, tuple[bool, bool, Any, list[float] | None]],
     quality: ComparatorQuality,
-    conflict: bool,
     config: CharacterizationConfig,
 ) -> tuple[Candidate, ...]:
     support = dict(config.support_weights)
@@ -1442,12 +1339,6 @@ def _score_candidates(
             for name, _, _ in rules
         ):
             coverage *= quality_factor
-        if conflict and mechanism in {
-            "power_step_candidate",
-            "combined_lateral_longitudinal_load_candidate",
-            "single_wheel_differential_spin_candidate",
-        }:
-            coverage *= 0.5
         candidates.append(
             Candidate(
                 mechanism, preclamp, min(1.0, max(0.0, preclamp)), coverage, tuple(contributions)
@@ -1463,7 +1354,7 @@ def _event_characterization(
     contexts: dict[int, LapContext],
     path: spatial.ReferencePath,
     corners: list[dict[str, Any]],
-    drivetrain: DrivetrainEvidence,
+    drivetrain: CatalogDrivetrain,
     config: CharacterizationConfig,
 ) -> WheelspinCharacterization | None:
     lap = context.lap
@@ -1482,19 +1373,12 @@ def _event_characterization(
     end_progress = _progress_at_time(trajectory, end_time)
     if progress is None or end_progress is None:
         return None
-    local_wheels, local_shares = _local_powered_wheels(samples, onset, config)
     effective_wheels = drivetrain.effective_powered_wheels
     event_wheels = tuple(sorted(str(w) for w in event.get("wheels") or [] if str(w) in WHEELS))
-    powered = local_wheels or effective_wheels
-    trustworthy_powered_intersection = bool(set(powered) & set(event_wheels))
+    trustworthy_powered_intersection = bool(set(effective_wheels) & set(event_wheels))
     analyzed = (
-        tuple(w for w in powered if w in event_wheels)
-        or tuple(w for w in event_wheels if w in powered)
+        tuple(w for w in effective_wheels if w in event_wheels)
         or event_wheels
-    )
-    conflict = (
-        bool(local_wheels and effective_wheels and set(local_wheels) != set(effective_wheels))
-        or drivetrain.conflict
     )
     metrics = _slip_metrics(samples, analyzed, onset, end_time, config)
     speed = _at_time(samples, "speed", onset)
@@ -1897,18 +1781,8 @@ def _event_characterization(
             None,
         ),
         "shift_after_slip": (shift_after, shift is not None and slip_start is not None, None, None),
-        "powered_wheel_conflict": (
-            conflict,
-            bool(local_wheels or drivetrain.override or drivetrain.inferred != "unknown"),
-            {
-                "event_local": list(local_wheels),
-                "effective": list(effective_wheels),
-                "override": drivetrain.override,
-            },
-            None,
-        ),
     }
-    candidates = _score_candidates(signals, quality, conflict, config)
+    candidates = _score_candidates(signals, quality, config)
     leading = candidates[0] if candidates else None
     ordering = (
         "rotation_before_power"
@@ -1933,8 +1807,6 @@ def _event_characterization(
         unresolved_reasons.add("leading_coverage_low")
     if quality.quality == "weak" and leading_comparator_dependent:
         unresolved_reasons.add("comparator_quality_weak")
-    if conflict:
-        unresolved_reasons.add("powered_wheel_conflict")
     if not trustworthy_powered_intersection:
         unresolved_reasons.add("powered_wheels_untrusted")
     if (
@@ -2000,10 +1872,7 @@ def _event_characterization(
     }
     derived = {
         "analyzed_powered_wheels": list(analyzed),
-        "event_local_powered_wheels": list(local_wheels),
         "effective_powered_wheels": list(effective_wheels),
-        "event_local_torque_shares": local_shares,
-        "event_power_conflict": conflict,
         "trustworthy_powered_wheel_intersection": trustworthy_powered_intersection,
         "mean_powered_slip_at_onset": metrics["mean_powered_slip_at_onset"],
         "slip_excess_integral_ratio_s": metrics["slip_excess_integral"],
@@ -2076,7 +1945,7 @@ def _minimal_characterization(
     context: LapContext,
     event: dict[str, Any],
     event_index: int,
-    drivetrain: DrivetrainEvidence,
+    drivetrain: CatalogDrivetrain,
     reason: str,
 ) -> WheelspinCharacterization:
     start_m = float(event.get("start_dist", 0))
@@ -2136,11 +2005,11 @@ def characterize_wheelspin_events(
     trajectories: dict[int, spatial.ProjectedTrajectory],
     corners: list[dict[str, Any]],
     comparison_lap_ids: set[int] | None = None,
-    drivetrain_override: str | None = None,
+    drivetrain_layout: str | None = None,
     config: CharacterizationConfig = DEFAULT_CONFIG,
 ) -> CharacterizationResult:
-    """Return drivetrain evidence and full, untruncated wheelspin explanations."""
-    drivetrain = infer_drivetrain(laps, drivetrain_override, config)
+    """Return catalog-drivetrain-aware wheelspin explanations."""
+    drivetrain = catalog_drivetrain(drivetrain_layout)
     eligible = comparison_lap_ids if comparison_lap_ids is not None else set(trajectories)
     contexts: dict[int, LapContext] = {}
     for lap in laps:
@@ -2263,13 +2132,9 @@ def characterize_wheelspin_events(
     return CharacterizationResult(drivetrain, tuple(output))
 
 
-def drivetrain_json(value: DrivetrainEvidence) -> dict[str, Any]:
+def drivetrain_json(value: CatalogDrivetrain) -> dict[str, Any]:
     result = asdict(value)
-    for name in ("front_positive_torque_share", "rear_positive_torque_share"):
-        if result[name] is not None:
-            result[name] = round(result[name], 3)
     result["effective_powered_wheels"] = list(value.effective_powered_wheels)
-    result["evidence_lap_ids"] = list(value.evidence_lap_ids)
     return result
 
 

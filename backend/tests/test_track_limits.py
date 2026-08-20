@@ -7,7 +7,7 @@ import pytest
 
 from app.config import Settings
 from app.processing import track_bundle, track_compile, track_limits
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.laps import CompletedLap, SessionInfo, new_sample_store
 from app.processing.surface import OFF_TRACK_MIN_TICKS
 from app.processing.tracks import signature_from_samples
@@ -216,7 +216,7 @@ async def service(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    svc = TelemetryService(settings, repo, CarDatabase())
+    svc = TelemetryService(settings, repo, CarCatalog(repo))
     yield svc, settings.db_path.parent
     await engine.dispose()
 

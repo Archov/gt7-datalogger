@@ -2,6 +2,7 @@ import type { LayoutConfig, LayoutSummary } from "./layout";
 import type {
   AdminSettings,
   AdminStats,
+  CarDefinition,
   ArchiveHydrationMode,
   ArchiveHydrationStatus,
   AuthoredCorner,
@@ -152,12 +153,8 @@ export const api = {
     get<SessionSummary[]>(
       `/api/sessions${category ? `?category=${encodeURIComponent(category)}` : ""}`,
     ),
-  setCarDrivetrain: (carId: number, drivetrain: "auto" | "fwd" | "rwd" | "awd") =>
-    send<{ car_id: number; drivetrain_override: "fwd" | "rwd" | "awd" | null }>(
-      `/api/cars/${carId}/drivetrain`,
-      "PUT",
-      { drivetrain },
-    ),
+  cars: () => get<CarDefinition[]>("/api/cars"),
+  car: (carId: number) => get<CarDefinition>(`/api/cars/${carId}`),
   // Fastest full lap at a circuit in a car category (#19); null when nothing
   // has been recorded there in that class yet.
   categoryBest: (track: string, category: string) =>
@@ -349,6 +346,15 @@ export const api = {
     restartSource: () => send<ConnectionStatus>("/api/admin/restart-source", "POST"),
     clearData: () => send<{ status: string }>("/api/admin/clear-data", "POST"),
     vacuum: () => send<{ status: string }>("/api/admin/vacuum", "POST"),
-    updateCars: () => send<{ cars: number }>("/api/admin/update-cars", "POST"),
+    updateCars: () =>
+      send<{
+        status: "current" | "updated";
+        checked: number;
+        added: number;
+        updated: number;
+        removed: number;
+        total: number;
+        upstream_version: string;
+      }>("/api/admin/update-cars", "POST"),
   },
 };

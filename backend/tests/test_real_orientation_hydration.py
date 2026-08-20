@@ -78,7 +78,7 @@ async def test_session_17_hydrates_orientation_on_standard_http_export_after_res
     settings = Settings(
         source="udp",
         db_path=database,
-        cars_csv=BACKEND_ROOT / "data" / "cars.csv",
+        car_seed_json=BACKEND_ROOT / "app" / "data" / "cars.seed.json",
         raw_archive=True,
     )
     monkeypatch.setattr(main, "get_settings", lambda: settings)

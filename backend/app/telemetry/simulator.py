@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 TICK = 1 / 60
 TRACK_LENGTH = 3200.0  # meters
-CAR_ID = 3298  # Shelby GT350R '16 in the bundled cars.csv
+CAR_ID = 3298  # Shelby GT350R '16 in the authoritative vehicle catalog
 FUEL_PER_LAP = 1.8
 
 

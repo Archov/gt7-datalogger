@@ -7,7 +7,7 @@ from app.config import Settings
 from app.export_filenames import attachment_header, lap_export_filename, session_export_filename
 from app.main import create_app
 from app.models import SimulatorFlags
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog, CarDefinition
 from app.service import TelemetryService
 from app.storage.db import init_db, make_engine, make_session_factory
 from app.storage.repository import Repository
@@ -22,7 +22,7 @@ async def client(tmp_path):
     engine = make_engine(settings.db_path)
     await init_db(engine)
     repo = Repository(make_session_factory(engine))
-    service = TelemetryService(settings, repo, CarDatabase())
+    service = TelemetryService(settings, repo, CarCatalog(repo))
     service.processor.min_lap_ticks = 1
 
     app = create_app()
@@ -89,23 +89,56 @@ async def test_health(client) -> None:
     assert resp.status_code == 200
 
 
-async def test_car_drivetrain_override_is_shared_and_auto_deletes(client) -> None:
+async def test_car_drivetrain_assignment_endpoint_is_removed(client) -> None:
     c, service = client
     await drive_laps(service, laps=1)
 
     response = await c.put("/api/cars/7/drivetrain", json={"drivetrain": "rwd"})
-    assert response.status_code == 200
-    assert response.json() == {"car_id": 7, "drivetrain_override": "rwd"}
+    assert response.status_code in {404, 405}
     sessions = (await c.get("/api/sessions")).json()
-    assert all(row["drivetrain_override"] == "rwd" for row in sessions)
+    assert all("drivetrain_override" not in row for row in sessions)
 
-    await c.post("/api/admin/clear-data")
-    assert await service.repo.get_car_drivetrain(7) == "rwd"
 
-    response = await c.put("/api/cars/7/drivetrain", json={"drivetrain": "auto"})
-    assert response.status_code == 200
-    assert response.json()["drivetrain_override"] is None
-    assert await service.repo.get_car_drivetrain(7) is None
+async def test_authoritative_car_endpoints_and_session_metadata(client) -> None:
+    c, service = client
+    definition = CarDefinition.from_source(
+        {
+            "carId": 7,
+            "manufacturer": "Mazda",
+            "model": "Roadster '15",
+            "year": 2015,
+            "openCockpit": True,
+            "carType": "street",
+            "category": "Gr.N",
+            "drivetrain": "FR",
+            "aspiration": "NA",
+            "length": 3915,
+            "width": 1735,
+            "height": 1235,
+            "wheelbase": 2310,
+            "trackFront": 1495,
+            "trackRear": 1505,
+            "engineLayout": "I4",
+            "engineBankAngle": 0,
+            "engineCrankPlaneAngle": 180,
+            "lastModified": "2026-01-01T00:00:00Z",
+        }
+    )
+    await service.repo.seed_car_catalog(
+        [definition.storage_dict()], "2026-01-01T00:00:00Z"
+    )
+    await service.cars.reload()
+
+    all_cars = (await c.get("/api/cars")).json()
+    assert len(all_cars) == 1
+    assert all_cars[0]["display_name"] == "Mazda Roadster '15"
+    assert all_cars[0]["powered_axle"] == "rwd"
+    assert (await c.get("/api/cars/999999")).status_code == 404
+
+    await drive_laps(service, laps=1)
+    session = (await c.get("/api/sessions")).json()[0]
+    assert session["car_name"] == "Mazda Roadster '15"
+    assert session["car"]["drivetrain"] == "FR"
 
 
 async def test_pipeline_persists_sessions_and_laps(client) -> None:

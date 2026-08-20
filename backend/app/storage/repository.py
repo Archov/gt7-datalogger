@@ -8,13 +8,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import case, delete, func, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.processing.laps import CompletedLap, SessionInfo, normalize_sample_columns
 from app.processing.tracks import IDENTIFY_MIN_TICKS, TrackSignature, matches
 from app.storage.db import (
-    CarDrivetrainRow,
+    CarCatalogStateRow,
+    CarRow,
     LapRow,
     LayoutRow,
     SessionRow,
@@ -108,6 +109,118 @@ async def _hydration_metadata(
 class Repository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
+
+    # --- authoritative car catalog -----------------------------------------
+
+    @staticmethod
+    def _car_dict(row: CarRow) -> dict[str, Any]:
+        return {column.name: getattr(row, column.name) for column in CarRow.__table__.columns}
+
+    async def list_cars(self) -> list[dict[str, Any]]:
+        async with self._sf() as db:
+            rows = (await db.execute(select(CarRow).order_by(CarRow.car_id))).scalars()
+            return [self._car_dict(row) for row in rows]
+
+    async def car_catalog_state(self) -> dict[str, Any]:
+        async with self._sf() as db:
+            row = await db.get(CarCatalogStateRow, 1)
+            if row is None:
+                return {
+                    "upstream_version": "",
+                    "expected_count": 0,
+                    "last_checked_at": "",
+                    "last_success_at": "",
+                    "last_error": "",
+                }
+            return {
+                "upstream_version": row.upstream_version,
+                "expected_count": row.expected_count,
+                "last_checked_at": row.last_checked_at,
+                "last_success_at": row.last_success_at,
+                "last_error": row.last_error,
+            }
+
+    async def seed_car_catalog(
+        self, rows: list[dict[str, Any]], upstream_version: str
+    ) -> bool:
+        """Populate an empty catalog from the bundled, validated snapshot."""
+        async with self._sf() as db:
+            if (await db.scalar(select(func.count()).select_from(CarRow))) or 0:
+                return False
+            db.add_all(CarRow(**row) for row in rows)
+            state = await db.get(CarCatalogStateRow, 1)
+            if state is None:
+                state = CarCatalogStateRow(id=1)
+                db.add(state)
+            state.upstream_version = upstream_version
+            state.expected_count = len(rows)
+            state.last_checked_at = ""
+            state.last_success_at = datetime.now(UTC).isoformat()
+            state.last_error = ""
+            await db.commit()
+            return True
+
+    async def car_versions(self) -> dict[int, str]:
+        async with self._sf() as db:
+            rows = (await db.execute(select(CarRow.car_id, CarRow.last_modified))).all()
+            return {car_id: last_modified for car_id, last_modified in rows}
+
+    async def apply_car_catalog(
+        self,
+        changed: list[dict[str, Any]],
+        manifest_ids: set[int],
+        upstream_version: str,
+        checked_at: str,
+    ) -> dict[str, int]:
+        """Atomically apply a fully validated manifest delta."""
+        async with self._sf() as db:
+            existing = {
+                row.car_id: row
+                for row in (
+                    await db.execute(
+                        select(CarRow).where(CarRow.car_id.in_([r["car_id"] for r in changed]))
+                    )
+                ).scalars()
+            }
+            added = 0
+            updated = 0
+            for data in changed:
+                row = existing.get(int(data["car_id"]))
+                if row is None:
+                    db.add(CarRow(**data))
+                    added += 1
+                else:
+                    for key, value in data.items():
+                        setattr(row, key, value)
+                    updated += 1
+            stale = (
+                await db.execute(select(CarRow).where(CarRow.car_id.notin_(manifest_ids)))
+            ).scalars().all()
+            removed = len(stale)
+            for row in stale:
+                await db.delete(row)
+            state = await db.get(CarCatalogStateRow, 1)
+            if state is None:
+                state = CarCatalogStateRow(id=1)
+                db.add(state)
+            state.upstream_version = upstream_version
+            state.expected_count = len(manifest_ids)
+            state.last_checked_at = checked_at
+            state.last_success_at = checked_at
+            state.last_error = ""
+            await db.commit()
+            total = (await db.scalar(select(func.count()).select_from(CarRow))) or 0
+            return {"added": added, "updated": updated, "removed": removed, "total": total}
+
+    async def record_car_catalog_check(self, checked_at: str, error: str = "") -> None:
+        async with self._sf() as db:
+            state = await db.get(CarCatalogStateRow, 1)
+            if state is None:
+                state = CarCatalogStateRow(id=1)
+                db.add(state)
+            state.last_checked_at = checked_at
+            state.last_error = error[:2000]
+            await db.commit()
 
     async def create_session(self, info: SessionInfo, car_name: str) -> int:
         async with self._sf() as db:
@@ -324,18 +437,6 @@ class Repository:
                     .order_by(SessionRow.id.desc())
                 )
             ).all()
-            try:
-                overrides = dict(
-                    (
-                        await db.execute(
-                            select(CarDrivetrainRow.car_id, CarDrivetrainRow.drivetrain)
-                        )
-                    )
-                    .tuples()
-                    .all()
-                )
-            except OperationalError:
-                overrides = {}
             sessions = [
                 {
                     "id": s.id,
@@ -347,7 +448,6 @@ class Repository:
                     "track_name": s.track_name,
                     "lap_count": count,
                     "best_lap_time_ms": best,
-                    "drivetrain_override": overrides.get(s.car_id),
                 }
                 for s, count, best, lap_category in rows
             ]
@@ -580,10 +680,6 @@ class Repository:
                 lap["gearing"] = json.loads(row.gearing_json) if row.gearing_json else None
                 lap["samples"] = _decode_samples(row.samples_json)
                 laps.append(lap)
-            try:
-                drivetrain_override = await db.get(CarDrivetrainRow, session.car_id)
-            except OperationalError:
-                drivetrain_override = None
             return {
                 "session": {
                     "id": session.id,
@@ -596,31 +692,7 @@ class Repository:
                 "laps": laps,
                 "raw_archive_meta": _json_object(session.raw_archive_meta_json),
                 "telemetry_hydration_meta": hydration_meta,
-                "drivetrain_override": (
-                    drivetrain_override.drivetrain if drivetrain_override is not None else None
-                ),
             }
-
-    async def set_car_drivetrain(self, car_id: int, drivetrain: str | None) -> None:
-        """Set a per-car override, or delete it to restore automatic inference."""
-        async with self._sf() as db:
-            row = await db.get(CarDrivetrainRow, car_id)
-            if drivetrain is None:
-                if row is not None:
-                    await db.delete(row)
-            elif row is None:
-                db.add(CarDrivetrainRow(car_id=car_id, drivetrain=drivetrain))
-            else:
-                row.drivetrain = drivetrain
-            await db.commit()
-
-    async def get_car_drivetrain(self, car_id: int) -> str | None:
-        async with self._sf() as db:
-            try:
-                row = await db.get(CarDrivetrainRow, car_id)
-            except OperationalError:
-                return None
-            return row.drivetrain if row is not None else None
 
     async def delete_session(self, session_id: int) -> None:
         async with self._sf() as db:

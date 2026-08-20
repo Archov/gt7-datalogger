@@ -18,7 +18,7 @@ from app.models import TelemetryPacket
 from app.notify import Notifier
 from app.processing import track_bundle, track_limits, tracks
 from app.processing.analysis import Samples, time_delta_at
-from app.processing.cars import CarDatabase
+from app.processing.cars import CarCatalog
 from app.processing.laps import CompletedLap, LapProcessor, SessionInfo
 from app.processing.live_events import LiveEvent, LiveEventWatcher
 from app.processing.surface import encode_surface
@@ -84,7 +84,7 @@ def _count_events(events: list[dict[str, Any]]) -> dict[str, int]:
 
 
 class TelemetryService:
-    def __init__(self, settings: Settings, repo: Repository, cars: CarDatabase) -> None:
+    def __init__(self, settings: Settings, repo: Repository, cars: CarCatalog) -> None:
         self.settings = settings
         self.repo = repo
         self.cars = cars
