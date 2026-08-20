@@ -24,7 +24,7 @@ from app.export_filenames import (
     session_export_filename,
 )
 from app.processing import analysis
-from app.processing.laps import SAMPLE_COLUMNS, normalize_sample_columns
+from app.processing.laps import LEGACY_SAMPLE_ALIASES, SAMPLE_COLUMNS, normalize_sample_columns
 from app.processing.llm_export import (
     Detail,
     ExportInputError,
@@ -472,7 +472,15 @@ async def compare(
     if channels is None:
         columns = COMPARE_COLUMNS
     else:
-        requested = [c for c in channels.split(",") if c.strip()]
+        # Old llm-export browser bundles and saved deep links use the terse
+        # channel names.  Persisted sample blobs are normalized on read; do
+        # the same at the HTTP boundary so a cached client cannot turn every
+        # otherwise-compatible lap comparison into a 400 response.
+        requested = [
+            LEGACY_SAMPLE_ALIASES.get(c, c)
+            for c in channels.split(",")
+            if c.strip()
+        ]
         allowed = set(COMPARE_COLUMNS) | set(EXTRA_COMPARE_COLUMNS)
         unknown = [c for c in requested if c not in allowed]
         if unknown:

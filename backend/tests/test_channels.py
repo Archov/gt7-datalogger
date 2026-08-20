@@ -304,6 +304,34 @@ async def test_compare_exposes_calibration_and_peaks(client) -> None:
     assert "sway" in r["laps"][str(ids[0])]["series"]
 
 
+async def test_compare_accepts_llm_export_channel_aliases(client) -> None:
+    c, service = client
+    await drive(service, fmt="C")
+    laps = (await c.get("/api/laps")).json()
+    lap_id = laps[0]["id"]
+
+    response = await c.get(
+        f"/api/analysis/compare?laps={lap_id}&ref={lap_id}"
+        "&channels=steer,acc_lat,acc_long,acc_vert,throttle_f,brake_f"
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["channels"] == [
+        "t",
+        "pos_x",
+        "pos_z",
+        "steering_wheel_rad",
+        "sway",
+        "surge",
+        "heave",
+        "throttle_filtered",
+        "brake_filtered",
+    ]
+    series = result["laps"][str(lap_id)]["series"]
+    assert all(channel in series for channel in result["channels"])
+
+
 async def test_compare_reports_no_accelerometer_on_packet_a(client) -> None:
     c, service = client
     await drive(service, fmt="A")
