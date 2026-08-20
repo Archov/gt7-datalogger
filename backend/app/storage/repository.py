@@ -343,6 +343,67 @@ class Repository:
                 result.append((session_id, metadata))
         return result
 
+    async def metrics_manifest(self) -> dict[int, dict[str, Any]]:
+        """Return mirror-relevant identities without loading sample JSON blobs.
+
+        Startup reconciliation must be cheap when the disposable metrics database is
+        already current.  Keeping this as two narrow queries lets the mirror compare
+        session/lap revisions and archive identity before it materializes any lap's
+        potentially multi-megabyte ``samples_json`` value.
+        """
+        async with self._sf() as db:
+            sessions = (
+                await db.execute(
+                    select(
+                        SessionRow.id,
+                        SessionRow.started_at,
+                        SessionRow.car_id,
+                        SessionRow.car_name,
+                        SessionRow.track_name,
+                        SessionRow.note,
+                        SessionRow.raw_archive_meta_json,
+                        SessionRow.metrics_revision,
+                    ).order_by(SessionRow.id)
+                )
+            ).all()
+            laps = (
+                await db.execute(
+                    select(LapRow.id, LapRow.session_id, LapRow.metrics_revision).order_by(
+                        LapRow.id
+                    )
+                )
+            ).all()
+
+        manifest: dict[int, dict[str, Any]] = {}
+        for (
+            session_id,
+            started_at,
+            car_id,
+            car_name,
+            track_name,
+            note,
+            raw_archive_meta_json,
+            revision,
+        ) in sessions:
+            manifest[int(session_id)] = {
+                "session": {
+                    "id": int(session_id),
+                    "started_at": str(started_at),
+                    "car_id": int(car_id),
+                    "car_name": str(car_name),
+                    "track_name": str(track_name),
+                    "note": str(note),
+                    "metrics_revision": int(revision),
+                },
+                "raw_archive_meta": _json_object(raw_archive_meta_json),
+                "laps": {},
+            }
+        for lap_id, session_id, revision in laps:
+            session = manifest.get(int(session_id))
+            if session is not None:
+                session["laps"][int(lap_id)] = int(revision)
+        return manifest
+
     async def save_lap(self, session_id: int, lap: CompletedLap) -> int:
         async with self._sf() as db:
             row = LapRow(

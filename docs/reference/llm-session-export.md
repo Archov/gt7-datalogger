@@ -57,6 +57,12 @@ availability, a lap table, whole-lap chassis summaries, exact fixed-distance tim
 segments, reference-defined corner comparisons, enriched events, and recurring
 problems. Standard/deep documents add interesting ranges and trace tables.
 
+The lap table reports `fuel_consumed` and `fuel_refueled` in litres. Both are derived
+from successive per-tick tank levels: downward changes are gross fuel burned and upward
+changes are fuel added. Consequently, a pit stop cannot cancel the fuel burned earlier
+on that lap. Historical rows written with the former start-minus-end calculation are
+recovered directly from their stored tick series during export.
+
 Standard/deep also add deterministic wheelspin characterization. The
 `drivetrain_characterization` object preserves a per-car override alongside
 torque-derived inference and conflicts. The `wheelspin_characterization` table separates

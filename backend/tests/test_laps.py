@@ -54,6 +54,17 @@ async def test_lap_completion(setup) -> None:
     assert lap.max_speed == pytest.approx(180.0)
 
 
+async def test_refueling_does_not_cancel_fuel_consumed(setup) -> None:
+    proc, collector = setup
+    for fuel_level in (20.0, 19.0, 18.0, 28.0, 27.0, 26.0):
+        await proc.feed(make_packet(current_lap=1, fuel_level=fuel_level, speed_mps=50.0))
+    await proc.feed(
+        make_packet(current_lap=2, last_lap_time_ms=60_000, fuel_level=25.0, speed_mps=50.0)
+    )
+
+    assert collector.laps[0].fuel_consumed == pytest.approx(5.0)
+
+
 async def test_signed_yaw_and_packet_a_optional_channels(setup) -> None:
     proc, collector = setup
     await feed_lap(

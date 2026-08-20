@@ -14,6 +14,7 @@ from typing import Any, Literal, TypeGuard, cast
 
 from app.models import AidsBits
 from app.processing import analysis, events, spatial, wheelspin_characterization
+from app.processing.laps import fuel_flow_totals
 from app.processing.orientation import ORIENTATION_CHANNELS, normalize_quaternion
 from app.processing.surface import (
     LOOSE_CODES,
@@ -403,6 +404,18 @@ def _sample_at(
     return fn(samples["dist"], values, distance)
 
 
+def _lap_fuel_flow(lap: dict[str, Any]) -> tuple[object, object]:
+    """Prefer tick-level flows for historical rows written with the net formula."""
+    levels = _samples(lap).get("fuel")
+    if not levels or not all(_finite(value) for value in levels):
+        return lap.get("fuel_consumed"), None
+    start = lap.get("fuel_start")
+    end = lap.get("fuel_end")
+    if not _finite(start) or not _finite(end):
+        return lap.get("fuel_consumed"), None
+    return fuel_flow_totals(float(start), levels, float(end))
+
+
 def _lap_table(laps: list[dict[str, Any]], ref: dict[str, Any]) -> Table:
     columns = (
         "lap_id",
@@ -416,6 +429,7 @@ def _lap_table(laps: list[dict[str, Any]], ref: dict[str, Any]) -> Table:
         "fuel_start",
         "fuel_end",
         "fuel_consumed",
+        "fuel_refueled",
         "full_throttle_pct",
         "full_brake_pct",
         "coast_pct",
@@ -443,6 +457,7 @@ def _lap_table(laps: list[dict[str, Any]], ref: dict[str, Any]) -> Table:
         gearing = lap.get("gearing") or {}
         meta = lap.get("telemetry_meta") or {}
         full = bool(lap.get("counts_for_best", True))
+        fuel_consumed, fuel_refueled = _lap_fuel_flow(lap)
         rows.append(
             [
                 lap["id"],
@@ -455,7 +470,8 @@ def _lap_table(laps: list[dict[str, Any]], ref: dict[str, Any]) -> Table:
                 lap.get("off_track_count"),
                 _number(lap.get("fuel_start"), 3),
                 _number(lap.get("fuel_end"), 3),
-                _number(lap.get("fuel_consumed"), 3),
+                _number(fuel_consumed, 3),
+                _number(fuel_refueled, 3),
                 _number(lap.get("full_throttle_pct"), 1),
                 _number(lap.get("full_brake_pct"), 1),
                 _number(lap.get("coasting_pct"), 1),
@@ -2121,6 +2137,7 @@ def build_export(
                 "distance": "m",
                 "time_and_delta": "ms",
                 "inputs": "percent",
+                "fuel": "L",
                 "body_and_suspension": "mm",
                 "tire_temperature": "C",
                 "front_and_wheel_steering": "rad",
@@ -2134,6 +2151,11 @@ def build_export(
             },
             "notes": [
                 "Missing channels are unavailable, not zero.",
+                (
+                    "fuel_consumed is gross burn from downward tick-level tank changes; "
+                    "fuel_refueled is upward tank change, so a pit stop does not cancel "
+                    "the fuel burned on that lap."
+                ),
                 (
                     "channel_provenance identifies persisted, archive-replayed, and unavailable "
                     "telemetry without repeating source metadata per sample."

@@ -65,6 +65,9 @@ the sample clock.)
   [Derived channels](derived-channels.md)), JSON-encoded.
 - Per-lap aggregates: fuel used, full-throttle / full-brake / coasting / tire-spin
   percentages, max speed, min body height, TCS/ASM usage, engine health, time of day.
+- Fuel used is the sum of downward changes in the per-tick tank level, not simply
+  starting fuel minus ending fuel. This preserves the burn on a pit lap even when
+  refueling raises the ending tank level.
 - [Detected chassis events](event-detection.md), computed once at save time.
 - Gearing metadata (ratios, tune top speed, redline) captured from the boundary packet.
 

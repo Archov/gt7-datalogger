@@ -5,7 +5,12 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from app.storage.metrics import MetricsDatabase
+import pytest
+
+from app.processing.laps import CompletedLap, SessionInfo
+from app.storage.db import init_db, make_engine, make_session_factory
+from app.storage.metrics import MetricsDatabase, MetricsMirror
+from app.storage.repository import Repository
 
 
 def sample_lap() -> dict[str, object]:
@@ -88,3 +93,93 @@ async def test_metrics_database_keeps_native_unknowns_and_nulls(tmp_path: Path) 
         assert db.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM samples").fetchone()[0] == 2
         assert db.execute("SELECT mirror_revision FROM laps").fetchone()[0] == 5
+
+
+async def test_second_startup_skips_unchanged_lap_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary_path = tmp_path / "gt7.db"
+    metrics_path = tmp_path / "gt7-metrics.db"
+    engine = make_engine(primary_path)
+    await init_db(engine)
+    repo = Repository(make_session_factory(engine))
+    session_id = await repo.create_session(
+        SessionInfo(car_id=42, started_at="2026-01-01T00:00:00+00:00"),
+        "Test Car",
+    )
+    lap_id = await repo.save_lap(
+        session_id,
+        CompletedLap(
+            number=1,
+            time_ms=1000,
+            finished_at="2026-01-01T00:00:01+00:00",
+            car_id=42,
+            samples={"t": [0.0, 0.5], "dist": [0.0, 10.0], "speed": [72.0, 72.0]},
+            fuel_start=10.0,
+            fuel_end=9.0,
+        ),
+    )
+
+    first = MetricsMirror(repo, metrics_path, tmp_path)
+    await first.database.initialize()
+    await first._reconcile()
+
+    second = MetricsMirror(repo, metrics_path, tmp_path)
+    await second.database.initialize()
+    replacements = 0
+    states: list[str] = []
+    replace_lap = second.database.replace_lap
+    set_status = second.database.set_status
+
+    async def counted_replace(*args: object, **kwargs: object) -> None:
+        nonlocal replacements
+        replacements += 1
+        await replace_lap(*args, **kwargs)  # type: ignore[arg-type]
+
+    async def counted_status(state: str, *args: object, **kwargs: object) -> None:
+        states.append(state)
+        await set_status(state, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(second.database, "replace_lap", counted_replace)
+    monkeypatch.setattr(second.database, "set_status", counted_status)
+    await second._reconcile()
+    assert replacements == 0
+    assert states == ["idle"]
+
+    # Session-only metadata changes must not churn this lap's 60 Hz rows either.
+    await repo.set_session_track(session_id, "Test Track")
+    await second._reconcile()
+    assert replacements == 0
+    with sqlite3.connect(metrics_path) as db:
+        assert db.execute("SELECT track_name FROM sessions").fetchone()[0] == "Test Track"
+        sample_count = db.execute(
+            "SELECT COUNT(*) FROM samples WHERE lap_id=?", (lap_id,)
+        ).fetchone()[0]
+        assert sample_count == 2
+
+    # A newly added lap refreshes only itself, not the already-current sibling.
+    second_lap_id = await repo.save_lap(
+        session_id,
+        CompletedLap(
+            number=2,
+            time_ms=1100,
+            finished_at="2026-01-01T00:00:02.100000+00:00",
+            car_id=42,
+            samples={"t": [0.0, 0.5], "dist": [0.0, 9.0], "speed": [65.0, 65.0]},
+            fuel_start=9.0,
+            fuel_end=8.0,
+        ),
+    )
+    await second._reconcile()
+    assert replacements == 1
+    with sqlite3.connect(metrics_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM laps").fetchone()[0] == 2
+
+    # Startup reconciliation also repairs a deletion without replacing survivors.
+    await repo.delete_lap(second_lap_id)
+    await second._reconcile()
+    assert replacements == 1
+    with sqlite3.connect(metrics_path) as db:
+        assert db.execute("SELECT id FROM laps").fetchall() == [(lap_id,)]
+
+    await engine.dispose()

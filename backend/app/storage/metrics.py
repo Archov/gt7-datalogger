@@ -21,6 +21,7 @@ from app.processing.laps import (
     LapProcessor,
     SessionInfo,
 )
+from app.processing.telemetry_hydration import archive_fingerprint
 from app.storage.repository import Repository
 from app.telemetry.diagnostics import decoder_diagnostics
 from app.telemetry.packet_catalog import FORMAT_SIZES, catalog_rows
@@ -373,6 +374,28 @@ class MetricsDatabase:
                 f"UPDATE mirror_status SET {assignments} WHERE id=1", tuple(values.values())
             )
             await db.commit()
+
+    async def reconciliation_manifest(
+        self,
+    ) -> tuple[
+        dict[int, tuple[int, int, str | None]],
+        dict[int, tuple[int, int]],
+    ]:
+        """Return mirror identities without touching the wide samples table."""
+        async with aiosqlite.connect(self.path) as db:
+            session_rows = await (
+                await db.execute(
+                    "SELECT id,mirror_revision,parser_version,archive_fingerprint FROM sessions"
+                )
+            ).fetchall()
+            lap_rows = await (
+                await db.execute("SELECT id,session_id,mirror_revision FROM laps")
+            ).fetchall()
+        sessions = {
+            int(row[0]): (int(row[1]), int(row[2]), row[3]) for row in session_rows
+        }
+        laps = {int(row[0]): (int(row[1]), int(row[2])) for row in lap_rows}
+        return sessions, laps
 
     @staticmethod
     async def _update_decoder_status(db: aiosqlite.Connection) -> None:
@@ -742,35 +765,133 @@ class MetricsMirror:
         )
 
     async def _reconcile(self) -> None:
-        sessions = await self.repo.list_sessions()
-        await self.database.prune_sessions({int(session["id"]) for session in sessions})
-        await self.database.set_status("backfilling", total=len(sessions), processed=0)
-        for index, summary in enumerate(reversed(sessions), start=1):
-            bundle = await self.repo.get_session_analysis_data(int(summary["id"]))
-            if bundle is None:
-                continue
-            replayed = await self._replay_native(bundle)
-            session = bundle["session"]
-            metadata = bundle.get("raw_archive_meta")
-            fingerprint = json.dumps(metadata, sort_keys=True, default=str) if metadata else None
-            source_laps = bundle.get("laps") or []
-            await self.database.replace_session(session, fingerprint)
-            await self.database.prune_laps(
-                int(session["id"]), {int(lap["id"]) for lap in source_laps}
+        primary = await self.repo.metrics_manifest()
+        mirrored_sessions, mirrored_laps = await self.database.reconciliation_manifest()
+        fingerprints: dict[int, tuple[str | None, str | None]] = {}
+        expected_sessions: dict[int, tuple[int, int, str | None]] = {}
+        expected_laps: dict[int, tuple[int, int]] = {}
+        for session_id, source in primary.items():
+            metadata = source.get("raw_archive_meta")
+            fingerprint = (
+                archive_fingerprint(self.data_root, metadata)
+                if isinstance(metadata, dict) and metadata
+                else None
             )
-            for lap in source_laps:
-                key = (int(lap["car_id"]), int(lap["number"]), int(lap["time_ms"]))
-                native = replayed.get(key)
-                await self.database.replace_lap(
-                    session,
-                    lap,
-                    native,
-                    "archive_replay" if native else "primary_fallback",
-                    fingerprint,
-                )
-            await self.database.set_status("backfilling", total=len(sessions), processed=index)
+            legacy_fingerprint = (
+                json.dumps(metadata, sort_keys=True, default=str)
+                if isinstance(metadata, dict) and metadata
+                else None
+            )
+            fingerprints[session_id] = (fingerprint, legacy_fingerprint)
+            session = source["session"]
+            expected_sessions[session_id] = (
+                int(session.get("metrics_revision", 1)),
+                DECODER_SCHEMA_VERSION,
+                fingerprint,
+            )
+            expected_laps.update(
+                {
+                    int(lap_id): (session_id, int(revision))
+                    for lap_id, revision in source.get("laps", {}).items()
+                }
+            )
+
+        total = len(primary)
+        if mirrored_sessions == expected_sessions and mirrored_laps == expected_laps:
+            await self.database.set_status("idle", total=total, processed=total)
+            log.info(
+                "metrics reconciliation complete: 0 laps refreshed, %d unchanged",
+                len(expected_laps),
+            )
+            return
+
+        primary_session_ids = set(primary)
+        if set(mirrored_sessions) != primary_session_ids:
+            await self.database.prune_sessions(primary_session_ids)
+
+        refreshed_laps = 0
+        skipped_laps = 0
+        await self.database.set_status("backfilling", total=total, processed=0)
+        for index, session_id in enumerate(sorted(primary), start=1):
+            source = primary[session_id]
+            session = source["session"]
+            metadata = source.get("raw_archive_meta")
+            fingerprint, legacy_fingerprint = fingerprints[session_id]
+            source_laps = {
+                int(lap_id): int(revision)
+                for lap_id, revision in source.get("laps", {}).items()
+            }
+            mirrored_session = mirrored_sessions.get(session_id)
+            parser_changed = (
+                mirrored_session is not None
+                and mirrored_session[1] != DECODER_SCHEMA_VERSION
+            )
+            archive_changed = (
+                mirrored_session is not None and mirrored_session[2] != fingerprint
+            )
+            archive_content_changed = bool(
+                mirrored_session is not None
+                and archive_changed
+                and mirrored_session[2] != legacy_fingerprint
+            )
+            archive_is_complete = (
+                isinstance(metadata, dict) and metadata.get("complete") is True
+            )
+            rebuild_all_laps = parser_changed or (
+                archive_content_changed and archive_is_complete
+            )
+            stale_lap_ids = {
+                lap_id
+                for lap_id, revision in source_laps.items()
+                if rebuild_all_laps
+                or mirrored_laps.get(lap_id) != (session_id, revision)
+            }
+            mirrored_for_session = {
+                lap_id
+                for lap_id, (mirrored_session_id, _revision) in mirrored_laps.items()
+                if mirrored_session_id == session_id
+            }
+            if not mirrored_for_session.issubset(source_laps):
+                await self.database.prune_laps(session_id, set(source_laps))
+
+            session_changed = (
+                mirrored_session is None
+                or mirrored_session[0] != int(session.get("metrics_revision", 1))
+                or parser_changed
+                or archive_changed
+            )
+            if session_changed:
+                await self.database.replace_session(session, fingerprint)
+
+            if stale_lap_ids:
+                bundles = await self.repo.get_lap_analysis_bundles(sorted(stale_lap_ids))
+                bundle = bundles.get(session_id)
+                if bundle is not None:
+                    replayed = await self._replay_native(bundle)
+                    for lap in bundle.get("laps") or []:
+                        key = (
+                            int(lap["car_id"]),
+                            int(lap["number"]),
+                            int(lap["time_ms"]),
+                        )
+                        native = replayed.get(key)
+                        await self.database.replace_lap(
+                            session,
+                            lap,
+                            native,
+                            "archive_replay" if native else "primary_fallback",
+                            fingerprint,
+                        )
+                        refreshed_laps += 1
+            skipped_laps += len(source_laps) - len(stale_lap_ids)
+            await self.database.set_status("backfilling", total=total, processed=index)
             await asyncio.sleep(0)
-        await self.database.set_status("idle", total=len(sessions), processed=len(sessions))
+        await self.database.set_status("idle", total=total, processed=total)
+        log.info(
+            "metrics reconciliation complete: %d laps refreshed, %d unchanged",
+            refreshed_laps,
+            skipped_laps,
+        )
 
     async def _replay_native(
         self, bundle: dict[str, Any]

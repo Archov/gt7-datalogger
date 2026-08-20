@@ -30,6 +30,9 @@ def configure_logging(level: str) -> None:
         level=level,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    # Application DEBUG should expose our decisions, not aiosqlite's complete
+    # executemany argument lists (wide metrics batches can span megabytes).
+    logging.getLogger("aiosqlite").setLevel(logging.WARNING)
     logbuffer.install()
 
 

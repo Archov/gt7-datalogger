@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+import math
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from statistics import median
@@ -58,6 +59,41 @@ SPANS_FOR_MEDIAN = 3
 PROVISIONAL_SPAN_RATIO = 0.93
 
 VELOCITY_CHANNELS = ("velocity_x", "velocity_y", "velocity_z")
+
+
+# Fuel use is a flow, not the net change in tank level. A pit stop can add
+# more fuel than the car burned, so ``fuel_start - fuel_end`` loses the burn
+# entirely. Keeping this calculation here gives live laps, manual logs,
+# imports, and analysis exports one definition.
+def fuel_flow_totals(
+    fuel_start: float,
+    fuel_levels: Iterable[float],
+    fuel_end: float,
+) -> tuple[float, float]:
+    """Return ``(consumed_liters, refueled_liters)`` from successive levels.
+
+    Boundary readings are included because the final sampled packet is
+    normally one tick before GT7 advances the lap counter. Non-finite values
+    from malformed legacy imports are ignored rather than poisoning a lap.
+    """
+    levels = [fuel_start, *fuel_levels, fuel_end]
+    finite: list[float] = []
+    for level in levels:
+        try:
+            value = float(level)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            finite.append(value)
+    consumed = math.fsum(
+        max(previous - current, 0.0)
+        for previous, current in zip(finite, finite[1:], strict=False)
+    )
+    refueled = math.fsum(
+        max(current - previous, 0.0)
+        for previous, current in zip(finite, finite[1:], strict=False)
+    )
+    return consumed, refueled
 
 # Columnar per-tick series kept for each lap. Core columns exist for every
 # packet format. Extension columns exist only when that format was available
@@ -288,7 +324,11 @@ class CompletedLap:
         def pct(flags: list[bool]) -> float:
             return 100.0 * sum(wi for wi, f in zip(w, flags, strict=True) if f) / total_w
 
-        self.fuel_consumed = max(0.0, self.fuel_start - self.fuel_end)
+        self.fuel_consumed = fuel_flow_totals(
+            self.fuel_start,
+            s.get("fuel") or [],
+            self.fuel_end,
+        )[0]
         self.full_throttle_pct = pct([v >= 98.0 for v in s["throttle"]])
         self.full_brake_pct = pct([v >= 98.0 for v in s["brake"]])
         self.coasting_pct = pct([v > 0 for v in s["coast"]])

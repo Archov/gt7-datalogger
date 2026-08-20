@@ -339,6 +339,21 @@ def test_output_is_deterministic_strict_and_partial_delta_is_null() -> None:
     assert next(row for row in rows if row["lap_id"] == 2)["delta_to_reference_ms"] is None
 
 
+def test_lap_table_recovers_pit_lap_fuel_flow_from_ticks() -> None:
+    reference = make_lap(1, 80.0)
+    pit_lap = make_lap(2, 70.0, full=False, sample_count=6)
+    pit_lap.update({"fuel_start": 20.0, "fuel_end": 25.0, "fuel_consumed": 0.0})
+    pit_lap["samples"]["fuel"] = [20.0, 19.0, 18.0, 28.0, 27.0, 26.0]
+
+    exported = llm_export.build_export(bundle([reference, pit_lap]), detail="compact")
+    laps = exported["laps"]
+    rows = [dict(zip(laps["columns"], row, strict=True)) for row in laps["rows"]]
+    pit_row = next(row for row in rows if row["lap_id"] == 2)
+
+    assert pit_row["fuel_consumed"] == 5.0
+    assert pit_row["fuel_refueled"] == 10.0
+
+
 def test_standard_trace_channels_are_reason_aware() -> None:
     samples = make_samples(50.0)
     n = len(samples["t"])

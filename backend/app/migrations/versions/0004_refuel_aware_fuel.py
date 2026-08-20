@@ -1,0 +1,86 @@
+"""Repair pit-lap fuel consumption stored as a net tank change.
+
+The old aggregate was ``max(fuel_start - fuel_end, 0)``. When a pit stop
+added more fuel than the lap burned, it permanently stored zero despite the
+per-tick fuel series retaining both flows. Only net-gain rows can have this
+specific zeroing bug, so the migration avoids scanning or decoding every lap.
+
+Revision ID: 0004_refuel_aware_fuel
+Revises: 0003_fork_telemetry_metrics
+Create Date: 2026-08-20
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from collections.abc import Sequence
+from typing import Any
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0004_refuel_aware_fuel"
+down_revision: str | None = "0003_fork_telemetry_metrics"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def _consumed(start: float, raw_samples: str, end: float) -> float:
+    try:
+        decoded: Any = json.loads(raw_samples)
+        values = decoded.get("fuel") if isinstance(decoded, dict) else None
+    except (TypeError, ValueError):
+        return 0.0
+    if not isinstance(values, list):
+        return 0.0
+    levels = [start, *values, end]
+    try:
+        finite = [float(level) for level in levels if math.isfinite(float(level))]
+    except (TypeError, ValueError):
+        return 0.0
+    return math.fsum(
+        max(previous - current, 0.0)
+        for previous, current in zip(finite, finite[1:], strict=False)
+    )
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    rows = list(
+        bind.execute(
+            sa.text(
+                "SELECT id,session_id,fuel_start,fuel_end,fuel_consumed,samples_json "
+                "FROM laps WHERE fuel_end > fuel_start AND fuel_consumed <= 0"
+            )
+        ).mappings()
+    )
+    changed_sessions: set[int] = set()
+    for row in rows:
+        consumed = _consumed(
+            float(row["fuel_start"]),
+            str(row["samples_json"]),
+            float(row["fuel_end"]),
+        )
+        if consumed <= float(row["fuel_consumed"]):
+            continue
+        bind.execute(
+            sa.text(
+                "UPDATE laps SET fuel_consumed=:consumed, "
+                "metrics_revision=metrics_revision+1 WHERE id=:lap_id"
+            ),
+            {"consumed": consumed, "lap_id": int(row["id"])},
+        )
+        changed_sessions.add(int(row["session_id"]))
+    for session_id in changed_sessions:
+        bind.execute(
+            sa.text(
+                "UPDATE sessions SET metrics_revision=metrics_revision+1 WHERE id=:session_id"
+            ),
+            {"session_id": session_id},
+        )
+
+
+def downgrade() -> None:
+    # Restoring a known-wrong aggregate would destroy information.
+    pass
