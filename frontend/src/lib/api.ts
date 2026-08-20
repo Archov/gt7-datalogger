@@ -83,15 +83,25 @@ export interface SharedBundles {
   bundles: SharedBundleEntry[];
 }
 
+// Error carrying the HTTP status, so callers can distinguish auth failures
+// (401/403 — a token problem) from an unreachable backend (502 from the proxy).
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function fail(url: string, resp: Response): Promise<never> {
   if (resp.status === 401 || resp.status === 403) {
-    throw new Error(
+    throw new ApiError(
       resp.status === 401
         ? "admin token required — set it in Admin → Connection"
         : "admin token rejected — check it in Admin → Connection",
+      resp.status,
     );
   }
-  throw new Error(`${url}: ${resp.status} ${await resp.text()}`);
+  throw new ApiError(`${url}: ${resp.status} ${await resp.text()}`, resp.status);
 }
 
 async function get<T>(url: string): Promise<T> {

@@ -8,15 +8,23 @@ cd "$(dirname "$0")"
 if [[ ! -x backend/.venv/bin/python ]]; then
   echo "backend venv missing — creating it..."
   python3 -m venv backend/.venv
+fi
+# Reinstall whenever pyproject.toml is newer than the last install (or the
+# stamp doesn't exist yet), so new dependencies land in the existing venv.
+if [[ backend/pyproject.toml -nt backend/.venv/.deps-installed ]]; then
+  echo "backend deps out of date — installing..."
   backend/.venv/bin/pip install -e "backend[dev]"
+  touch backend/.venv/.deps-installed
 fi
-if [[ ! -d frontend/node_modules ]]; then
-  echo "frontend deps missing — installing..."
+if [[ frontend/package.json -nt frontend/node_modules/.deps-installed ]]; then
+  echo "frontend deps out of date — installing..."
   npm --prefix frontend install --no-fund --no-audit
+  touch frontend/node_modules/.deps-installed
 fi
-if [[ ! -d node_modules ]]; then
-  echo "dev runner missing — installing..."
+if [[ package.json -nt node_modules/.deps-installed ]]; then
+  echo "dev runner deps out of date — installing..."
   npm install --no-fund --no-audit
+  touch node_modules/.deps-installed
 fi
 
 # Refresh the built frontend so :8000 serves current code, not a stale dist

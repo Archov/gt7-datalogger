@@ -6,7 +6,7 @@ import { LayoutBuilder } from "@/components/LayoutBuilder";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Select } from "@/components/ui/Select";
-import { api, getAdminToken, setAdminToken } from "@/lib/api";
+import { api, ApiError, getAdminToken, setAdminToken } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import {
   CALLOUT_CATEGORIES,
@@ -44,7 +44,7 @@ const LEVEL_COLORS: Record<string, string> = {
 export function AdminView() {
   const setStatus = useTelemetry((s) => s.setStatus);
   const [settings, setSettings] = useState<AdminSettings | null>(null);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<Error | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -68,7 +68,7 @@ export function AdminView() {
         setSettingsError(null);
       })
       .catch((e) => {
-        setSettingsError(e instanceof Error ? e.message : "Could not load settings");
+        setSettingsError(e instanceof Error ? e : new Error("Could not load settings"));
         flash("Could not load settings", true);
       });
     refreshStats();
@@ -111,8 +111,14 @@ export function AdminView() {
         <Panel title="Connection" subtitle="how telemetry reaches the datalogger">
           {settings ? (
             <ConnectionForm settings={settings} busy={busy} onApply={apply} />
+          ) : settingsError instanceof ApiError &&
+            (settingsError.status === 401 || settingsError.status === 403) ? (
+            <TokenForm error={settingsError.message} />
           ) : settingsError ? (
-            <TokenForm error={settingsError} />
+            <div className="p-4 text-sm text-warn">
+              Backend unreachable — could not load settings
+              {settingsError instanceof ApiError ? ` (HTTP ${settingsError.status})` : ""}.
+            </div>
           ) : (
             <div className="p-4 text-sm text-ink-dim">Loading…</div>
           )}
