@@ -39,3 +39,4 @@ reference-docs
 CLAUDE.md
 
 *.db
+/backend/data
